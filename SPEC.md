@@ -241,7 +241,8 @@ spend-витрина (`fact_region_spend` ~12 млн строк / 9.1 ГБ, `fac
 `data_quality_log`, `_step1_freshness`, `data_funnel_drift_log`,
 `yandex_direct_404_errors`, `yandex_direct_checking_report`,
 `yandex_direct_minus_snapshot`, `yandex_direct_history` (~307 МБ),
-`local_gsheet_reestr`, `local_gsheet_vse_klienty` (загружаются, но не читаются),
+`local_gsheet_reestr` (не загружается — отсутствует в `TRUNCATE_INSERT_TABLES`, данные заморожены, не читается),
+`local_gsheet_vse_klienty` (не загружается — отсутствует в `TRUNCATE_INSERT_TABLES`, данные заморожены, 22 строки),
 `check_utm`, `check_utm_fuck_direct`.
 
 ---

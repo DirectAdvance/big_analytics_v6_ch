@@ -1,4 +1,8 @@
-# big_analytics_v5 — Пайплайн аналитики
+# big_analytics_v6_ch — Пайплайн аналитики (форк big_analytics_v5, миграция на ClickHouse)
+
+> ⚠️ Код пока идентичен `big_analytics_v5` и работает на PostgreSQL (та же прод-БД `ad_analytics_bi`
+> @ Victory) — CH-миграция ещё не выполнена, см. [`PLAN.md`](PLAN.md). v6_ch не задеплоен на Victory
+> отдельно от v5 (путь `/home/semen_vi/big_analytics_v5` ниже — это код v5, для справки).
 
 ## Запуск
 

@@ -51,7 +51,7 @@ ad_analytics_bi/
 │   ├── gsheet_reestr                                 ← Реестр (DB-admin обновляет)
 │   ├── gsheet_plan_fakt                              ← План/факт (DB-admin обновляет)
 │   ├── gsheet_vse_klienty                            ← Все клиенты (DB-admin обновляет)
-│   ├── gsheet_autosalony_clients                     ← Автосалоны клиенты (DB-admin обновляет)
+│   ├── gsheet_autosalony_clients                     ← Автосалоны клиенты, вкл. менеджера (DB-admin обновляет)
 │   ├── gsheet_priezdi_marcar                         ← Маркар Доезды (DB-admin обновляет)
 │   ├── salon_regions                                 ← регионы салонов (DB-admin обновляет)
 │   └── telega_in_orders                              ← заказы Telegram (DB-admin обновляет)
@@ -75,10 +75,10 @@ ad_analytics_bi/
     │   ├── local_crm_statuses                        ← копия src.crm_statuses (полная замена)
     │   ├── local_gsheet_sites                        ← копия src.gsheet_sites (полная замена)
     │   ├── local_gsheet_naming                       ← копия src.gsheet_naming (полная замена)
-    │   ├── local_gsheet_reestr                       ← копия src.gsheet_reestr (полная замена)
+    │   ├── local_gsheet_reestr                       ← НЕ синкается (отсутствует в `config/settings.py::TRUNCATE_INSERT_TABLES`), данные заморожены, 66 строк
     │   ├── local_gsheet_plan_fakt                    ← копия src.gsheet_plan_fakt (полная замена)
-    │   ├── local_gsheet_vse_klienty                  ← копия src.gsheet_vse_klienty (полная замена)
-    │   ├── local_gsheet_autosalony_clients           ← копия src.gsheet_autosalony_clients (полная замена)
+    │   ├── local_gsheet_vse_klienty                  ← НЕ синкается (отсутствует в `config/settings.py::TRUNCATE_INSERT_TABLES`), данные заморожены, 22 строки
+    │   ├── local_gsheet_autosalony_clients           ← копия src.gsheet_autosalony_clients, вкл. менеджера (полная замена)
     │   ├── local_gsheet_priezdi_marcar               ← копия src.gsheet_priezdi_marcar (полная замена)
     │   ├── local_gsheet_yandex_direct_id_location    ← справочник гео-таргетинга Директа
     │   │     • id_location INTEGER PK
@@ -367,7 +367,8 @@ ad_analytics_bi/
     │   │     • pixel_приезд_домена, attr_pixel_приезд_кампании NUMERIC
     │   │     • pixel_продажи_домена, attr_pixel_продажи_кампании NUMERIC
     │   │
-    │   └── posev_cost_backfill                       ← подбивка расходов посевов (бэкфилл)
+    │   └── posev_cost_backfill                       ← подбивка расходов посевов (бэкфилл), не используется
+    │         кодом (0 упоминаний в *.py), последняя запись 2026-06-11, 264 строки (11 fixed=true)
     │         • id SERIAL PK
     │         • category TEXT NOT NULL, domain TEXT, "Дата" DATE
     │         • kanal, salon, gorod, region, postavshik TEXT

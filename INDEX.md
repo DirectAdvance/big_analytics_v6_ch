@@ -10,16 +10,16 @@
 | файл | КБ | назначение | что внутри |
 |---|---|---|---|
 | `ATTRIBUTION.md` | 7 | ATTRIBUTION.md — единый авторитет по атрибуции |  |
-| `BLOCKS.md` | 37 | BLOCKS.md — технические блоки ETL (C–L) + corrections |  |
+| `BLOCKS.md` | 38 | BLOCKS.md — технические блоки ETL (C–L) + corrections |  |
 | `CANON.md` | 6 | CANON.md — канон значений `big_analytics_full` |  |
-| `CLAUDE.md` | 17 | CLAUDE.md — big_analytics_v5 |  |
+| `CLAUDE.md` | 17 | CLAUDE.md — big_analytics_v6_ch |  |
 | `COLUMNS_big_analytics_full.md` | 11 | COLUMNS_big_analytics_full.md — поколоночный словарь главной витрины |  |
 | `COOKIES.md` | 7 | COOKIES.md — куки Яндекс.Директ |  |
 | `DB_TABLES.md` | 51 | DB_TABLES.md — Таблицы на сервере (ad_analytics_bi) |  |
 | `DOD.md` | 17 | DOD — Definition of Done, big_analytics_v5 |  |
 | `FUNNEL.md` | 11 | FUNNEL.md — воронка заявок (`local_crm_statuses`) |  |
 | `GOLDEN_BASELINE.md` | 27 | GOLDEN BASELINE — эталонные значения для проверки данных |  |
-| `INDEX.md` | 6 | INDEX.md — вопрос → файл → якорь |  |
+| `INDEX.md` | 31 | INDEX — big_analytics_v6_ch |  |
 | `KNOWN_ISSUES.md` | 15 | KNOWN_ISSUES — big_analytics_v5 |  |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |  |
 | `MEMORY_ARCHIVE.md` | 275 | MEMORY.md — ba_pipeline: нетривиальные уроки |  |
@@ -30,7 +30,7 @@
 | `POSEV_LOSSES_PLAYBOOK.md` | 44 | POSEV_LOSSES_PLAYBOOK — направление «посевы» big_analytics_v5 |  |
 | `PROJECT_CHARTER.md` | 32 | PROJECT_CHARTER.md — Устав проекта big_analytics_v5 |  |
 | `QUERIES.md` | 9 | QUERIES.md — SQL-шпаргалка |  |
-| `README.md` | 14 | big_analytics_v5 — Пайплайн аналитики |  |
+| `README.md` | 15 | big_analytics_v6_ch — Пайплайн аналитики (форк big_analytics_v5, миграция на ClickHouse) |  |
 | `RUNBOOK.md` | 14 | RUNBOOK.md — операционка и восстановление |  |
 | `SHEET_RECONCILE.md` | 10 | Сверка с гугл-таблицей «посевы» — FINDINGS + METHODOLOGY |  |
 | `SHEET_RECONCILE_FINDINGS.md` | 55 | Сверка Google-таблиц салонов ↔ public.fact_big_analytics (контекст) |  |
@@ -351,7 +351,7 @@
 | `README.md` | 6 | step7_finalize — Финализация big_analytics_full |  |
 | `STEP.md` | 1 | STEP.md — Шаг 5: Финализация |  |
 | `__init__.py` | 1 |  |  |
-| `step7.py` | 16 | step5_finalize/step5.py — финализация таблиц | run, get_explain_sql |
+| `step7.py` | 16 | step7_finalize/step7.py — финализация таблиц | run, get_explain_sql |
 
 ## `step8_stats/`
 

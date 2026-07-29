@@ -207,23 +207,30 @@ ANALYZE big_analytics_full
 
 ---
 
-## Block H: менеджер = 'Михаил Яковлев' для local_gsheet_vse_klienty
+## Block H: менеджер = 'Михаил Яковлев' для домена lotos91.ru
 
-**Файл:** `step0_sync_local/step0.py`, функция `_patch_vse_klienty_manager()`.
+**Файл:** `corrections.py`, функция `_fix_missing_managers()`. **Живой код** — вызывается из
+`corrections.py::apply()` (между step3 и step4), рядом с `_fix_account_domain_backfill`.
 
-Источник (`gsheet_vse_klienty` на ad_analytics) не содержит колонку `менеджер`.
-После каждого TRUNCATE+INSERT step0 добавляет колонку и проставляет значение:
+Ручной патч домена, чей `sales_manager` отсутствует в `local_gsheet_sites`:
+`lotos91.ru` относится к аккаунту `avto_0358` (АвтоЛидер) — тот же менеджер, что и у аккаунта
+`avto_0083` (Лидер).
 
 ```sql
-ALTER TABLE local_gsheet_vse_klienty ADD COLUMN IF NOT EXISTS "менеджер" TEXT;
-UPDATE local_gsheet_vse_klienty SET "менеджер" = 'Михаил Яковлев'
-WHERE "менеджер" IS DISTINCT FROM 'Михаил Яковлев';
+UPDATE public.big_analytics_direct
+SET менеджер = 'Михаил Яковлев'
+WHERE domain = 'lotos91.ru'
+  AND (менеджер IS NULL OR менеджер = '')
 ```
 
-В `step3.py` и `step4.py` используется `vse."менеджер"` в COALESCE (раньше был `NULL::TEXT`).
-`step4.py`: `vse."менеджер"` добавлен в GROUP BY.
-
-**Аналог:** хардкод из `big_analytics_v3` (`big_analytics_full_v3.py`, строки 942–949).
+⚠️ **Отдельно (не путать с патчем выше):** таблица `gsheet_vse_klienty`/`local_gsheet_vse_klienty` и
+функция `_patch_vse_klienty_manager()` из `step0_sync_local/step0.py` **удалены из кода** — их больше
+нет ни в `config/settings.py` (список GSHEET-синков), ни в `step0.py`. Основной источник поля
+`менеджер` теперь — `T_GSHEET_AUTOSALONY` (`local_gsheet_autosalony_clients`), у которой колонка
+`менеджер` есть по умолчанию. `step3_build_sources/step3.py` берёт `COALESCE(NULLIF(TRIM(gs.sales_manager),''),
+NULLIF(TRIM(auto.менеджер),''))` через `LEFT JOIN {T_GSHEET_AUTOSALONY} auto ON gs.client_id =
+auto.id_салона` (см. например `step3.py:661-663`). `local_gsheet_vse_klienty` в БД осталась как
+замороженные данные (22 строки, НЕ синкается) — см. `DB_TABLES.md`.
 
 ---
 
@@ -231,27 +238,30 @@ WHERE "менеджер" IS DISTINCT FROM 'Михаил Яковлев';
 
 **Файл:** `step0_sync_local/step0.py`, функция `_patch_marcar_statuses()`.
 
-**Проблема:** Маркар ведёт Google Sheet «Маркар Доезды», где фиксирует факт продажи. В `local_leads` у тех же лидов статус остаётся «Корзина» — CRM не синхронизирует обратно.
+**Проблема:** Маркар ведёт Google Sheet «Маркар Доезды», где фиксирует факт продажи/визита. В `local_leads_all` у тех же лидов статус остаётся «Корзина» — CRM не синхронизирует обратно.
 
-**Решение:** после синка в step0 — UPDATE только статуса `'Продажа'` из gsheet в local_leads:
+**Решение:** после синка в step0 — UPDATE статуса из gsheet в `local_leads_all` по 4 статусам с приоритетом
+`_MARCAR_STATUS_PRIORITY` (`Продажа`=0 > `Дошел в КО`=1 > `Одобрение`=2 > `Приехал`=3); CRM-статус не
+перезаписывается «вниз» по воронке (если уже `'Продажа'`, патч `'Приехал'` не применится):
 
 ```sql
-UPDATE public.local_leads l
+UPDATE public.local_leads_all l
 SET status = pm.status
 FROM public.local_gsheet_priezdi_marcar pm
 WHERE pm.link LIKE '%crm.marcar.ru%'
   AND pm.link ~ '^https?://.+/[0-9]+$'
-  AND pm.status = 'Продажа'
+  AND pm.status IN ('Продажа', 'Дошел в КО', 'Одобрение', 'Приехал')
   AND l.source_record_id = REGEXP_REPLACE(pm.link, '^.+/', '')
   AND l.source_type = 'marcar_crm_excel'
   AND l.status IS DISTINCT FROM pm.status
 ```
 
-**Только 'Продажа'** — другие статусы (Приехал, Одобрение и т.д.) не патчатся. Колонка `status` в gsheet содержит мусор (даты DD.MM.YYYY в некоторых строках) — патчить только проверенный статус.
+**4 статуса с приоритетом** (не только 'Продажа') — недостающие маппинги `Дошел в КО`/`Одобрение` в
+`local_crm_statuses` добавляет `_ensure_marcar_crm_statuses()` перед патчем.
 
-**Маппинг ID:** `link` = `https://crm.marcar.ru/leads/409449` → число после `/` = `local_leads.source_record_id` (TEXT). Только ссылки `crm.marcar.ru` (не plex-crm.ru).
+**Маппинг ID:** `link` = `https://crm.marcar.ru/leads/409449` → число после `/` = `local_leads_all.source_record_id` (TEXT). Только ссылки `crm.marcar.ru` (не plex-crm.ru).
 
-**Порядок вызова в run():** `_patch_crm_statuses` → `_patch_vse_klienty_manager` → `_patch_marcar_statuses`. Выполняется до step1 → корректные статусы попадают в raw_leads.
+**Порядок вызова в run():** `_patch_crm_statuses` (закомментирован с 2026-05-20, crm_statuses уже верный) → `_patch_marcar_statuses`. Выполняется до step1 → корректные статусы попадают в raw_leads.
 
 ---
 

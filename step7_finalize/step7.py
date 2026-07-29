@@ -1,5 +1,5 @@
 """
-step5_finalize/step5.py — финализация таблиц
+step7_finalize/step7.py — финализация таблиц
 
 SET LOGGED + индексы + ANALYZE (+ VACUUM по условию bloat) на результирующих таблицах.
 

@@ -203,15 +203,17 @@ GROUP BY step ORDER BY last_ok DESC;
 Что это: датасет «Victoryanalyst» — Import-режим, обновляется через API-рефреш после прогона.
 
 **Как проверить свежесть:**
+`refresh_powerbi()` (`refresh_powerbi.py`) НЕ пишет статус в `data_quality_log` — статус refresh
+виден только в логе прогона (`pipeline_powerbi.py`/`refresh_powerbi.py` stdout, ищи `Completed`/
+`Power BI: requestId`) и в Telegram-алертах при провале. `data_quality_log step='build_unified'`
+проверяется ДО рефреша (гейт в `pipeline_powerbi.py:253-258`) — `status=ok` там подтверждает только,
+что рефреш разрешён стартовать, а НЕ что цифры доехали до датасета. Проверять по логу прогона, не SQL:
 ```bash
-# Статус последнего PBI-рефреша (через pipeline_powerbi.py лог):
-ssh victory "~/venv/bin/python3 ~/pgq.py \"
-SELECT step, status, run_at FROM public.data_quality_log
-WHERE step='powerbi_refresh' ORDER BY run_at DESC LIMIT 3\""
+ssh victory "tail -n 50 /tmp/pipeline_powerbi*.log | grep -i 'Power BI\|Completed'"
 ```
 
 **DoD-чеклист для задач связанных с PBI:**
-- [ ] `powerbi_refresh` в `data_quality_log` — `status=ok`, время — после последнего прогона пайплайна.
+- [ ] В логе прогона `refresh_powerbi.py`/`pipeline_powerbi.py` — `Completed`, без `⚠️`/`🚨` Telegram-алертов.
 - [ ] В Power BI Desktop: последнее обновление датасета совпадает со временем рефреша.
 - [ ] Визуально: значение по Кудерко в отчёте совпадает с golden SQL (расход ≈ 25.4M, продажи ≥ 54).
 - [ ] Отчёт открывается без ошибок «источник данных недоступен».
@@ -229,7 +231,7 @@ WHERE step='powerbi_refresh' ORDER BY run_at DESC LIMIT 3\""
 | PBIP / Power BI | pbip-editor агент | Визуальная проверка в PBI Desktop |
 | Сверка с GSheets | `/crm-reconcile` (reconcile.py) | `SHEET_RECONCILE_METHODOLOGY.md` |
 | Витрина PostgreSQL | `verify_big_analytics.py` | `work-ba-check` (диск, статус) |
-| Свежесть PBI | `data_quality_log` step=powerbi_refresh | PBI Desktop последнее обновление |
+| Свежесть PBI | лог прогона `refresh_powerbi.py` (`Completed`) | PBI Desktop последнее обновление |
 
 ---
 

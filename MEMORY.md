@@ -102,7 +102,7 @@ CREATE INDEX ON _account_manager_map (account_login);
 
 **step10 seqscan.** LATERAL JOIN по CTE `leads_agg` → seqscan на каждый из 1318 заказов → 4.8 мин. Фикс (не сделан): материализовать в TEMP + CREATE INDEX (utm_campaign, lead_utm_content). KNOWN_ISSUES #5 OPEN.
 
-**step11 pixel attribution.** НИКОГДА не приводить к int (усечение долей = главный исторический баг). `total_cost_adj` = дробное float.
+**step11 pixel attribution.** НИКОГДА не приводить к int (усечение долей = главный исторический баг). Атрибуционные веса (`attr_pixel_квал_кампании`/`_приезд_кампании`/`_продажи_кампании`, `расход`) — дробные NUMERIC.
 
 **step13 direction='Авто'.** step13 строки ~111, ~229 фильтруют только `direction='Авто'` → посевы выпадают из `big_analytics_full_arrival`. KNOWN_ISSUES #2 OPEN. Маппинг марокарских телефонов: 8 цифр vs 11 → JOIN не срабатывает. KNOWN_ISSUES #3 OPEN.
 
