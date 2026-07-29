@@ -1,0 +1,162 @@
+==============================================================================
+ПОСЕВЫ — UTM, которых НЕ ХВАТАЕТ в справочнике pravilo_utm
+(gsheets_crop_targeting_account_pravilo_utm)
+==============================================================================
+Дата среза: 04.06.2026 (состояние после фикса nearest-prior)
+Источник: посевные лиды local_leads_all (utm_medium='posev'), created_date < 2026-05-01
+
+ЧТО ЭТО:
+Заявки, чей utm_campaign НЕ найден в справочнике pravilo_utm (ни в колонке "UTM",
+ни в "utm утвержденная"). Из-за этого их нельзя привязать к расходу посева.
+
+ИТОГО: 108 строк (utm_campaign × источник), ~85 уникальных utm_campaign, 255 лидов.
+
+ПОСЛЕДСТВИЕ:
+- UTM из telegram/Max/VK → лиды всё равно видны в витрине (через telegram / social_посевы),
+  но БЕЗ привязки к расходу.
+- UTM с источником = домен сайта (driveavto-kazan.ru и т.п.) → 64 лида ТЕРЯЮТСЯ из витрины
+  полностью (не telegram, не соцсеть, правила нет). См. ниже раздел "ТЕРЯЮТСЯ".
+
+ЧТО СДЕЛАТЬ:
+Добавить в Google-таблицу посевов (лист справочника UTM) строки:
+"UTM" = <utm_campaign из списка>, "utm утвержденная" = <нормализованный ключ канала>.
+После этого следующий прогон step10_crop_targeting/pipeline.py привяжет эти заявки.
+
+ПРИМЕЧАНИЕ по нормализации (часть UTM — это варианты/опечатки уже существующих):
+  chp_samara_max          → возможно = chp_samara
+  novosti_kazani_max      → возможно = novosti_kazani
+  min_vody_life_max       → возможно = min_vody_life
+  surgut_hmao_max         → возможно = surgut_hmao
+  *=DDMMYYYY (дата в utm) → битый UTM, поправить разметку на канале
+  victory                 → похоже на сайтовый трафик, проверить не брак ли разметки
+
+==============================================================================
+СПИСОК (utm_campaign | источник | лидов | месяцы)
+==============================================================================
+kazan_glavnoe                                       | max                      | 16 | 03,04
+chp_sochi_max                                       | max                      | 14 | 04
+naberezhnye_chelny_chs_max                          | max                      | 10 | 04
+netipchnyi_stvrp                                    | telegram                 |  8 | 03
+stvrp_proishectviya                                 | telegram                 |  6 | 04
+zhest_vlg2517                                       | max                      |  6 | 01
+nab_chelny_life                                     | max                      |  5 | 03,04
+naberezhbye_chelny_chs                              | telegram                 |  5 | 02
+novosti_leninigorska                                | telegram                 |  5 | 02
+ufa                                                 | telegram                 |  5 | 01,02
+incident_vlg18                                      | max                      |  4 | 03
+krasnodar_i_kraj                                    | telegram                 |  4 | 04
+min_vody_life_max                                   | max                      |  4 | 03
+news_mihaylovska                                    | max                      |  4 | 01
+nvgo                                                | telegram                 |  4 | 01
+pyatigorsk_i_kmb_novosti                            | max                      |  4 | 02
+pyatigorsk_kmv_novosti                              | max                      |  4 | 03
+stavropolye_26                                      | max                      |  4 | 01
+victory                                             | topcars-63.ru            |  4 | 01,02,03   [ТЕРЯЕТСЯ]
+volgograd                                           | telegram                 |  4 | 03
+volgograd_red                                       | max                      |  4 | 04
+niznekamsk_novosti                                  | telegram                 |  3 | 03
+svetly_almetevsk                                    | max                      |  3 | 04
+svetly_tatarstan                                    | max                      |  3 | 04
+victory                                             | automarket-samara.ru     |  3 | 01         [ТЕРЯЕТСЯ]
+zelonodolsk_life                                    | telegram                 |  3 | 03
+bashkortostanym_yanylyktar_vk                       | vk                       |  2 | 03
+chp_elista                                          | telegram                 |  2 | 03
+chp_elista                                          | carnew-vlg.ru            |  2 | 03         [ТЕРЯЕТСЯ]
+chp_samara_max                                      | max                      |  2 | 02
+chyornoe_beloe_beloreck                             | telegram                 |  2 | 01,02
+essentuki_online26                                  | telegram                 |  2 | 01
+essentuki_online26                                  | autostorage-stavropol.ru |  2 | 01         [ТЕРЯЕТСЯ]
+gorod_min_vody                                      | autostorage-stavropol.ru |  2 | 02         [ТЕРЯЕТСЯ]
+gorod_oktybrskyi                                    | telegram                 |  2 | 01
+krkia                                               | newcars-86.ru            |  2 | 03         [ТЕРЯЕТСЯ]
+min_vody_life_max                                   | autostorage-stavropol.ru |  2 | 03         [ТЕРЯЕТСЯ]
+min_vody_max                                        | autopark-26.ru           |  2 | 01         [ТЕРЯЕТСЯ]
+nabereznye_chelny_chs                               | telegram                 |  2 | 04
+naberzhnye_chelny_chs                               | telegram                 |  2 | 03
+nazvanie                                            | telegram                 |  2 | 02         [битый UTM]
+novorossijsk_dtp_max                                | max                      |  2 | 04
+novosti_kazani_max                                  | max                      |  2 | 04
+novosti_ufa_nagaevo                                 | telegram                 |  2 | 01,02
+pods_min_vody                                       | telegram                 |  2 | 02
+podslushano_neftekamsk                              | telegram                 |  2 | 03
+podslushano_stvp                                    | telegram                 |  2 | 01
+pyatigprsk_i_vse_kmb_novosti                        | autopark-26.ru           |  2 | 01         [ТЕРЯЕТСЯ]
+salavat_yulaev_news_fan_klub_green_machine_ufa_max  | max                      |  2 | 03
+stavrop881                                          | telegram                 |  2 | 01
+stavropolye_26                                      | autopark-26.ru           |  2 | 01         [ТЕРЯЕТСЯ]
+strlive_sterlitamak                                 | telegram                 |  2 | 01
+stvrp881                                            | telegram                 |  2 | 01
+super_novosti_novorossijska_max                     | max                      |  2 | 04
+tvoy_mahaylovsk_max                                 | max                      |  2 | 03
+tvoy_mih                                            | telegram                 |  2 | 01
+victory                                             | ladacars-samara.ru       |  2 | 01,02      [ТЕРЯЕТСЯ]
+volgograd3272                                       | max                      |  2 | 01
+yug_24_novosti_krasnodara_i_krasnodarskogo          | telegram                 |  2 | 04
+zhest_vlg2517                                       | ladaauto-vlg.ru          |  2 | 01         [ТЕРЯЕТСЯ]
+zhest_volzhskyi7300                                 | ladaauto-vlg.ru          |  2 | 03         [ТЕРЯЕТСЯ]
+afisha_ufa                                          | telegram                 |  1 | 02
+atmosfera_beloyarskij_hmao                          | telegram                 |  1 | 01
+avtorynok_tyumen_vk                                 | multicars-72.ru          |  1 | 01         [ТЕРЯЕТСЯ]
+bahkortostanym_yanylyktar_vk                        | vk                       |  1 | 04
+bash                                                | vk                       |  1 | 03
+chp_24_kumertau=25042026                            | telegram                 |  1 | 04         [битый UTM]
+chp_chelny1678                                      | telegram                 |  1 | 03
+chp_elista                                          | max                      |  1 | 03
+chp_ufa                                             | telegram                 |  1 | 02
+chp_v_nizhnevartovske_vk                            | vk                       |  1 | 02
+kazan_glavnoe                                       | ladaauto-kazan.ru        |  1 | 04         [ТЕРЯЕТСЯ]
+kazan_live                                          | telegram                 |  1 | 04
+kogalym_info_max=27042026                           | max                      |  1 | 04         [битый UTM]
+krkia                                               | max                      |  1 | 03
+mamochki_surgut                                     | telegram                 |  1 | 02
+moj_salekhard                                       | telegram                 |  1 | 01
+nabereznye_chelny_chs                               | driveavto-kazan.ru       |  1 | 04         [ТЕРЯЕТСЯ]
+nazvanie=26042026                                   | max                      |  1 | 04         [битый UTM]
+nizhnekamsk_proischestviya                          | telegram                 |  1 | 03
+nizhnevartovsk                                      | telegram                 |  1 | 01
+nizhnevartovsk_lajf_max                             | max                      |  1 | 03
+novosti_bashkirii_zur_sekret                        | telegram                 |  1 | 02
+novosti_kazani_max                                  | driveavto-kazan.ru       |  1 | 04         [ТЕРЯЕТСЯ]
+novosti_surguta_i_hmao_days                         | telegram                 |  1 | 01
+noyabrsk_chat                                       | telegram                 |  1 | 02
+nyagan_chp_dtp_chto_proizoshlo_vk                   | vk                       |  1 | 02
+podslushano_langepas                                | telegram                 |  1 | 02
+rabota_surgut=24042026                              | telegram                 |  1 | 04         [битый UTM]
+salavat_..._green_mackhine_ufa_max=25042026         | max                      |  1 | 04         [битый UTM]
+samara1199                                          | telegram                 |  1 | 01
+stop_dps_nizhnevartovsk_max                         | max                      |  1 | 04
+surgut_hmao_life_max                                | max                      |  1 | 04
+surgut_hmao_max                                     | max                      |  1 | 02
+tipichnaya_tyumen_vk                                | multicars-72.ru          |  1 | 01         [ТЕРЯЕТСЯ]
+tipichnyj_hanty_mansijsk_mal                        | newcars-86.ru            |  1 | 01         [ТЕРЯЕТСЯ]
+tolyatti_tlt                                        | telegram                 |  1 | 01
+ufa_bashdtp_novosti_bashkortostan                   | telegram                 |  1 | 01
+ufa_bashkortostan                                   | telegram                 |  1 | 02
+yamal_vazhnoe                                       | telegram                 |  1 | 01
+z_hmao_dtp_chp_v_vk                                 | vk                       |  1 | 03
+zhest_vlg7300                                       | ladaauto-vlg.ru          |  1 | 03         [ТЕРЯЕТСЯ]
+zhest_vlzhsk1230                                    | ladaauto-vlg.ru          |  1 | 01         [ТЕРЯЕТСЯ]
+zhest_vlzhsk1230                                    | max                      |  1 | 01
+zhest_volzhskyi_max                                 | carnew-vlg.ru            |  1 | 03         [ТЕРЯЕТСЯ]
+zhest_vozhskyi                                      | carnew-vlg.ru            |  1 | 02         [ТЕРЯЕТСЯ]
+zhest_vozhskyi                                      | telegram                 |  1 | 01
+zloj_noyabryanin_vk                                 | newcars-86.ru            |  1 | 01         [ТЕРЯЕТСЯ]
+
+==============================================================================
+ТЕРЯЮТСЯ ПОЛНОСТЬЮ (64 лида) — приоритет
+==============================================================================
+Это лиды с utm_source = домен сайта-дилера (не telegram/Max/VK) и без правила UTM.
+Они НЕ попадают в витрину big_analytics_full вообще (не идут ни в crop_targeting,
+ни в social_посевы, ни в telegram). Помечены [ТЕРЯЕТСЯ] в списке выше.
+Домены: topcars-63.ru, automarket-samara.ru, ladacars-samara.ru, carnew-vlg.ru,
+ladaauto-vlg.ru, autostorage-stavropol.ru, autopark-26.ru, newcars-86.ru,
+multicars-72.ru, driveavto-kazan.ru, ladaauto-kazan.ru.
+
+Чтобы их не терять — нужно либо завести их UTM в pravilo_utm, либо изменить логику
+сбора так, чтобы domain-источники тоже попадали в посевы (требует доработки step3).
+
+==============================================================================
+БИТЫЕ UTM (дата в utm_campaign) — поправить разметку на стороне канала
+==============================================================================
+chp_24_kumertau=25042026, kogalym_info_max=27042026, nazvanie=26042026,
+rabota_surgut=24042026, salavat_..._ufa_max=25042026, nazvanie

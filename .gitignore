@@ -1,0 +1,84 @@
+# ===== Секреты =====
+.secret/
+*.env
+.env
+.env.*
+!.env.example
+*_token*.json
+*_tokens*.json
+*credentials*.json
+*.key
+*.pem
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== Логи и временные =====
+*.log
+logs/
+*.tmp
+*.bak
+*.swp
+*.orig
+_tmp_*
+tmp_*
+check_*.py
+test_*.py
+!tests/test_*.py
+!tests/**/test_*.py
+
+# ===== Данные =====
+data/
+raw_data/
+*.csv
+*.tsv
+*.parquet
+*.xlsx
+*.xls
+*.dump
+*.sql.gz
+*.sqlite
+*.db
+exports/
+downloads/
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# ===== Dev: бэкап-снапшоты claims (вне git, только для отката) =====
+dev/snapshots/
+
+# ===== Cookies / state =====
+*.cookies
+*cookies*.json
+*.session
+state/
+.state/
+
+# ===== Pipeline артефакты =====
+step*/output/
+step*/logs/
+step*/_tmp/
+*.checkpoint
+last_run_*.json
+# TOKENCACHE_2026-06-20: кэш рабочего токена по аккаунту (login→idx), не секрет, но runtime-артефакт
+token_cache.json
+CLAUDE.md

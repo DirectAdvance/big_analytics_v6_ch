@@ -1,0 +1,541 @@
+{
+  "description": "Ручные замены UTM-полей для local_telega_in_orders. Источник: Google Sheets «посевы» (gid=0), ячейки с КРАСНЫМ цветом текста. Ключ = id (столбец A = id заказа Telega.in = PK local_telega_in_orders.id). Применяется в step0._sync_telega_in_orders ПОСЛЕ TRUNCATE+INSERT из FDW: для каждого id выполняется UPDATE только перечисленных полей. ПРИМЕЧАНИЕ: utm_content с 7 цифрами дополнен ведущим нулём до 8 (DDMMYYYY) — иначе парсинг даты в load_telega_in_orders.py не сработает.",
+  "source_sheet_id": "1qsGRWYLOztpUnh5fHN6Uka8NyLmpVEKZZVn-jod1vCo",
+  "key": "id",
+  "replaceable_fields": [
+    "post_links",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_content",
+    "utm_term"
+  ],
+  "count": 80,
+  "replacements": [
+    {
+      "id": 3783660,
+      "project": "ladaauto-vlg.ru - 03/04/2026",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto?utm_source=telegram&utm_medium=posev&utm_campaign=zhest_kamyshin&erid=2W5zFJKPmxm\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_kamyshin",
+      "utm_content": "05042026"
+    },
+    {
+      "id": 3801945,
+      "project": "driveauto-kazan.ru - 10/04/2026",
+      "post_links": "[\"https://driveavto-kazan.ru/auto?utm_source=max&utm_medium=posev&utm_campaign=zhest_kazani\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_kamyshin",
+      "utm_content": "15042026"
+    },
+    {
+      "id": 3805975,
+      "project": "ladaauto-vlg.ru - 14/04/2026 TG",
+      "post_links": "[\"https://ladaauto-vlg.ru/?utm_source=telegram&utm_medium=posev&utm_campaign=zhest_kamyshin&erid=2W5zFGNfhSR\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_kamyshin",
+      "utm_content": "17042026"
+    },
+    {
+      "id": 3813622,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "19042026"
+    },
+    {
+      "id": 3813624,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "20042026"
+    },
+    {
+      "id": 3813625,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813627,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813628,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "20042026"
+    },
+    {
+      "id": 3813629,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813630,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "20042026"
+    },
+    {
+      "id": 3813631,
+      "project": "newcars-86.ru - до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813799,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813800,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "20042026"
+    },
+    {
+      "id": 3813801,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813802,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813803,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "18042026"
+    },
+    {
+      "id": 3813804,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "20042026"
+    },
+    {
+      "id": 3813805,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "20042026"
+    },
+    {
+      "id": 3813806,
+      "project": "newauto-102.ru - мульти до 22 апреля",
+      "utm_content": "20042026"
+    },
+    {
+      "id": 3825878,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "nizhnevartovsk_hmao",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3825879,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "surgut_life",
+      "utm_content": "28042026"
+    },
+    {
+      "id": 3825880,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "chp_nizhnevartovsk",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3825882,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "svet_surgut",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3825883,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "medvezhij_nefteyugansk_tipichnyj",
+      "utm_content": "28042026"
+    },
+    {
+      "id": 3825884,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "chp_surgut",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3825885,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "surgut86",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3825886,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "v_kurse_86_surgut",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3825888,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "surgut_segodnya",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3825889,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "rabota_surgut",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3825890,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "yugorsk_sovetskij",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3825891,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "surgut_24_7",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3825892,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "nash_hanty_mansijsk_naskh_hm86",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3825893,
+      "project": "havalauto-86.ru — резина в подарок",
+      "post_links": "[\"https://havalauto-86.ru/?utm_source=telegram&utm_medium=posev&utm_campaign=mamochki_surguta&utm_content=25042026\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "mamochki_surguta",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3825895,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "nyagan_chto_proizoshlo_max",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3825896,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "vakansii_86_rus",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3825897,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "rabota_surgut_vakansii",
+      "utm_content": "28042026"
+    },
+    {
+      "id": 3825898,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "rabota_surgut_max",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3825899,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "nizhnevartovsk_chp_max",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3825901,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "kogalym_info_max",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3825902,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "chp_nizhnevartovsk_max",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3825903,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "tk_tipichnyj_kogalym_max",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3825904,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "nyagan_chto_proizoshlo_max",
+      "utm_content": "28042026"
+    },
+    {
+      "id": 3825905,
+      "project": "havalauto-86.ru — резина в подарок",
+      "utm_campaign": "hanty_mansijsk_max",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3826150,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "podslushano_ishimbaj",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3826151,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "sterlitamak_soda",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3826152,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "ufa_bashkortostan_efe",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3826153,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "bashkiriya_sejchas",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3826154,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "chp_24_kumertau",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3826155,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "kumerdetka_kumertau_max",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3826156,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "podslushano_salavat_max",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3826157,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "idem_ufa_afisha",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3826158,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "podslushano_v_bashkirii_max",
+      "utm_content": "24042026"
+    },
+    {
+      "id": 3826159,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "salavat_yulaev_news_fan_klub_green_mackhine_ufa_max",
+      "utm_content": "25042026"
+    },
+    {
+      "id": 3826160,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "utm_campaign": "beloreck_chyornoe_beloe_bashkortostan_max",
+      "utm_content": "27042026"
+    },
+    {
+      "id": 3826161,
+      "project": "havaldrive-102.ru — Haval + комплект резины",
+      "post_links": "[\"https://havaldrive-102.ru/?utm_source=max&utm_medium=posev&utm_campaign=sterlitamak_lebedi_max=26042026\"]",
+      "utm_campaign": "sterlitamak_lebedi_max",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3826944,
+      "project": "ladaauto-vlg.ru - 23/04/2026 max",
+      "post_links": "[\"https://ladaauto-vlg.ru/?utm_source=max&utm_medium=posev&utm_campaign=novosti_volgograda_i_oblasti&utm_content=26042026&erid=2W5zFJkQpoK\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "novosti_volgograda_i_oblasti",
+      "utm_content": "26042026"
+    },
+    {
+      "id": 3836190,
+      "project": "newcars-86.ru — Lada",
+      "post_links": "[\"https://newcars-86.ru/auto/lada/?utm_source=max&utm_medium=posev&utm_campaign=stop_dps_nizhnevartovsk_max&utm_content=29042026\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "stop_dps_nizhnevartovsk_max",
+      "utm_content": "29042026"
+    },
+    {
+      "id": 3847393,
+      "project": "driveavto-kazan.ru - 04/05/2026 max",
+      "post_links": "[\"https://driveavto-kazan.ru/auto?utm_source=max&utm_medium=posev&utm_campaign=zhest_kazani&utm_content=07052026&erid=2W5zFGq949f\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_kazani",
+      "utm_content": "07052026"
+    },
+    {
+      "id": 3850179,
+      "project": "ladaauto-vlg.ru - 05/05/2026 tg",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto/utm_source=telegram&utm_medium=posev&utm_campaign=vlg_n1&utm_content=07052026?erid=2W5zFJSqQTs\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "vlg_n1",
+      "utm_content": "07052026",
+      "utm_term": ""
+    },
+    {
+      "id": 3850180,
+      "project": "ladaauto-vlg.ru - 05/05/2026 tg",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto/utm_source=telegram&utm_medium=posev&utm_campaign=dtp_chp_volzhskyi&utm_content=06052026?erid=2W5zFJUKPkD\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "dtp_chp_volzhskyi",
+      "utm_content": "06052026",
+      "utm_term": ""
+    },
+    {
+      "id": 3850181,
+      "project": "ladaauto-vlg.ru - 05/05/2026 tg",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto/utm_source=telegram&utm_medium=posev&utm_campaign=dtp_i_chp_vlg&utm_content=07052026?erid=2W5zFJVoP2Z\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "dtp_i_chp_vlg",
+      "utm_content": "07052026",
+      "utm_term": ""
+    },
+    {
+      "id": 3850182,
+      "project": "ladaauto-vlg.ru - 05/05/2026 tg",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto/utm_source=telegram&utm_medium=posev&utm_campaign=zhv_novosti_vlg&utm_content=06052026?erid=2W5zFJXHNJu\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "zhv_novosti_vlg",
+      "utm_content": "06052026",
+      "utm_term": ""
+    },
+    {
+      "id": 3850183,
+      "project": "ladaauto-vlg.ru - 05/05/2026 tg",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto/utm_source=telegram&utm_medium=posev&utm_campaign=zhest_vlg_big&utm_content=07052026?erid=2W5zFJaFLsb\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_vlg_big",
+      "utm_content": "07052026",
+      "utm_term": ""
+    },
+    {
+      "id": 3850184,
+      "project": "ladaauto-vlg.ru - 05/05/2026 tg",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto/utm_source=telegram&utm_medium=posev&utm_campaign=zhest_volgogradskoy&utm_content=08052026?erid=2W5zFJYmMbF\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_volgogradskoy",
+      "utm_content": "08052026",
+      "utm_term": ""
+    },
+    {
+      "id": 3857330,
+      "project": "newauto-102.ru — Lada, Hyundai и Kia бирюз",
+      "post_links": "[\"https://newauto-102.ru/?utm_source=max&utm_medium=posev&utm_campaign=novosti_ufy_i_respubliki_bashkortostan_ufa_max&utm_content=11052026\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "novosti_ufy_i_respubliki_bashkortostan_ufa_max",
+      "utm_content": "11052026"
+    },
+    {
+      "id": 3863419,
+      "project": "carnew-vlg.ru - 12/05/2026 max",
+      "utm_content": "14052026"
+    },
+    {
+      "id": 3863420,
+      "project": "carnew-vlg.ru - 12/05/2026 max",
+      "utm_content": "13052026"
+    },
+    {
+      "id": 3863428,
+      "project": "carnew-vlg.ru - 12/05/2026 max",
+      "utm_content": "15052026"
+    },
+    {
+      "id": 3863429,
+      "project": "carnew-vlg.ru - 12/05/2026 max",
+      "utm_content": "14052026"
+    },
+    {
+      "id": 3866189,
+      "project": "driveavto-kazan.ru - 13/05/2026 max",
+      "post_links": "[\"https://driveavto-kazan.ru/auto?utm_source=max&utm_medium=posev&utm_campaign=zhest_kazani&utm_content=16052026&erid=2W5zFJbMAbj\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_kazani",
+      "utm_content": "16052026"
+    },
+    {
+      "id": 3866192,
+      "project": "driveavto-kazan.ru - 13/05/2026 max",
+      "utm_content": "17052026"
+    },
+    {
+      "id": 3870767,
+      "project": "havaldrive-102.ru - распродажа Haval + резина",
+      "post_links": "[\"https://havaldrive-102.ru/?utm_source=telegram&utm_medium=posev&utm_campaign=novosti_ufy_i_respubliki_bashkortostan_ufa&utm_content=18052026\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "novosti_ufy_i_respubliki_bashkortostan_ufa",
+      "utm_content": "18052026"
+    },
+    {
+      "id": 3877227,
+      "project": "ladaauto-vlg.ru — 18/05/2026 max",
+      "utm_medium": "posev",
+      "utm_campaign": "zhest_vlg_max"
+    },
+    {
+      "id": 3877231,
+      "project": "ladaauto-vlg.ru — 18/05/2026 max",
+      "post_links": "[\"https://ladaauto-vlg.ru/auto?utm_source=max&utm_medium=posev&utm_campaign=novosti_volgograda_i_oblasti&utm_content=20052026&erid=2W5zFGXj3Nh\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "novosti_volgograda_i_oblasti",
+      "utm_content": "20052026"
+    },
+    {
+      "id": 3877233,
+      "project": "ladaauto-vlg.ru — 18/05/2026 max",
+      "utm_content": "21052026"
+    },
+    {
+      "id": 3877236,
+      "project": "ladaauto-vlg.ru — 18/05/2026 max",
+      "utm_medium": "posev",
+      "utm_campaign": "volgograd_koroche"
+    },
+    {
+      "id": 3877775,
+      "project": "driveavto-kazan.ru – 18/05/2026 max крупные",
+      "post_links": "[\"https://driveavto-kazan.ru/auto?utm_source=max&utm_medium=posev&utm_campaign=novosti_kazani_i_respubliki_tatarstan&utm_content=21052026&erid=2W5zFGCWZXX\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "novosti_kazani_i_respubliki_tatarstan",
+      "utm_content": "21052026"
+    },
+    {
+      "id": 3884578,
+      "project": "newauto-102.ru — оранж",
+      "post_links": "[\"https://newauto-102.ru/?utm_source=max&utm_medium=posev&utm_campaign=ufa_rb_max&utm_content=22052026\"]",
+      "utm_source": "max",
+      "utm_medium": "posev",
+      "utm_campaign": "ufa_rb_max",
+      "utm_content": "22052026"
+    },
+    {
+      "id": 3884584,
+      "project": "newauto-102.ru — оранж",
+      "post_links": "[\"https://newauto-102.ru/?utm_source=max&utm_medium=posev&utm_campaign=ufa_max&utm_content=22052026\"]",
+      "utm_campaign": "ufa_max"
+    },
+    {
+      "id": 3887646,
+      "project": "newauto-102.ru — оранж ч.2",
+      "post_links": "[\"https://newauto-102.ru/?utm_source=telegram&utm_medium=posev&utm_campaign=nagaevo_info&utm_content=22052026\"]",
+      "utm_source": "telegram",
+      "utm_medium": "posev",
+      "utm_campaign": "nagaevo_info",
+      "utm_content": "22052026"
+    }
+  ]
+}
