@@ -1,6 +1,18 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-07-28 (oleg_programmer: PBI-реестры fact_ml_korrektirovki — DONE_WITH_CONCERNS). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-07-30 (oleg_programmer: v6_ch Этап 1 DDL — DONE). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-07-30: v6_ch Этап 1 (ClickHouse DDL звёздной схемы) — DONE (см. PLAN.md §4 Этап 1):**
+- Создан и применён к `ad_analytics` (ClickHouse Yandex Cloud) `migrations/01_init_schema.sql` —
+  19 объектов: 15 MergeTree (Dim_Date/Campaign/AdGroup/Site/Adjustment/Location + fact_big_analytics/
+  region_spend/adformat_spend/criterion_spend/region_zayavki/criterion_zayavki/direct_feed_funnel/
+  vk_ads/ml_korrektirovki) + 2 ReplacingMergeTree накопительные (campaign_status,
+  analytics_report_placement) + их парные VIEW с FINAL (обязательно читать только через VIEW).
+- Decimal(18,6) применён ТОЛЬКО к fact_big_analytics/fact_ml_korrektirovki (пиксель-атрибуция);
+  остальные факты — Int64 (проверено по исходнику v5, там нет дробления).
+- Верифицировано `SHOW TABLES`/`DESCRIBE TABLE` — 19/19, типы совпадают с планом.
+- Полный отчёт: `.claude/sdd/v6-etap1-ddl-report.md` (в корне репо, не здесь — read-only хук).
+- Следующий шаг (Этап 2, PLAN.md): перенос raw_*-слоя (step0/step1/step2) под ClickHouse.
 
 **2026-07-28: DISK_THRESHOLD_LOWER — BLOCKED (10.6 GB < 11 GB, threshold недостаточен):**
 - pipeline.py:741 `_S6_THRESHOLD_GB = 11.0` (было 15.0, маркер DISK_THRESHOLD_LOWER_2026-07-28) — задеплоен, в git

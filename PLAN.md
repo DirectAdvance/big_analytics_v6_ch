@@ -171,13 +171,22 @@ CH поддерживает большинство оконных функций
       `scripts/mcp_clickhouse_victory.py`, официальный пакет `mcp-clickhouse` через `uvx`;
       там TLS-верификация ОТКЛЮЧЕНА — `mcp-clickhouse` не поддерживает кастомный CA-путь)
 
-### Этап 1. Схема таблиц под ClickHouse (DDL)
+### Этап 1. Схема таблиц под ClickHouse (DDL) — ✅ выполнено 2026-07-30 (oleg_programmer)
 
-- [ ] Для каждой ключевой таблицы v5 определить: движок, ORDER BY, партиционирование, тип колонок
-- [ ] Особое внимание: тип для дробной атрибуции (Decimal vs Float64), тип для дат
-- [ ] Создать `migrations/01_init_schema.sql` — DDL всех таблиц v6_ch
-- [ ] Промежуточные таблицы (аналог UNLOGGED): движок MergeTree vs Memory vs Buffer
-- [ ] Dim-таблицы (Dim_Campaign, Dim_Site, Dim_AdGroup, Dim_Date): движок Dictionary vs ReplacingMergeTree
+- [x] Для каждой ключевой таблицы v5 определено: движок, ORDER BY, партиционирование, тип колонок —
+      см. `migrations/01_init_schema.sql` (комментарии перед каждой таблицей) и отчёт
+      `.claude/sdd/v6-etap1-ddl-report.md`.
+- [x] Тип для дробной атрибуции — `Decimal(18,6)`, применён ТОЛЬКО к `fact_big_analytics`/
+      `fact_ml_korrektirovki` (единственные факты с реальным step11_pixel_score); остальные факты —
+      `Int64` (проверено по исходному SQL v5 — там нет пиксельного дробления, не предположение).
+      Тип для дат — `Date` (ClickHouse).
+- [x] Создан `migrations/01_init_schema.sql` — DDL 19 объектов (15 MergeTree + 2 ReplacingMergeTree +
+      2 парные VIEW с FINAL), применён к `ad_analytics` (реально выполнено, не только написан файл).
+- [~] Промежуточные UNLOGGED-аналоги — НЕ созданы в этом файле (не входили в явный список задания;
+      относятся к Этапу 2/3 при переносе step1/step3/corrections.py).
+- [x] Dim-таблицы (`Dim_Campaign`, `Dim_Site`, `Dim_AdGroup`, `Dim_Date`, `Dim_Adjustment`,
+      `Dim_Location`) — движок `MergeTree` (не `Dictionary`, не `ReplacingMergeTree`): они полностью
+      пересобираются каждый прогон build_star (как в v5), Dictionary/Replacing тут не нужны.
 
 ### Этап 2. Перенос raw_* слоя (step0 + step1 + step2)
 
