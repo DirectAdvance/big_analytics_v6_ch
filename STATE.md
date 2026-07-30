@@ -1,6 +1,84 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-07-30 (oleg_programmer: v6_ch Этап 1 DDL фикс по director — DONE). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-07-30 (Codex: v6_ch полный ClickHouse-прогон + PBI-совместимость — DONE). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-07-30: v6_ch полный ClickHouse pipeline + PBI-совместимость — DONE (Codex):**
+- Решение Семёна соблюдено: CRM-данные в ClickHouse не перезаливались, pipeline работает только с тем,
+  что уже есть в `raw_data`.
+- `pipeline.py` переведён на ClickHouse-оркестрацию: step0/1/2/3/corrections/4/5/6/7/9/10/11/12/13,
+  `build_unified`, spend-датамарты, `build_star`, `build_pbi_compat`, minus snapshot, stats и финальный verify.
+- Дорогие INSERT переписаны на shadow-table rebuild + помесячные batch `INSERT SELECT`: `raw_yandex`,
+  `raw_leads`, `raw_calls`, `big_analytics_direct`, `big_analytics_full`, `pixel_score`, `arrival`,
+  `unified`, `fact_*`, `arp/arc/arf` и PBI-compatible таблицы. Это убирает монолитные вставки и снижает
+  пиковую нагрузку на память.
+- Полный прогон замерен фактом: `/usr/bin/time -p .venv/bin/python3 pipeline.py`,
+  `run_id=3407f9606419`, результат OK, `real 1037.44` сек (≈17м17с), `user 2.28`, `sys 0.33`.
+- Итоговые объёмы после полного прогона:
+  `raw_yandex=23,681,851`, `raw_leads=1,067,794`, `raw_calls=65,437`,
+  `big_analytics_direct=4,520,565`, `big_analytics_seo=227,560`, `big_analytics_pixel=300,684`,
+  `big_analytics_crop_targeting=4,445`, `big_analytics_full=5,118,691`,
+  `big_analytics_pixel_score=300,684`, `big_analytics_full_arrival=231,172`,
+  `big_analytics_unified=5,349,863`, `fact_big_analytics=5,349,863`.
+- PBI-совместимые объекты в `ad_analytics` созданы/проверены:
+  `pbi_big_analytics_full=5,349,863`, `pixel_score=300,684`, `arp_fact=12,923,840`,
+  `arc_fact=4,578,648`, `arf_fact=12,194,556`, `dim_criterion=96,234`.
+  Старые operational-зависимости TMDL без источников в `raw_data` созданы пустыми совместимыми таблицами:
+  `check_utm_fuck_direct`, `v_yandex_direct_minus_delta`, `yandex_direct_404_errors`,
+  `yandex_direct_cookie_analytics_website_pages`, `yandex_direct_korrektirovki`,
+  `yandex_direct_return_commission_report`.
+- Проверки: финальный `data_check/verify_big_analytics.py --full` внутри pipeline PASS:
+  `raw_yandex_cost_zero=0`, `full_before_2026=0`, `full_null_source=0`,
+  нарушения вложенности воронки = 0, `unified` = `full + arrival`, `fact_big_analytics` = `unified`.
+- Power BI копии созданы в `/Users/semen/Documents/Отчеты_victory_Powerbi`:
+  `Большая аналитика_admin_ch` и `Большая аналитика_user_ch`. Admin semantic model TMDL переключён
+  с PostgreSQL `10.211.55.2/ad_analytics_bi` на ClickHouse
+  `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`; user report переключён с Power BI Service
+  semantic model на локальный `../../Большая аналитика_admin_ch/Большая аналитика_v00.SemanticModel`.
+- Дополнение по звезде 2026-07-30: по решению Семёна добавлены BI-поля
+  `специалист/status/campaign_status/город/регион/салон/шаблон/тип_сайта/направление/
+  project_manager/campaign_code/tp/cpc_cpa/site_quiz`. В `fact_big_analytics` и
+  `pbi_big_analytics_full` есть весь набор; в `Dim_Site` лежат site/domain-поля +
+  `status/project_manager`; в `Dim_Campaign` лежат campaign-поля. Проверено `DESCRIBE TABLE`:
+  `fact_big_analytics=5,349,863`, `Dim_Site=1,672`, `Dim_Campaign=21,852`,
+  `pbi_big_analytics_full=5,349,863`; `verify_big_analytics.py --full` PASS после пересборки
+  step145/step146.
+- Дополнение по BI/view + source-store 2026-07-30:
+  - Все 28 ClickHouse-источников в admin PBIP переключены на `bi_*` и `Kind="View"`;
+    `rg`/TMDL parse подтвердили `all_view=True`. User PBIP читает локальную admin semantic model.
+  - Материализованные compatibility-дубли `pbi_big_analytics_full`, `pixel_score`, `arp_fact`,
+    `arc_fact`, `arf_fact`, `dim_criterion` заменены обычными ClickHouse VIEW. Step146 ускорен:
+    было ~116 сек на materialized inserts, стало 25-32 сек на view-DDL + rowcount checks.
+  - Default pipeline больше не запускает maintenance-only шаги `2/5/7/10`; они доступны через
+    `--include-maintenance` или `--only-step`. Полный default после view-оптимизации:
+    `run_id=f4230bdb9714`, `real 898.26` сек, PASS.
+  - Отдельные physical traffic source tables `big_analytics_direct/seo/pixel/crop_targeting/reviews`
+    слиты в один `big_analytics_sources` (`MergeTree`, 5,053,254 строк). Старые имена оставлены
+    как compatibility VIEW поверх него: direct/tp=4,520,565, seo=227,560, pixel=300,684,
+    crop=4,445, reviews=0. Проверочный прогон `pipeline.py --from-step=3`,
+    `run_id=d6eeb28dcbda`, `real 721.91` сек, PASS.
+  - Текущий disk-audit active parts: `fact_region_spend=585.8 MB`, `raw_yandex=560.6 MB`,
+    `big_analytics_sources=334.1 MB`, `big_analytics_unified=329.8 MB`,
+    `fact_big_analytics=328.5 MB`, `big_analytics_full=317.4 MB`,
+    `fact_direct_feed_funnel=293.1 MB`, `fact_criterion_spend=289.7 MB`,
+    `fact_adformat_spend=151.1 MB`.
+- Не проверено визуально в Power BI Desktop: на Mac нет открытой live-сессии Power BI. Проверена файловая
+  структура PBIP/TMDL и отсутствие старых PostgreSQL/Service-ссылок в новых копиях.
+
+**2026-07-30: v6_ch Этап 2 (step0/step1/step2 raw-слой ClickHouse) — DONE (Codex):**
+- Решение Семёна: CRM-данные в ClickHouse не перезаливаем, работаем с текущим `raw_data`; дефекты
+  `crmf_excel` считаются ограничением входного слоя, не багом v6_ch.
+- `config/ch_settings.py` добавлен: CH db/table constants; `step0_sync_local/step0.py` переписан
+  в read-only preflight `raw_data` (без FDW/local_*); `step1_load_raw/step1.py` переписан на
+  `clickhouse-connect` `DROP TABLE ... SYNC` + `CREATE TABLE ... MergeTree AS SELECT`;
+  `step2_indexes/step2.py` заменён на `OPTIMIZE TABLE ... FINAL`.
+- Фактически создано в `ad_analytics`: `raw_yandex=23,681,851`, `raw_leads=1,775,977`,
+  `raw_calls=96,312`, `raw_domains=4,864`, `raw_perform_leads=0` (источника `raw_data.perform_leads`
+  нет — совместимая пустая таблица).
+- Проверки: py_compile OK; `step0` PASS; `step1` PASS за 151.3 сек; `step2` PASS за 33.3 сек;
+  `SUM(raw_yandex.total_cost)=1,207,598,245.284424993`; raw-инварианты OK (`key3` пустых 0,
+  excluded domains в leads 0, звонки в leads 0, не-звонки в calls 0).
+- Следующий шаг: Этап 3 — перенос `step3_build_sources` + сворачивание `corrections.py` rule0..rule6
+  в CH `INSERT SELECT`/CTE-цепочку поверх этих raw-таблиц.
 
 **2026-07-30: v6_ch Этап 1 DDL — фикс 3 находок director (Critical+Important+Minor) — DONE:**
 - Critical: `Clicks`/`Impressions` Int32 → `Decimal(18,6)` в `fact_big_analytics`+`fact_ml_korrektirovki`

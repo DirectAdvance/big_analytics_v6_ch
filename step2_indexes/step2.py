@@ -1,129 +1,57 @@
-"""
-step2_indexes/step2.py — индексы на RAW таблицах + ANALYZE
+"""Step 2 for v6_ch: ClickHouse RAW maintenance.
 
-Индексы создаются ПОСЛЕ вставки данных (шаг 1), не до.
-Так планировщик строит их один раз по готовым данным — быстрее.
+Postgres indexes/ANALYZE do not apply to ClickHouse. The raw tables are created
+with MergeTree ORDER BY keys in step1; this step only forces a best-effort
+OPTIMIZE so following heavy reads see compact parts when possible.
 """
+
+from __future__ import annotations
 
 import logging
+import sys
 import time
+from pathlib import Path
 
-import psycopg2
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config.settings import (
-    T_RAW_YANDEX, T_RAW_LEADS, T_RAW_CALLS, T_RAW_DOMAINS,
-    T_RAW_PERFORM_LEADS,  # PERFORM_LEADS_2026-07-01
-)
+from config.ch_db import get_client
+from config.ch_settings import RAW_TARGET_TABLES
 
-logger = logging.getLogger('pipeline.step2')
-
-# ── Список индексов ───────────────────────────────────────────────────────────
-# Формат: (table, index_name, columns_sql)
-
-INDEXES = [
-    # raw_yandex — индексы УДАЛЕНЫ (idx_scan=0, аудит 2026-06-05):
-    # Все запросы к raw_yandex делают полный GROUP BY key3 / account_login →
-    # seq scan дешевле index scan на 3.5M строк UNLOGGED таблицы.
-    # Таблица пересоздаётся DROP+CTAS каждый прогон (step1), индексы всё равно бы падали.
-
-    # raw_leads
-    (T_RAW_LEADS,  'idx_raw_leads_domain_id',     'domain_id'),
-    (T_RAW_LEADS,  'idx_raw_leads_created',        'created_date'),
-    (T_RAW_LEADS,  'idx_raw_leads_utm_source',     'utm_source'),
-    (T_RAW_LEADS,  'idx_raw_leads_utm_campaign',   'utm_campaign'),
-
-    # raw_calls
-    (T_RAW_CALLS,  'idx_raw_calls_domain_id',     'domain_id'),
-    (T_RAW_CALLS,  'idx_raw_calls_created',        'created_date'),
-
-    # raw_domains
-    (T_RAW_DOMAINS, 'idx_raw_domains_id',         'id'),
-
-    # PERFORM_LEADS_2026-07-01: raw_perform_leads — индексы для leads_deduped UNION и step3
-    (T_RAW_PERFORM_LEADS, 'idx_raw_perform_leads_key3',    'key3'),
-    (T_RAW_PERFORM_LEADS, 'idx_raw_perform_leads_domain',  'domain'),
-    (T_RAW_PERFORM_LEADS, 'idx_raw_perform_leads_phone',   'phone'),
-    (T_RAW_PERFORM_LEADS, 'idx_raw_perform_leads_yclid',   'yclid'),
-]
-
-# LATERAL_IDX_2026-07-06: local_gsheet_sites должна быть ANALYZEd ДО step3.
-# После step0 TRUNCATE+INSERT planner не видит статистику → выбирает seq scan вместо index.
-# ANALYZE обновляет reltuples (4542) → planner правильно оценивает стоимость и выбирает индекс.
-ANALYZE_TABLES = [T_RAW_YANDEX, T_RAW_LEADS, T_RAW_CALLS, T_RAW_DOMAINS, T_RAW_PERFORM_LEADS,
-                  'local_gsheet_sites']
-
-# Индексы на постоянных (не RAW) таблицах — LATERAL_IDX_2026-07-06
-# local_gsheet_sites используется в step3 LATERAL JOIN (SELECT + ORDER BY + LIMIT 1).
-# Без индекса на login_key — nested loop x21M строк raw_yandex = x3.5 замедление step3.
-# TRUNCATE в step0 не удаляет индексы, поэтому индекс переживает каждый прогон.
-INDEXES_STATIC = [
-    ('local_gsheet_sites', 'idx_local_gsheet_sites_login_key', 'login_key'),
-]
+logger = logging.getLogger("pipeline.step2")
 
 
-# ── Точка входа шага ─────────────────────────────────────────────────────────
-
-def _exec_with_retry(conn, sql: str, label: str, attempts: int = 3, backoff: float = 2.0) -> bool:
-    """Выполнить SQL в собственной транзакции с retry на deadlock/lock_timeout.
-    Возвращает True если успех, False если все попытки исчерпаны."""
-    for attempt in range(1, attempts + 1):
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SET LOCAL lock_timeout = '30s'")
-                cur.execute(sql)
-            conn.commit()
-            return True
-        except (psycopg2.errors.DeadlockDetected, psycopg2.errors.LockNotAvailable) as e:
-            conn.rollback()
-            if attempt < attempts:
-                logger.warning('%s: %s (попытка %d/%d), retry через %.1fс',
-                               label, type(e).__name__, attempt, attempts, backoff)
-                time.sleep(backoff)
-            else:
-                logger.error('%s: deadlock/lock_timeout после %d попыток — пропускаем',
-                             label, attempts)
-                return False
-        except Exception:
-            conn.rollback()
-            raise
-
-
-def run(conn, run_id: str) -> dict:
-    logger.info('Шаг 2: создание индексов на RAW таблицах')
-    created = 0
-    skipped = 0
+def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
+    logger.info("Шаг 2 v6_ch: OPTIMIZE RAW таблиц ClickHouse")
+    client = get_client()
     t0 = time.perf_counter()
+    optimized = 0
+    skipped: list[str] = []
 
-    # Индексы — каждый отдельной транзакцией (короткие локи, retry на deadlock)
-    for table, idx_name, cols in INDEXES:
-        sql = f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})'
-        ok = _exec_with_retry(conn, sql, f'CREATE INDEX {idx_name}')
-        if ok:
-            created += 1
-            logger.debug('  INDEX %s ON %s (%s)', idx_name, table, cols)
-        else:
-            skipped += 1
+    for logical_name, table in RAW_TARGET_TABLES.items():
+        exists = bool(
+            client.query(
+                """
+                SELECT count()
+                FROM system.tables
+                WHERE database = 'ad_analytics'
+                  AND name = {name:String}
+                """,
+                parameters={"name": table.split(".", 1)[1]},
+            ).result_rows[0][0]
+        )
+        if not exists:
+            skipped.append(logical_name)
+            logger.warning("  %s отсутствует — пропускаем", table)
+            continue
+        client.command(f"OPTIMIZE TABLE {table} FINAL")
+        optimized += 1
+        logger.info("  OPTIMIZE %s — OK", table)
 
-    # Индексы на постоянных таблицах (LATERAL_IDX_2026-07-06)
-    for table, idx_name, cols in INDEXES_STATIC:
-        sql = f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({cols})'
-        ok = _exec_with_retry(conn, sql, f'CREATE INDEX {idx_name}')
-        if ok:
-            created += 1
-            logger.debug('  INDEX %s ON %s (%s)', idx_name, table, cols)
-        else:
-            skipped += 1
+    details = f"optimized={optimized}, skipped={','.join(skipped) if skipped else '-'}"
+    logger.info("Шаг 2 v6_ch завершён за %.1f сек: %s", time.perf_counter() - t0, details)
+    return {"rows": optimized, "details": details}
 
-    # ANALYZE — каждый отдельной транзакцией + retry на deadlock
-    for table in ANALYZE_TABLES:
-        ok = _exec_with_retry(conn, f'ANALYZE {table}', f'ANALYZE {table}')
-        if ok:
-            logger.debug('  ANALYZE %s', table)
-        else:
-            skipped += 1
 
-    elapsed = time.perf_counter() - t0
-    logger.info('Шаг 2 завершён: %d индексов, %d ANALYZE, %d пропущено за %.1f сек',
-                created, len(ANALYZE_TABLES), skipped, elapsed)
-    return {'rows': created,
-            'details': f'{created} индексов + ANALYZE x{len(ANALYZE_TABLES)} (skipped={skipped})'}
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    print(run())

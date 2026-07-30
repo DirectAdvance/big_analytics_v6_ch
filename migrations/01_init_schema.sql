@@ -100,6 +100,10 @@ CREATE TABLE IF NOT EXISTS ad_analytics."Dim_Campaign"
     "статус_кампании"                       Nullable(String),
     "специалист"                            LowCardinality(Nullable(String)),
     "manager_login"                         Nullable(String),
+    campaign_code                           LowCardinality(Nullable(String)),
+    tp                                      LowCardinality(Nullable(String)),
+    cpc_cpa                                 LowCardinality(Nullable(String)),
+    site_quiz                               LowCardinality(Nullable(String)),
     "campaign_status"                       LowCardinality(Nullable(String)),
     "payment_model"                         LowCardinality(Nullable(String)),
     "номер кампании | название кампании"    Nullable(String)
@@ -130,17 +134,28 @@ ENGINE = MergeTree
 ORDER BY ("AdGroupId");
 
 -- ─── Dim_Site ────────────────────────────────────────────────────────────
--- PK domain. Ревизия 2026-06-07 (v5): чистая dim ТОЛЬКО с ключом domain —
--- 14 row-grain атрибутов (салон/город/регион/...) живут на факте, НЕ здесь
--- (один domain несёт разные значения в разных строках — mode()-свёртка
--- искажала срезы, см. build_star.py::build_dim_site). Не добавлять сюда
--- атрибуты без явного решения — регрессия golden-baseline уже случалась.
+-- PK domain. Решение 2026-07-30: site/domain attributes доступны в Dim_Site
+-- для BI-срезов, но row-level версии остаются и в fact_big_analytics.
 CREATE TABLE IF NOT EXISTS ad_analytics."Dim_Site"
 (
-    domain String
+    domain                  Nullable(String),
+    "салон"                 LowCardinality(Nullable(String)),
+    "город"                 LowCardinality(Nullable(String)),
+    "регион"                LowCardinality(Nullable(String)),
+    "тип_сайта"             LowCardinality(Nullable(String)),
+    "шаблон"                LowCardinality(Nullable(String)),
+    "направление"           LowCardinality(Nullable(String)),
+    "статус"                LowCardinality(Nullable(String)),
+    status                  LowCardinality(Nullable(String)),
+    "специалист"            LowCardinality(Nullable(String)),
+    "проджект"              LowCardinality(Nullable(String)),
+    project_manager         LowCardinality(Nullable(String)),
+    "id_салона"             Nullable(String),
+    "менеджер"              Nullable(String),
+    "Название crm"          Nullable(String)
 )
 ENGINE = MergeTree
-ORDER BY (domain);
+ORDER BY (ifNull(domain, ''), ifNull("салон", ''));
 
 -- ─── Dim_Adjustment ──────────────────────────────────────────────────────
 -- PK RlAdjustmentId. RlAdjustmentId_total строго функц. зависит от ключа
@@ -363,12 +378,14 @@ CREATE TABLE IF NOT EXISTS ad_analytics.fact_big_analytics
     "специалист"                 LowCardinality(Nullable(String)),
     "тип_сайта"                  LowCardinality(Nullable(String)),
     "статус"                     LowCardinality(Nullable(String)),
+    status                       LowCardinality(Nullable(String)),
     "салон"                      LowCardinality(Nullable(String)),
     "шаблон"                     LowCardinality(Nullable(String)),
     "id_салона"                  Nullable(String),
     "город"                      LowCardinality(Nullable(String)),
     "регион"                     LowCardinality(Nullable(String)),
     "проджект"                   LowCardinality(Nullable(String)),
+    project_manager              LowCardinality(Nullable(String)),
     "менеджер"                   Nullable(String),
     "Название crm"               Nullable(String),
     "тип_заявки"                 LowCardinality(Nullable(String)),
@@ -746,12 +763,14 @@ CREATE TABLE IF NOT EXISTS ad_analytics.fact_ml_korrektirovki
     "специалист"                 LowCardinality(Nullable(String)),
     "тип_сайта"                  LowCardinality(Nullable(String)),
     "статус"                     LowCardinality(Nullable(String)),
+    status                       LowCardinality(Nullable(String)),
     "салон"                      LowCardinality(Nullable(String)),
     "шаблон"                     LowCardinality(Nullable(String)),
     "id_салона"                  Nullable(String),
     "город"                      LowCardinality(Nullable(String)),
     "регион"                     LowCardinality(Nullable(String)),
     "проджект"                   LowCardinality(Nullable(String)),
+    project_manager              LowCardinality(Nullable(String)),
     "менеджер"                   Nullable(String),
     "Название crm"               Nullable(String),
     "тип_заявки"                 LowCardinality(Nullable(String)),

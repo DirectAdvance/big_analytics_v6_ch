@@ -1,9 +1,42 @@
 # PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse)
 
-> Дата: 2026-07-30. Статус: архитектурные решения приняты, код не написан.
+> Дата: 2026-07-30. Статус: Этапы 0–5 выполнены в v6_ch; полный ClickHouse-прогон замерен.
 > Источник: анализ `work/big_analytics_v5/` (CLAUDE.md, PIPELINES.md, PBI_TABLES.md).
 > Ключевые решения 2026-07-30 (§3а, §5а, §6): хост исполнения (Yandex Cloud), UPSERT-паттерны
 > по категориям таблиц, доверие raw_data (выборочная перепроверка).
+
+---
+
+## 0. Итог реализации 2026-07-30
+
+- [x] Полный pipeline v6_ch переведён на ClickHouse и работает поверх существующего `raw_data`.
+      CRM-данные в ClickHouse не перезаливаются.
+- [x] Дорогие вставки переписаны на shadow-table rebuild + помесячные batch `INSERT SELECT`, чтобы
+      не собирать большие промежуточные наборы одной монолитной операцией.
+- [x] Полный прогон замерен фактом: `/usr/bin/time -p .venv/bin/python3 pipeline.py`,
+      `run_id=3407f9606419`, `real 1037.44` сек (≈17м17с), `user 2.28`, `sys 0.33`.
+- [x] После оптимизации BI/view-контракта и default pipeline без maintenance-only шагов:
+      `run_id=f4230bdb9714`, `real 898.26` сек (≈14м58с). После слияния traffic source tables
+      проверочный downstream-прогон `--from-step=3`: `run_id=d6eeb28dcbda`, `real 721.91` сек, PASS.
+- [x] Финальная проверка `data_check/verify_big_analytics.py --full` внутри pipeline завершилась PASS:
+      нулевые нарушения по дате, `source`, вложенности воронки и сверкам `unified/fact`.
+- [x] PBI-совместимые ClickHouse-таблицы созданы: `pbi_big_analytics_full`, `pixel_score`,
+      `arp_fact`, `arc_fact`, `arf_fact`, `dim_criterion` и пустые compatibility-таблицы для
+      старых TMDL-зависимостей без источников в `raw_data`.
+- [x] Все объекты, которые читает Power BI, вынесены в `bi_*` ClickHouse VIEW; admin PBIP
+      переключён на `Kind="View"`. Materialized compatibility-дубли заменены обычными VIEW,
+      чтобы не занимать диск.
+- [x] Traffic source tables слиты: вместо отдельных physical
+      `big_analytics_direct/seo/pixel/crop_targeting/reviews` теперь один `big_analytics_sources`;
+      старые имена оставлены только как compatibility VIEW.
+- [x] PBIP-копии подготовлены в `/Users/semen/Documents/Отчеты_victory_Powerbi`:
+      `Большая аналитика_admin_ch` подключён к ClickHouse, `Большая аналитика_user_ch` подключён
+      к локальной admin semantic model. В Power BI Desktop визуально не открывалось.
+
+Ключевые итоговые объёмы:
+`raw_yandex=23,681,851`, `raw_leads=1,067,794`, `raw_calls=65,437`,
+`big_analytics_sources=5,053,254`, `big_analytics_full=5,118,691`, `big_analytics_unified=5,349,863`,
+`fact_big_analytics=5,349,863`, `arp_fact=12,923,840`, `arf_fact=12,194,556`.
 
 ---
 
@@ -13,8 +46,8 @@
 подключение `clickhouse_avto`) вместо PostgreSQL (`ad_analytics_bi` @ Victory VPS).
 Логика ETL и воронка статусов не меняются — меняется СУБД и паттерны работы с ней.
 
-Целевое развёртывание: уточнить (Victory VPS + Yandex Cloud CH / только Cloud CH / локальный CH
-— открытый вопрос, см. раздел 6).
+Целевое развёртывание: локальный запуск Python-пайплайна против Yandex Cloud ClickHouse
+`raw_data`/`ad_analytics`. Продовый хост исполнения можно выбрать отдельно.
 
 ---
 
@@ -188,36 +221,59 @@ CH поддерживает большинство оконных функций
       `Dim_Location`) — движок `MergeTree` (не `Dictionary`, не `ReplacingMergeTree`): они полностью
       пересобираются каждый прогон build_star (как в v5), Dictionary/Replacing тут не нужны.
 
-### Этап 2. Перенос raw_* слоя (step0 + step1 + step2)
+### Этап 2. Перенос raw_* слоя (step0 + step1 + step2) — ✅ выполнено 2026-07-30 (Codex)
 
-- [ ] `step0_sync_local`: заменить FDW на CH-совместимый механизм (CH Table Engine / прямой SELECT)
-- [ ] `step1_load_raw`: переписать загрузку RAW с psycopg2 на clickhouse-connect INSERT
-- [ ] `step2_indexes`: убрать, заменить на OPTIMIZE TABLE (если нужно) или оставить пустым
+- [x] `step0_sync_local`: FDW/local_* синхронизация заменена на read-only preflight `raw_data`
+      в ClickHouse. Источник v6_ch — уже существующий `raw_data`; CRM-данные не перезаливаются.
+- [x] `step1_load_raw`: PostgreSQL UNLOGGED/FDW-путь заменён на `clickhouse-connect` DDL
+      `DROP TABLE ... SYNC` + `CREATE TABLE ... ENGINE MergeTree AS SELECT` в `ad_analytics`.
+      Создаются `raw_yandex`, `raw_leads`, `raw_calls`, `raw_domains`, `raw_perform_leads`.
+- [x] `step2_indexes`: PostgreSQL `CREATE INDEX`/`ANALYZE` заменены на `OPTIMIZE TABLE ... FINAL`
+      для raw-таблиц; ключи чтения задаются через `MergeTree ORDER BY` в step1.
+- [~] `raw_perform_leads`: отдельного источника `raw_data.perform_leads` нет, поэтому на этой
+      итерации создаётся пустая совместимая таблица. Это ограничение входного слоя, не попытка
+      восстановить perform-логику из CRM.
 
-### Этап 3. Перенос local_*/corrections.py логики (step3 + corrections + step4..7)
+Проверка 2026-07-30: `step0` PASS; `step1` создал `raw_yandex=23,681,851`,
+`raw_leads=1,775,977`, `raw_calls=96,312`, `raw_domains=4,864`, `raw_perform_leads=0`;
+`SUM(raw_yandex.total_cost)=1,207,598,245.284424993`; `step2` оптимизировал 5/5 таблиц.
+Контрольные инварианты raw-слоя: `raw_yandex.key3=''` = 0, excluded domains в `raw_leads` = 0,
+звонки в `raw_leads` = 0, не-звонки в `raw_calls` = 0.
 
-- [ ] `step3_build_sources/`: перевести SQL на CH-диалект, заменить CTAS на INSERT SELECT
-- [ ] `corrections.py`: переписать rule0..rule4 под CH (без транзакций, без VACUUM)
-- [ ] `step4_campaign_status/`: API-часть 1:1, запись в БД — CH INSERT
-- [ ] `step5_build_pixel/`: CH INSERT
-- [ ] `step6_build_full/`: UNION ALL + INSERT SELECT в CH (движок big_analytics_full)
-- [ ] `step7_finalize/`: убрать SET LOGGED / VACUUM, оставить disk-check через system.parts
+### Этап 3. Перенос local_*/corrections.py логики (step3 + corrections + step4..7) — ✅ выполнено 2026-07-30 (Codex)
 
-### Этап 4. Перенос big_analytics_* / датамартов / build_star
+- [x] `step3_build_sources/`: переведён на CH-диалект и batch `INSERT SELECT`.
+- [x] `corrections.py`: транзакционные UPDATE/VACUUM заменены на CH-safe hook; тяжёлые правила
+      свернуты в builders, где есть исходные данные.
+- [x] `step4_campaign_status/`: `campaign_status` строится из текущего `raw_data.direct_campaigns`,
+      direct-витрина патчится помесячными batch INSERT.
+- [x] `step5_build_pixel/`: CH-проверка/OPTIMIZE существующей pixel-витрины.
+- [x] `step6_build_full/`: `big_analytics_calls` и `big_analytics_full` собираются batch `INSERT SELECT`.
+- [x] `step7_finalize/`: PostgreSQL `SET LOGGED`/`VACUUM` убраны, остался ClickHouse `OPTIMIZE`.
 
-- [ ] `step9..step13`: перевести на CH (API-части 1:1, SQL и запись — CH)
-- [ ] `step10_crop_targeting`: посевы, дедупликация без UPSERT
-- [ ] `step11_pixel_score`: дробная атрибуция — проверить тип Decimal в CH
-- [ ] `build_unified.py`: UNION INSERT SELECT в CH
-- [ ] `build_spend_daily.py`: staging без UNLOGGED, 3 spend-датамарта в CH
-- [ ] `direct_feed_funnel/`: фидовая воронка на CH
+### Этап 4. Перенос big_analytics_* / датамартов / build_star — ✅ выполнено 2026-07-30 (Codex)
 
-### Этап 5. Звёздная схема для Power BI
+- [x] `step9..step13`: переведены на CH; внешние CRM/API-загрузки не добавлялись.
+- [x] `step10_crop_targeting`: проверка/OPTIMIZE CH-витрины посевов.
+- [x] `step11_pixel_score`: `Decimal(18,6)` сохраняется; pixel_score и доливка в full идут батчами.
+- [x] `build_unified.py`: `full + arrival` собирается batch `UNION`-слоем.
+- [x] Spend-датамарты `region_spend`, `adformat_spend`, `criterion_spend` переведены на CH batch rebuild.
+- [x] `direct_feed_funnel/`: фидовая воронка построена из текущего CH raw/report rows.
 
-- [ ] `star_refactor/build_star.py`: пересборка fact_big_analytics, arp_fact, fact_vk_ads в CH
-- [ ] PBI-подключение: настроить CH ODBC / HTTP коннектор
-- [ ] Переписать M-запросы (partition source) в TMDL под CH endpoint
-- [ ] Тест: PBI Import из CH (время refresh vs Postgres baseline)
+### Этап 5. Звёздная схема для Power BI — ✅ выполнено 2026-07-30 (Codex)
+
+- [x] `star_refactor/build_star.py`: пересборка `fact_big_analytics` и Dim-таблиц в ClickHouse.
+- [x] Дополнительные BI-поля добавлены в звезду:
+      `fact_big_analytics` содержит полный набор row-level полей
+      (`специалист`, `status`, `campaign_status`, `город`, `регион`, `салон`, `шаблон`,
+      `тип_сайта`, `направление`, `project_manager`, `campaign_code`, `tp`, `cpc_cpa`,
+      `site_quiz`); `Dim_Site` содержит site/domain-атрибуты и alias
+      `status/project_manager`; `Dim_Campaign` содержит campaign-атрибуты.
+- [x] PBI-подключение: новая PBIP-копия admin semantic model использует native Power Query
+      `ClickHouse.Database(...)` connector.
+- [x] M-запросы в copied TMDL переключены с PostgreSQL на ClickHouse endpoint.
+- [~] Тест: PBI Desktop refresh визуально не запускался; проверены CH-таблицы, TMDL-навигация и
+      отсутствие старых PostgreSQL/Service-ссылок в новых PBIP-копиях.
 
 ### Этап 6. Golden-baseline валидация против v5
 
@@ -297,9 +353,10 @@ CH поддерживает большинство оконных функций
      нельзя брать из `raw_data` как есть** — воронка занижена за март-май, `deal_type`-логика
      (кредит/наличные) сломается молча. Не-crmf источники (plex/mega/marcar/redauto/genzes)
      сверены 45/45 точно — доверять можно.
-   - **TODO перед Этапом 2 для leads_all:** решить — перезаливать `crmf_excel` из PG заново в CH,
-     или чинить у стороннего мигратора, или явно исключать `crmf_excel` из v6_ch на первой
-     итерации с пометкой «не перенесено».
+   - **✅ Решение Семёна 2026-07-30:** CRM-данные в ClickHouse НЕ перезаливаем и сторонний
+     мигратор НЕ чиним в рамках v6_ch. На первой итерации работаем с тем, что уже есть в
+     `raw_data`, включая известные дефекты `crmf_excel`; интерпретация golden/воронки должна
+     учитывать это как ограничение входного слоя, а не как баг v6_ch-пайплайна.
    - Полный отчёт: см. диалог сессии 2026-07-30 (файл `.claude/sdd/v6-raw-data-spotcheck.md`
      НЕ создан — read-only хук `oleg_read_bd` заблокировал запись в `big_analytics_v6_ch/**`;
      находки зафиксированы здесь).

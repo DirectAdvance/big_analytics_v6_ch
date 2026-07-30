@@ -1,0 +1,276 @@
+"""Build compatibility tables expected by the existing Power BI semantic model."""
+
+from __future__ import annotations
+
+import logging
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from config.ch_db import get_client
+from config.ch_utils import count_rows, q
+
+log = logging.getLogger("build_pbi_compat")
+
+PBI_FULL_COLS = [
+    "Date", "CampaignId", "AdNetworkType", "Device", "total_cost", "campaign_code", "tp", "cpc_cpa",
+    "Обращения", "korr", "kval", "priezd", "prodazhi", "nekorr", "ne_otvechaet", "filtr", "nedozvon",
+    "RlAdjustmentId", "RlAdjustmentId_total", "fid", "Clicks", "источник", "План заявки", "План приезда",
+    "аккаунт|сайт", "поставщик", "домен", "priedet", "dohod_do_kredita", "dobro", "атрибуция",
+    "AdGroupId", "направление", "site_quiz", "марки авто", "специалист", "тип_сайта", "статус",
+    "status", "салон", "шаблон", "id_салона", "город", "регион", "проджект", "project_manager",
+    "менеджер", "Название crm",
+    "тип_заявки", "manager_login", "CampaignName", "AdGroupName", "account_login", "adgroup_code",
+    "ag_part1", "ag_part2", "ag_part3", "ag_part4", "ag_part5", "ag_part6", "ag_part7",
+    "campaign_status", "payment_model", "неверный_кодер_new", "week_start", "День недели",
+    "номер группы | название группы", "номер кампании | название кампании",
+]
+
+PBI_SOURCE_OBJECTS = [
+    "Dim_AdGroup",
+    "Dim_Campaign",
+    "Dim_Date",
+    "Dim_Location",
+    "Dim_Site",
+    "arc_fact",
+    "arf_fact",
+    "arp_fact",
+    "pbi_big_analytics_full",
+    "big_analytics_full_arrival",
+    "check_utm_fuck_direct",
+    "dim_criterion",
+    "yandex_direct_history",
+    "fact_adformat_spend",
+    "fact_criterion_spend",
+    "fact_criterion_zayavki",
+    "fact_direct_feed_funnel",
+    "fact_ml_korrektirovki",
+    "fact_region_spend",
+    "fact_region_zayavki",
+    "fact_vk_ads",
+    "pixel_score",
+    "v_yandex_direct_minus_delta",
+    "yandex_direct_404_errors",
+    "yandex_direct_cookie_analytics_website_pages",
+    "yandex_direct_korrektirovki",
+    "yandex_direct_minus_snapshot",
+    "yandex_direct_return_commission_report",
+]
+
+
+def _replace_view(client, name: str, select_sql: str) -> None:
+    client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC")
+    client.command(f"CREATE VIEW ad_analytics.{q(name)} AS {select_sql}")
+
+
+def drop_bi_views(client) -> None:
+    for table in PBI_SOURCE_OBJECTS:
+        client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(f'bi_{table}')} SYNC")
+
+
+def _pbi_full_expr(col: str) -> str:
+    if col == "Обращения":
+        return "kol_vo_zayavok AS `Обращения`"
+    if col == "домен":
+        return "domain AS `домен`"
+    return q(col)
+
+
+def build_pbi_full(client) -> int:
+    select_sql = ", ".join(_pbi_full_expr(col) for col in PBI_FULL_COLS)
+    _replace_view(
+        client,
+        "pbi_big_analytics_full",
+        f"""
+        SELECT {select_sql}
+        FROM ad_analytics.fact_big_analytics
+        """
+    )
+    return count_rows(client, "ad_analytics.pbi_big_analytics_full")
+
+
+def build_pixel_score(client) -> int:
+    _replace_view(
+        client,
+        "pixel_score",
+        f"""
+        SELECT
+            toStartOfMonth(`Date`) AS month,
+            `салон`,
+            domain AS `домен`,
+            `источник`,
+            `CampaignId`,
+            `CampaignName` AS `Название кампании`,
+            `номер кампании | название кампании`,
+            kol_vo_zayavok AS `Обращения`,
+            korr AS `Заявки`,
+            kval AS `Квал`,
+            priezd AS `Приезд`,
+            prodazhi AS `Продажи`,
+            `направление`,
+            toDecimal64(1, 4) AS cpl_score,
+            kol_vo_zayavok AS `pixel_kol_vo_домена`,
+            kol_vo_zayavok AS `pixel_kol_vo_кампании`,
+            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_avg_квал`,
+            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_avg_визит`,
+            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_avg_продажа`,
+            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_кам_квал`,
+            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_кам_визит`,
+            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_кам_продажа`,
+            toDecimal64(1, 4) AS `score_квал`,
+            toDecimal64(1, 4) AS `score_визит`,
+            toDecimal64(1, 4) AS `score_продажа`,
+            toDecimal64(1, 4) AS `w_квал`,
+            toDecimal64(1, 4) AS `w_визит`,
+            toDecimal64(1, 4) AS `w_продажа`,
+            'данные' AS `status_квал`,
+            'данные' AS `status_визит`,
+            'данные' AS `status_продажа`,
+            total_cost AS `расход`,
+            toDecimal64(100, 4) AS weight,
+            kval AS `pixel_квал_домена`,
+            kval AS `attr_pixel_квал_кампании`,
+            priezd AS `pixel_приезд_домена`,
+            priezd AS `attr_pixel_приезд_кампании`,
+            prodazhi AS `pixel_продажи_домена`,
+            prodazhi AS `attr_pixel_продажи_кампании`
+        FROM ad_analytics.big_analytics_pixel_score
+        """
+    )
+    return count_rows(client, "ad_analytics.pixel_score")
+
+
+def build_arp_fact(client) -> int:
+    _replace_view(
+        client,
+        "arp_fact",
+        f"""
+        SELECT
+            date, domain AS `домен`, account_login AS `логин`, ad_network_type, placement,
+            placement AS placement_key, cost, all_forms AS `Все формы`,
+            crm_order_created AS `CRM: Заказ создан`, crm_order_paid AS `CRM: Заказ оплачен`,
+            toDecimal64(0, 6) AS `CRM: Спам заказ`, toDecimal64(0, 6) AS `CRM: Заказ отменен`,
+            CAST(NULL, 'Nullable(String)') AS tp,
+            gs.directologist AS `Специалист`, gs.salon AS `салон`, gs.site_type AS `тип_сайта`,
+            now() AS updated_at,
+            toDecimal64(0, 6) AS kol_vo_zayavok, toDecimal64(0, 6) AS korr, toDecimal64(0, 6) AS kval,
+            toDecimal64(0, 6) AS priezd, toDecimal64(0, 6) AS prodazhi, toDecimal64(0, 6) AS nekorr,
+            toDecimal64(0, 6) AS priedet,
+            concat(toString(campaign_id), '|', ifNull(campaign_name, '')) AS `номер кампании|название кампании`,
+            campaign_id AS CampaignId, ad_group_id AS AdGroupId, clicks,
+            toDecimal64(0, 6) AS ne_otvechaet, toDecimal64(0, 6) AS nedozvon, toDecimal64(0, 6) AS filtr,
+            toInt64(0) AS dohod_do_kredita, toInt64(0) AS dobro,
+            date AS Date, domain, CAST(NULL, 'Nullable(String)') AS `тип_заявки`
+        FROM ad_analytics.fact_direct_feed_funnel f
+        LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(f.account_login)
+        """
+    )
+    return count_rows(client, "ad_analytics.arp_fact")
+
+
+def create_light_aliases(client) -> dict[str, int]:
+    statements = {
+        "arc_fact": "SELECT * FROM ad_analytics.fact_criterion_spend",
+        "arf_fact": "SELECT * FROM ad_analytics.fact_direct_feed_funnel",
+        "dim_criterion": "SELECT DISTINCT criterion, criterion_type, anyLast(criterion_raw) AS criterion_raw FROM ad_analytics.fact_criterion_spend GROUP BY criterion, criterion_type",
+    }
+    out: dict[str, int] = {}
+    for table, sql in statements.items():
+        _replace_view(client, table, sql)
+        out[table] = count_rows(client, f"ad_analytics.{table}")
+    empty_views = {
+        "check_utm_fuck_direct": [
+            ("id", "Nullable(Int64)"), ("login", "Nullable(String)"), ("CampaignId", "Nullable(Int64)"),
+            ("CampaignName", "Nullable(String)"), ("group_id", "Nullable(Int64)"), ("group_name", "Nullable(String)"),
+            ("tracking_params", "Nullable(String)"), ("домен", "Nullable(String)"),
+            ("Расходы", "Nullable(Decimal(18, 6))"), ("специалист", "Nullable(String)"),
+            ("date", "Nullable(Date)"), ("utm_source_type", "Nullable(String)"), ("Месяц", "Nullable(String)"),
+        ],
+        "v_yandex_direct_minus_delta": [
+            ("date", "Nullable(Date)"), ("login", "Nullable(String)"), ("campaign_id", "Nullable(Int64)"),
+            ("minus_total", "Nullable(Int64)"), ("minus_total_prev", "Nullable(Int64)"), ("delta", "Nullable(Int64)"),
+            ("dynamics", "Nullable(String)"), ("campaign_name", "Nullable(String)"),
+            ("campaign_state", "Nullable(String)"), ("block", "Nullable(String)"),
+            ("minus_in_campaign", "Nullable(Int64)"), ("minus_in_groups", "Nullable(Int64)"),
+            ("minus_in_sets", "Nullable(Int64)"), ("has_minus", "Nullable(Bool)"),
+            ("check_ok", "Nullable(Bool)"), ("специалист", "Nullable(String)"),
+        ],
+        "yandex_direct_404_errors": [
+            ("id", "Nullable(Int64)"), ("№ счетчика", "Nullable(String)"),
+            ("counter_name", "Nullable(String)"), ("site", "Nullable(String)"),
+            ("специалист", "Nullable(String)"), ("url", "Nullable(String)"),
+            ("page_title", "Nullable(String)"), ("utm_campaign", "Nullable(String)"),
+            ("№ кампании", "Nullable(Int64)"), ("utm_content", "Nullable(String)"),
+            ("№ группы", "Nullable(Int64)"), ("detected_at", "Nullable(DateTime)"),
+            ("visit_date", "Nullable(Date)"), ("week_start", "Nullable(Date)"),
+        ],
+        "yandex_direct_cookie_analytics_website_pages": [
+            ("id", "Nullable(Int64)"), ("login_key", "Nullable(String)"), ("domain", "Nullable(String)"),
+            ("clicks", "Nullable(Decimal(18, 6))"), ("goal_all_forms", "Nullable(Decimal(18, 6))"),
+            ("goal_crm_order_created", "Nullable(Decimal(18, 6))"),
+            ("goal_crm_order_paid", "Nullable(Decimal(18, 6))"), ("final_url", "Nullable(String)"),
+            ("directologist", "Nullable(String)"), ("template", "Nullable(String)"),
+            ("salon", "Nullable(String)"), ("city", "Nullable(String)"), ("region", "Nullable(String)"),
+            ("site_type", "Nullable(String)"), ("loaded_at", "Nullable(DateTime)"),
+            ("page_type", "Nullable(String)"), ("banner_href", "Nullable(String)"),
+            ("date_from", "Nullable(Date)"), ("date_to", "Nullable(Date)"),
+            ("sum", "Nullable(Decimal(18, 6))"), ("agoalnum", "Nullable(String)"),
+            ("aconv", "Nullable(Decimal(18, 6))"), ("agoalcost", "Nullable(Decimal(18, 6))"),
+        ],
+        "yandex_direct_korrektirovki": [
+            ("id", "Nullable(Int64)"), ("login", "Nullable(String)"), ("campaign_id", "Nullable(Int64)"),
+            ("campaign_name", "Nullable(String)"), ("ad_group_id", "Nullable(Int64)"),
+            ("level", "Nullable(String)"), ("modifier_id", "Nullable(Int64)"), ("enabled", "Nullable(Bool)"),
+            ("modifier_type", "Nullable(String)"), ("modifier_name", "Nullable(String)"),
+            ("bid_percent", "Nullable(Decimal(18, 6))"), ("korrektirovki_bid", "Nullable(Decimal(18, 6))"),
+            ("audience_id", "Nullable(Int64)"), ("специалист", "Nullable(String)"),
+            ("campaign_status", "Nullable(String)"), ("loaded_at", "Nullable(DateTime)"),
+            ("status", "Nullable(String)"),
+        ],
+        "yandex_direct_return_commission_report": [
+            ("id", "Nullable(Int64)"), ("client_login", "Nullable(String)"), ("date", "Nullable(Date)"),
+            ("ad_network_type", "Nullable(String)"), ("slot", "Nullable(String)"),
+            ("campaign_type", "Nullable(String)"), ("ad_type", "Nullable(String)"),
+            ("cost", "Nullable(Decimal(18, 6))"), ("cost_with_vat", "Nullable(Decimal(18, 6))"),
+            ("manager_login", "Nullable(String)"), ("user_login", "Nullable(String)"),
+            ("rate", "Nullable(Decimal(18, 6))"), ("commission", "Nullable(Decimal(18, 6))"),
+        ],
+    }
+    for table, cols in empty_views.items():
+        select_sql = ", ".join(f"CAST(NULL, '{typ}') AS {q(name)}" for name, typ in cols)
+        _replace_view(client, table, f"SELECT {select_sql} WHERE 0")
+        out[table] = count_rows(client, f"ad_analytics.{table}")
+    return out
+
+
+def create_bi_views(client) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for table in PBI_SOURCE_OBJECTS:
+        view_name = f"bi_{table}"
+        _replace_view(client, view_name, f"SELECT * FROM ad_analytics.{q(table)}")
+        out[view_name] = count_rows(client, f"ad_analytics.{q(view_name)}")
+    return out
+
+
+def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
+    log.info("build_pbi_compat v6_ch")
+    client = get_client()
+    t0 = time.perf_counter()
+    drop_bi_views(client)
+    rows = {
+        "pbi_big_analytics_full": build_pbi_full(client),
+        "pixel_score": build_pixel_score(client),
+        "arp_fact": build_arp_fact(client),
+    }
+    rows.update(create_light_aliases(client))
+    rows.update(create_bi_views(client))
+    details = ", ".join(f"{k}={v:,}" for k, v in rows.items())
+    log.info("build_pbi_compat v6_ch завершён за %.1f сек: %s", time.perf_counter() - t0, details)
+    return {"rows": sum(rows.values()), "details": details}
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    print(run())
