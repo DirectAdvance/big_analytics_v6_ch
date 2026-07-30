@@ -53,31 +53,85 @@ def _key_pixel_expr(date_expr: str, domain_expr: str, source_expr: str, campaign
     )
 
 
-def _metric_expr(status_expr: str, reason_expr: str) -> str:
+def _crm_expr(source_type_expr: str) -> str:
+    return (
+        f"multiIf({source_type_expr} = 'crmf_excel', 'crmf', "
+        f"{source_type_expr} = 'genzes_excel', 'genzes', "
+        f"{source_type_expr} = 'marcar_crm_excel', 'marcar', "
+        f"{source_type_expr} = 'mauto_excel', 'mauto', "
+        f"{source_type_expr} = 'mega_crm_excel', 'mega', "
+        f"{source_type_expr} = 'plex_excel', 'plex', "
+        f"{source_type_expr} = 'redauto_excel', 'redauto', {source_type_expr})"
+    )
+
+
+def _category_match_expr(
+    categories: tuple[str, ...],
+    status_expr: str,
+    reason_expr: str,
+    source_type_expr: str,
+    salon_expr: str,
+) -> str:
+    cats_sql = ", ".join(f"'{category}'" for category in categories)
+    crm = _crm_expr(source_type_expr)
     status = f"ifNull({status_expr}, '')"
     reason = f"lower(ifNull({reason_expr}, ''))"
+    salon = f"lower(trim(ifNull({salon_expr}, '')))"
+    return f"""
+    (
+        ({crm}, {status}) IN (
+            SELECT crm, status FROM raw_data.crm_status_mapping
+            WHERE category IN ({cats_sql}) AND reason = '' AND salon = ''
+        )
+        OR ({crm}, {status}, {reason}) IN (
+            SELECT crm, status, lower(reason) FROM raw_data.crm_status_mapping
+            WHERE category IN ({cats_sql}) AND reason != '' AND salon = ''
+        )
+        OR ({crm}, {salon}, {status}) IN (
+            SELECT crm, lower(salon), status FROM raw_data.crm_status_mapping
+            WHERE category IN ({cats_sql}) AND reason = '' AND salon != ''
+        )
+        OR ({crm}, {salon}, {status}, {reason}) IN (
+            SELECT crm, lower(salon), status, lower(reason) FROM raw_data.crm_status_mapping
+            WHERE category IN ({cats_sql}) AND reason != '' AND salon != ''
+        )
+    )
+    """
+
+
+def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salon_expr: str) -> str:
+    status = f"ifNull({status_expr}, '')"
+    reason = f"lower(ifNull({reason_expr}, ''))"
+    correct = _category_match_expr(
+        ("correct", "qualified", "visit", "sale", "credit", "approved"),
+        status_expr,
+        reason_expr,
+        source_type_expr,
+        salon_expr,
+    )
+    qualified = _category_match_expr(
+        ("qualified", "visit", "sale", "credit", "approved"),
+        status_expr,
+        reason_expr,
+        source_type_expr,
+        salon_expr,
+    )
+    visit = _category_match_expr(
+        ("visit", "sale", "credit", "approved"),
+        status_expr,
+        reason_expr,
+        source_type_expr,
+        salon_expr,
+    )
+    sale = _category_match_expr(("sale",), status_expr, reason_expr, source_type_expr, salon_expr)
+    incorrect = _category_match_expr(("incorrect",), status_expr, reason_expr, source_type_expr, salon_expr)
     return f"""
     toDecimal64(if({status} != '', 1, 0), 6) AS kol_vo_zayavok,
-    toDecimal64(if({status} IN (
-        SELECT status FROM raw_data.crm_status_mapping
-        WHERE category IN ('correct', 'qualified', 'visit', 'sale', 'credit', 'approved')
-    ), 1, 0), 6) AS korr,
-    toDecimal64(if({status} IN (
-        SELECT status FROM raw_data.crm_status_mapping
-        WHERE category IN ('qualified', 'visit', 'sale', 'credit', 'approved')
-    ), 1, 0), 6) AS kval,
-    toDecimal64(if({status} IN (
-        SELECT status FROM raw_data.crm_status_mapping
-        WHERE category IN ('visit', 'sale', 'credit', 'approved')
-    ), 1, 0), 6) AS priezd,
-    toDecimal64(if({status} IN (
-        SELECT status FROM raw_data.crm_status_mapping
-        WHERE category = 'sale'
-    ), 1, 0), 6) AS prodazhi,
-    toDecimal64(if({status} IN (
-        SELECT status FROM raw_data.crm_status_mapping
-        WHERE category = 'incorrect'
-    ), 1, 0), 6) AS nekorr,
+    toDecimal64(if({correct}, 1, 0), 6) AS korr,
+    toDecimal64(if({qualified}, 1, 0), 6) AS kval,
+    toDecimal64(if({visit}, 1, 0), 6) AS priezd,
+    toDecimal64(if({sale}, 1, 0), 6) AS prodazhi,
+    toDecimal64(if({incorrect}, 1, 0), 6) AS nekorr,
     toDecimal64(if({status} IN ('Не отвечает', 'Новая: Не отвечает'), 1, 0), 6) AS ne_otvechaet,
     toDecimal64(if({status} = 'Фильтр', 1, 0), 6) AS filtr,
     toDecimal64(if({status} = 'Недозвон', 1, 0), 6) AS nedozvon,
@@ -183,6 +237,13 @@ def _ag_parts_expr(prefix: str = "") -> str:
 """
 
 
+def _gs_pick_expr(field: str) -> str:
+    return (
+        f"if(la.domain_key != '' AND la.domain_key != lower(trim(ifNull(gs.domain, ''))), "
+        f"coalesce(gs_dir.{field}, gs.{field}), coalesce(gs.{field}, gs_dir.{field}))"
+    )
+
+
 def _build_direct_sql(target_table: str, raw_date_filter: str = "") -> str:
     return f"""
 CREATE TABLE ad_analytics.{target_table}
@@ -220,6 +281,51 @@ yd AS
       {raw_date_filter}
     GROUP BY key3
 ),
+gs_best AS
+(
+    SELECT *
+    FROM
+    (
+        SELECT
+            ud.login_key AS match_login_key,
+            ud.date_val AS match_date,
+            gs.domain,
+            gs.status,
+            gs.directologist,
+            gs.site_type,
+            gs.template,
+            gs.salon,
+            gs.city,
+            gs.region,
+            gs.direction,
+            gs.project_manager,
+            gs.client_id,
+            gs.sales_manager,
+            gs.login_key,
+            row_number() OVER (
+                PARTITION BY ud.login_key, ud.date_val
+                ORDER BY
+                    multiIf(
+                        ifNull(gs.login_key, '') = '', 99,
+                        ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2,
+                        (ifNull(trim(gs.launch_date), '') = '' OR ud.date_val >= toDate(parseDateTimeBestEffortOrNull(gs.launch_date)))
+                            AND (ifNull(trim(gs.block_date), '') = '' OR ud.date_val < toDate(parseDateTimeBestEffortOrNull(gs.block_date))),
+                        1,
+                        3
+                    ) ASC,
+                    ifNull(toDate(parseDateTimeBestEffortOrNull(gs.launch_date)), toDate('1900-01-01')) DESC,
+                    ifNull(gs.domain, '') ASC
+            ) AS rn
+        FROM
+        (
+            SELECT DISTINCT account_login AS login_key, `Date` AS date_val
+            FROM yd
+        ) ud
+        LEFT JOIN raw_data.gsheet_sites gs
+          ON lower(trim(ifNull(gs.login_key, ''))) = ud.login_key
+    )
+    WHERE rn = 1
+),
 lead_scored AS
 (
     SELECT
@@ -227,7 +333,7 @@ lead_scored AS
         lower(trim(ifNull(domain, ''))) AS domain_key,
         domain AS domain,
         fid AS fid,
-        {_metric_expr("status", "reason")}
+        {_metric_expr("status", "reason", "source_type", "salon")}
     FROM ad_analytics.raw_leads
     WHERE ifNull(key3, '') != ''
       AND NOT (ifNull(utm_source, '') = '' OR (utm_source = 'seo' AND utm_medium = 'organic'))
@@ -270,7 +376,7 @@ SELECT
     toDecimal64(yd.`Impressions`, 6) AS `Impressions`,
     toDecimal64(yd.`Clicks`, 6) AS `Clicks`,
     toDecimal64(yd.total_cost, 6) AS total_cost,
-    coalesce(nullIf(la.domain, ''), gs.domain) AS domain,
+    coalesce(nullIf(la.domain, ''), {_gs_pick_expr("domain")}) AS domain,
     yd.`RlAdjustmentId` AS `RlAdjustmentId`,
     toString(yd.`RlAdjustmentId`) AS `RlAdjustmentId_total`,
     yd.campaign_code AS campaign_code,
@@ -279,7 +385,7 @@ SELECT
     yd.site_quiz AS site_quiz,
     yd.adgroup_code AS adgroup_code,
     yd.account_login AS account_login,
-    coalesce(nullIf(yd.manager_login, ''), gs.directologist) AS manager_login,
+    coalesce(nullIf(yd.manager_login, ''), {_gs_pick_expr("directologist")}) AS manager_login,
     {_ag_parts_expr("yd.")},
     '' AS `марки авто`,
     crm.crm_name AS `Название crm`,
@@ -296,26 +402,26 @@ SELECT
     ifNull(la.priedet, toDecimal64(0, 6)) AS priedet,
     ifNull(la.dohod_do_kredita, 0) AS dohod_do_kredita,
     ifNull(la.dobro, 0) AS dobro,
-    gs.status AS `статус`,
-    gs.directologist AS `специалист`,
-    gs.site_type AS `тип_сайта`,
-    gs.template AS `шаблон`,
-    gs.salon AS `салон`,
-    gs.city AS `город`,
-    gs.region AS `регион`,
-    gs.direction AS direction,
+    {_gs_pick_expr("status")} AS `статус`,
+    {_gs_pick_expr("directologist")} AS `специалист`,
+    {_gs_pick_expr("site_type")} AS `тип_сайта`,
+    {_gs_pick_expr("template")} AS `шаблон`,
+    {_gs_pick_expr("salon")} AS `салон`,
+    {_gs_pick_expr("city")} AS `город`,
+    {_gs_pick_expr("region")} AS `регион`,
+    {_gs_pick_expr("direction")} AS direction,
     if(ifNull(yd.campaign_code, '') = '', 'неверный кодер', NULL) AS `неверный_кодер_new`,
     la.fid AS fid,
-    gs.project_manager AS `проджект`,
-    gs.client_id AS `id_салона`,
-    gs.sales_manager AS `менеджер`,
+    {_gs_pick_expr("project_manager")} AS `проджект`,
+    {_gs_pick_expr("client_id")} AS `id_салона`,
+    {_gs_pick_expr("sales_manager")} AS `менеджер`,
     'Контекст' AS `источник`,
     if(startsWith(ifNull(yd.tp, ''), 'tp8') OR startsWith(ifNull(yd.tp, ''), 'tp9') OR startsWith(ifNull(yd.tp, ''), 'tp10'), 'Комплекс', 'Контекст') AS `направление`,
     concat(toString(yd.`CampaignId`), '|', ifNull(yd.`CampaignName`, '')) AS `номер кампании | название кампании`,
     concat(toString(yd.`AdGroupId`), '|', ifNull(yd.`AdGroupName`, '')) AS `номер группы | название группы`,
     CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
     CAST(NULL, 'Nullable(Int32)') AS `План приезда`,
-    concat(ifNull(yd.account_login, ''), '|', ifNull(coalesce(nullIf(la.domain, ''), gs.domain), '')) AS `аккаунт|сайт`,
+    concat(ifNull(yd.account_login, ''), '|', ifNull(coalesce(nullIf(la.domain, ''), {_gs_pick_expr("domain")}), '')) AS `аккаунт|сайт`,
     CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
     CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
     'Яндекс' AS `поставщик`,
@@ -325,10 +431,11 @@ SELECT
     cs.payment_model AS payment_model
 FROM yd
 LEFT JOIN la ON la.key3 = yd.key3
-LEFT JOIN gs_account gs ON gs.login_key = yd.account_login
-LEFT JOIN crm_by_domain crm ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(la.domain, ''), gs.domain), '')))
+LEFT JOIN gs_best gs ON gs.match_login_key = yd.account_login AND gs.match_date = yd.`Date`
+LEFT JOIN gs_domain gs_dir ON gs_dir.domain_key = la.domain_key
+LEFT JOIN crm_by_domain crm ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(la.domain, ''), {_gs_pick_expr("domain")}), '')))
 LEFT JOIN ad_analytics.campaign_status_v cs ON cs.`CampaignId` = yd.`CampaignId`
-WHERE ifNull(gs.direction, 'Авто') = 'Авто'
+WHERE ifNull({_gs_pick_expr("direction")}, 'Авто') = 'Авто'
 """
 
 
@@ -353,7 +460,7 @@ lead_scored AS
     SELECT
         l.*,
         lower(trim(ifNull(l.domain, ''))) AS domain_key,
-        {_metric_expr("l.status", "l.reason")}
+        {_metric_expr("l.status", "l.reason", "l.source_type", "l.salon")}
     FROM ad_analytics.raw_leads l
     WHERE {source_filter}
       {lead_date_filter}

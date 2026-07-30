@@ -1,6 +1,45 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-07-30 (Codex: v6_ch полный ClickHouse-прогон + PBI-совместимость — DONE). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-07-30 (Codex: v6_ch golden-сверка, Rule1/CRM/pixel fixes — PARTIAL). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-07-30: v6_ch golden-сверка после полного переноса — PARTIAL (Codex):**
+- Перед продолжением сделан checkpoint-коммит `2c6c928 feat(v6-ch): перевести полный pipeline на ClickHouse`
+  в nested repo `work/big_analytics_v6_ch`; push не выполнялся.
+- Найден ложноположительный PASS старой CH-верификации: до исправлений v6_ch проходил
+  `data_check/verify_big_analytics.py --full`, но golden Кудерко был сильно ниже v5
+  (`total_cost=9 790 787.31`, `prodazhi=23`, `rows=36 739`) и pixel attribution был фактически
+  copy-only без дробных строк.
+- Исправлено в коде:
+  `corrections.py` теперь переносит v5 Rule1 Кудерко (`Date < 2026-04-10`, список логинов,
+  `98 475` строк в последнем прогоне);
+  `step3_build_sources/step3.py` использует CRM-aware `raw_data.crm_status_mapping`
+  по `(crm,status/reason/salon)` вместо глобального `status IN (...)`;
+  `step6_build_full/step6.py` считает calls-воронку через salon из `gs_domain`;
+  `step11_pixel_score/step11.py` снова строит дробный `пиксель_атрибуц`, сохраняет прямой
+  `_source_table='pixel'` в `big_analytics_full` и делает gsheet fallback для site/spec полей.
+- Проверочный downstream-прогон после фиксов:
+  `/usr/bin/time -p .venv/bin/python3 pipeline.py --from-step=12`,
+  `run_id=37f91762ff2f`, `real 450.55`, PASS.
+  Итоговые объёмы: `big_analytics_full=5 125 707`, `big_analytics_pixel_score=7 016`,
+  `big_analytics_full_arrival=70 252`, `big_analytics_unified=5 195 959`,
+  `fact_big_analytics=5 195 959`, `pbi_big_analytics_full=5 195 959`.
+- Дробная pixel attribution восстановлена: в `fact_big_analytics`
+  `_source_table='пиксель_атрибуц'` имеет fractional rows
+  `kol_vo_zayavok=5 279`, `korr=5 133`, `kval=5 077`, `priezd=4 900`, `prodazhi=1 260`;
+  conservation `big_analytics_sources(pixel)` → `big_analytics_pixel_score`:
+  `bad_domains=0` при допуске `0.1`, продажи `1312.000000` → `1311.999709`.
+- Текущий golden Кудерко в v6_ch `fact_big_analytics`:
+  `total_cost=25 059 734.45`, `kol_vo_zayavok=6 474`, `korr=4 313`,
+  `kval=1 133`, `priezd=1 120`, `prodazhi=98`, `rows=99 734`.
+  v5 `fact_big_analytics` на Victory сейчас: `total_cost=29 826 181.26`,
+  `prodazhi=153.721653`, `rows=108 800`, включая исторический pixel-слой
+  (`пиксель=1 810 300.00`, `пиксель_атрибуц=2 593 083.26`).
+- Оставшийся exact golden-разрыв считается блокером входных/исторических данных, не только кода:
+  пример `bucars-stav.ru` — в CH `raw_yandex` по `porg-kkhtgf2u` есть `808 529.01`
+  за `2026-01-01..2026-01-27`, а v5 `fact_big_analytics` по этому домену содержит
+  `direct=1 155 041.44`, `пиксель=404 500.00`, `пиксель_атрибуц=404 500.00`.
+  Дополнительно текущие v5 `big_analytics_full/unified` пустые, поэтому построчная сверка
+  факта требует выбранного эталонного snapshot, а не live intermediate tables.
 
 **2026-07-30: v6_ch полный ClickHouse pipeline + PBI-совместимость — DONE (Codex):**
 - Решение Семёна соблюдено: CRM-данные в ClickHouse не перезаливались, pipeline работает только с тем,

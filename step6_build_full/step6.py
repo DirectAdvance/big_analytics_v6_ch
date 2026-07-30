@@ -67,7 +67,7 @@ def _create_calls_shadow(client, shadow: str) -> None:
 
 
 def _calls_select(lo: str, hi: str) -> str:
-    metrics = _metric_expr("c.status", "c.reason").replace(
+    metrics = _metric_expr("c.status", "c.reason", "c.source_type", "gs.salon").replace(
         "toDecimal64(if(ifNull(c.status, '') != '', 1, 0), 6) AS kol_vo_zayavok",
         "toDecimal64(0, 6) AS kol_vo_zayavok",
     )
