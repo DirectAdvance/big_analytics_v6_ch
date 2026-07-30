@@ -1,6 +1,17 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-07-30 (oleg_programmer: v6_ch Этап 1 DDL — DONE). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-07-30 (oleg_programmer: v6_ch Этап 1 DDL фикс по director — DONE). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-07-30: v6_ch Этап 1 DDL — фикс 3 находок director (Critical+Important+Minor) — DONE:**
+- Critical: `Clicks`/`Impressions` Int32 → `Decimal(18,6)` в `fact_big_analytics`+`fact_ml_korrektirovki`
+  (v5-источник NUMERIC, дробится по CDR-долям в step3.py, int-каст ломал бы ту же атрибуцию).
+- Important: добавлена `шаблон_марка` в `fact_criterion_spend` (35→36 кол.), `шаблон`+`шаблон_марка`
+  в `fact_criterion_zayavki` (22→24 кол.) — сверено с `criterion_spend/build_criterion_*.py` DDL.
+- Minor: `IF NOT EXISTS` во всех 19 CREATE-стейтментах — идемпотентность подтверждена повторным прогоном.
+- 4 таблицы DROP+пересозданы на живом `ad_analytics` (были пустые, 0 строк) — 15 остальных объектов
+  не тронуты (`system.tables` до/после = 19). DESCRIBE подтвердил все 3 фикса.
+- Отчёт: `.claude/sdd/v6-etap1-ddl-report.md` (секция "2026-07-30 — ФИКС по 3 находкам director").
+- Следующий шаг: отдать director на повторную проверку.
 
 **2026-07-30: v6_ch Этап 1 (ClickHouse DDL звёздной схемы) — DONE (см. PLAN.md §4 Этап 1):**
 - Создан и применён к `ad_analytics` (ClickHouse Yandex Cloud) `migrations/01_init_schema.sql` —

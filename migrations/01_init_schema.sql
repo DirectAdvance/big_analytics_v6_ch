@@ -75,7 +75,7 @@
 
 -- ─── Dim_Date ────────────────────────────────────────────────────────────
 -- PK "Date". ~200 строк/год — без партиционирования.
-CREATE TABLE ad_analytics."Dim_Date"
+CREATE TABLE IF NOT EXISTS ad_analytics."Dim_Date"
 (
     "Date"          Date,
     week_start      Date,
@@ -92,7 +92,7 @@ ORDER BY ("Date");
 -- PK CampaignId. ⚠️ CampaignId может быть ОТРИЦАТЕЛЬНЫМ (суррогатный ключ
 -- для площадок без CampaignId — hashtext(CampaignName), см. build_star.py
 -- SURROGATE-CAMPAIGN-FIX) → Int64 (знаковый), НЕ UInt64.
-CREATE TABLE ad_analytics."Dim_Campaign"
+CREATE TABLE IF NOT EXISTS ad_analytics."Dim_Campaign"
 (
     "CampaignId"                            Int64,
     "CampaignName"                          Nullable(String),
@@ -109,7 +109,7 @@ ORDER BY ("CampaignId");
 
 -- ─── Dim_AdGroup ─────────────────────────────────────────────────────────
 -- PK AdGroupId. parent_CampaignId — та же знаковая семантика (surrogate).
-CREATE TABLE ad_analytics."Dim_AdGroup"
+CREATE TABLE IF NOT EXISTS ad_analytics."Dim_AdGroup"
 (
     "AdGroupId"                         Int64,
     "AdGroupName"                       Nullable(String),
@@ -135,7 +135,7 @@ ORDER BY ("AdGroupId");
 -- (один domain несёт разные значения в разных строках — mode()-свёртка
 -- искажала срезы, см. build_star.py::build_dim_site). Не добавлять сюда
 -- атрибуты без явного решения — регрессия golden-baseline уже случалась.
-CREATE TABLE ad_analytics."Dim_Site"
+CREATE TABLE IF NOT EXISTS ad_analytics."Dim_Site"
 (
     domain String
 )
@@ -145,7 +145,7 @@ ORDER BY (domain);
 -- ─── Dim_Adjustment ──────────────────────────────────────────────────────
 -- PK RlAdjustmentId. RlAdjustmentId_total строго функц. зависит от ключа
 -- (1:1, см. build_star.py::build_dim_adjustment) — вынесено с факта сюда.
-CREATE TABLE ad_analytics."Dim_Adjustment"
+CREATE TABLE IF NOT EXISTS ad_analytics."Dim_Adjustment"
 (
     "RlAdjustmentId"        Int64,
     "RlAdjustmentId_total"  Nullable(String)
@@ -157,7 +157,7 @@ ORDER BY ("RlAdjustmentId");
 -- PK id_location. Измерение РЕГИОНА ПОКАЗА (не салона) — обслуживает
 -- fact_region_spend/fact_region_zayavki. distance_km_agreg — верхняя
 -- граница бакета расстояния (100/200/.../1900) или NULL.
-CREATE TABLE ad_analytics."Dim_Location"
+CREATE TABLE IF NOT EXISTS ad_analytics."Dim_Location"
 (
     id_location         Int64,
     location            String,
@@ -187,7 +187,7 @@ ORDER BY (id_location);
 -- `_version` (DateTime, дефолт now()) — это РЕШЕНИЕ ЭТОГО DDL (не из
 -- источника v5), нужна чисто технически для движка. При переносе ETL
 -- (Этап 3) писать в неё `now()` на каждый апдейт строки.
-CREATE TABLE ad_analytics.campaign_status
+CREATE TABLE IF NOT EXISTS ad_analytics.campaign_status
 (
     "CampaignId"        Int64,
     account_login       Nullable(String),
@@ -203,7 +203,7 @@ ENGINE = ReplacingMergeTree(_version)
 ORDER BY ("CampaignId");
 
 -- Читать ТОЛЬКО через эту VIEW (FINAL гасит дубли между мёржами).
-CREATE VIEW ad_analytics.campaign_status_v AS
+CREATE VIEW IF NOT EXISTS ad_analytics.campaign_status_v AS
 SELECT
     "CampaignId",
     account_login,
@@ -230,7 +230,7 @@ FINAL;
 -- PARTITION BY месяц (date >= 2026-01-01, инвариант CANON.md).
 -- ORDER BY (date, row_hash): date первым — ARP читается по датным окнам
 -- (verify/агрегаты по месяцам), row_hash — дедуп-ключ ReplacingMergeTree.
-CREATE TABLE ad_analytics.analytics_report_placement
+CREATE TABLE IF NOT EXISTS ad_analytics.analytics_report_placement
 (
     row_hash                        String,
     date                             Date,
@@ -288,7 +288,7 @@ ORDER BY (date, row_hash);
 -- ANALYTICS_REPORT_PLACEMENT_v, НЕ путать с public.arp_fact из v5 (тот —
 -- проекция с переименованными колонками под PBI-партицию; лёгкая
 -- проекция под PBI строится отдельно на Этапе 4/5, не здесь).
-CREATE VIEW ad_analytics.analytics_report_placement_v AS
+CREATE VIEW IF NOT EXISTS ad_analytics.analytics_report_placement_v AS
 SELECT *
 FROM ad_analytics.analytics_report_placement
 FINAL;
@@ -315,7 +315,7 @@ FINAL;
 -- месяцам) фильтруют/группируют по дате; CampaignId вторым — точечные
 -- джойны с Dim_Campaign и посуточные разрезы по кампании; domain третьим —
 -- разрез по площадке. PARTITION BY месяц — ~300-400k строк/месяц.
-CREATE TABLE ad_analytics.fact_big_analytics
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_big_analytics
 (
     "CampaignId"                Nullable(Int64),
     "AdGroupId"                  Nullable(Int64),
@@ -331,8 +331,12 @@ CREATE TABLE ad_analytics.fact_big_analytics
     kval                         Decimal(18, 6),
     priezd                       Decimal(18, 6),
     prodazhi                     Decimal(18, 6),
-    "Clicks"                     Int32,
-    "Impressions"                Int32,
+    -- ⚠️ FIX 2026-07-30 (director review): "Clicks"/"Impressions" — v5-источник NUMERIC
+    -- (не int), дробятся по CDR-долям в step3.py (`"Clicks" * (kol_vo_zayavok::NUMERIC /
+    -- total_kol)`, маркер CDR_CLICKS_SPLIT_FIX_2026-07-28) → Decimal(18,6), НЕ Int32
+    -- (int-каст здесь ломает ту же атрибуцию, что и по воронке — правило 3 задания).
+    "Clicks"                     Decimal(18, 6),
+    "Impressions"                Decimal(18, 6),
     nekorr                       Int32,
     ne_otvechaet                 Int32,
     nedozvon                     Int32,
@@ -378,7 +382,7 @@ SETTINGS allow_nullable_key = 1;
 -- ─── fact_region_spend ────────────────────────────────────────────────────
 -- Расход по гео-регионам показа. Источник — ARP (BIGINT-счётчики) → воронка
 -- Int64 (не пиксель-атрибутирована, см. пояснение в шапке файла).
-CREATE TABLE ad_analytics.fact_region_spend
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_region_spend
 (
     row_hash             String,
     date                 Date,
@@ -426,7 +430,7 @@ SETTINGS allow_nullable_key = 1;
 -- ─── fact_adformat_spend ──────────────────────────────────────────────────
 -- Расход по формату объявления. Та же грань, что fact_region_spend, но ось
 -- ad_format вместо id_location.
-CREATE TABLE ad_analytics.fact_adformat_spend
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_adformat_spend
 (
     row_hash             String,
     date                 Date,
@@ -471,7 +475,7 @@ SETTINGS allow_nullable_key = 1;
 -- ─── fact_criterion_spend ─────────────────────────────────────────────────
 -- Расход по критерию/ключевику (autotargeting/retargeting/interests/keyword,
 -- скоуп ниши «Авто»).
-CREATE TABLE ad_analytics.fact_criterion_spend
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_criterion_spend
 (
     row_hash             String,
     date                 Date,
@@ -498,6 +502,10 @@ CREATE TABLE ad_analytics.fact_criterion_spend
     "регион"             LowCardinality(Nullable(String)),
     "салон"              LowCardinality(Nullable(String)),
     "шаблон"             LowCardinality(Nullable(String)),
+    -- ⚠️ FIX 2026-07-30 (director review): недостающая колонка — источник
+    -- criterion_spend/build_criterion_spend.py:121 (TEXT, обогащение из
+    -- local_gsheet_sites рядом с "шаблон"). PG=36/CH=35 до фикса.
+    "шаблон_марка"       LowCardinality(Nullable(String)),
     "тип_сайта"          LowCardinality(Nullable(String)),
     "статус"             LowCardinality(Nullable(String)),
     "направление"        LowCardinality(Nullable(String)),
@@ -522,7 +530,7 @@ SETTINGS allow_nullable_key = 1;
 -- ~154 835" — целое число, проверено по исходнику). Дата = created_date
 -- (день заявки), НЕ день показа. Связи в PBI: только campaign_id/created_date
 -- (нет ad_group/domain — этих осей у лидов нет, иначе задвоение).
-CREATE TABLE ad_analytics.fact_region_zayavki
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_region_zayavki
 (
     row_hash             String,
     created_date         Date,
@@ -558,7 +566,7 @@ SETTINGS allow_nullable_key = 1;
 -- ─── fact_criterion_zayavki ────────────────────────────────────────────────
 -- Воронка ПО ЗАЯВКАМ в разрезе критерия/ключа (близнец fact_criterion_spend).
 -- Та же логика типов, что fact_region_zayavki (CRM-целочисленная воронка).
-CREATE TABLE ad_analytics.fact_criterion_zayavki
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_criterion_zayavki
 (
     row_hash             String,
     created_date         Date,
@@ -569,6 +577,11 @@ CREATE TABLE ad_analytics.fact_criterion_zayavki
     criterion_raw         Nullable(String),
     "салон"              LowCardinality(Nullable(String)),
     domain_id            Nullable(Int64),
+    -- ⚠️ FIX 2026-07-30 (director review): 2 недостающие колонки — источник
+    -- criterion_spend/build_criterion_zayavki.py:121 (TEXT, обогащение по
+    -- campaign_id из fact_criterion_spend, 1:1). PG=24/CH=22 до фикса.
+    "шаблон"             LowCardinality(Nullable(String)),
+    "шаблон_марка"       LowCardinality(Nullable(String)),
     kol_vo_zayavok        Int64,
     korr                 Int64,
     kval                 Int64,
@@ -595,7 +608,7 @@ SETTINGS allow_nullable_key = 1;
 -- FEED_ADGROUP_NULLCOL_2026-06-29). Источник заявок — direct_feed_lead_attribution
 -- (сборка через utm_content/fid, целочисленные CRM-категории, не пиксель) →
 -- Int64. dk2 — суррогатный текстовый ключ грани (аналог row_hash).
-CREATE TABLE ad_analytics.fact_direct_feed_funnel
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_direct_feed_funnel
 (
     dk2                          String,
     date                         Date,
@@ -647,7 +660,7 @@ SETTINGS allow_nullable_key = 1;
 -- → Int64. shows/clicks/spent несёт ТОЛЬКО ось 'По дате заявки' (на визит-оси
 -- = 0, дедуп — SUM по всей таблице не удваивается, см. PBI_TABLES.md).
 -- golden Кудерко НЕ затрагивается (VK вне GOLDEN_SOURCES).
-CREATE TABLE ad_analytics.fact_vk_ads
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_vk_ads
 (
     date            Date,
     account_id      Nullable(Int64),
@@ -689,7 +702,7 @@ SETTINGS allow_nullable_key = 1;
 -- либо построить fact_ml_korrektirovki на пустом множестве (as в v5-guard
 -- "korrektirovki ещё не запускался — создаём пустую таблицу").
 -- ORDER BY идентичен fact_big_analytics (та же грань + фильтр по аудитории).
-CREATE TABLE ad_analytics.fact_ml_korrektirovki
+CREATE TABLE IF NOT EXISTS ad_analytics.fact_ml_korrektirovki
 (
     "CampaignId"                Nullable(Int64),
     "AdGroupId"                  Nullable(Int64),
@@ -704,8 +717,9 @@ CREATE TABLE ad_analytics.fact_ml_korrektirovki
     kval                         Decimal(18, 6),
     priezd                       Decimal(18, 6),
     prodazhi                     Decimal(18, 6),
-    "Clicks"                     Int32,
-    "Impressions"                Int32,
+    -- ⚠️ FIX 2026-07-30 (director review) — см. идентичный комментарий в fact_big_analytics.
+    "Clicks"                     Decimal(18, 6),
+    "Impressions"                Decimal(18, 6),
     nekorr                       Int32,
     ne_otvechaet                 Int32,
     nedozvon                     Int32,
