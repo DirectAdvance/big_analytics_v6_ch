@@ -174,7 +174,54 @@ def create_light_aliases(client) -> dict[str, int]:
     statements = {
         "arc_fact": "SELECT * FROM ad_analytics.fact_criterion_spend",
         "arf_fact": "SELECT * FROM ad_analytics.fact_direct_feed_funnel",
-        "dim_criterion": "SELECT DISTINCT criterion, criterion_type, anyLast(criterion_raw) AS criterion_raw FROM ad_analytics.fact_criterion_spend GROUP BY criterion, criterion_type",
+        "dim_criterion": """
+            SELECT
+                criterion,
+                anyLast(criterion_type) AS criterion_type,
+                anyLast(criterion_raw) AS criterion_raw
+            FROM
+            (
+                SELECT criterion, criterion_type, criterion_raw, 1 AS priority
+                FROM ad_analytics.fact_criterion_spend
+                WHERE notEmpty(criterion)
+                UNION ALL
+                SELECT criterion, criterion_type, criterion_raw, 2 AS priority
+                FROM ad_analytics.fact_criterion_zayavki
+                WHERE ifNull(criterion, '') != ''
+            )
+            GROUP BY criterion
+        """,
+        "yandex_direct_korrektirovki": """
+            WITH gs_login AS
+            (
+                SELECT
+                    lower(ifNull(login_key, '')) AS login_key,
+                    anyLast(directologist) AS directologist
+                FROM raw_data.gsheet_sites
+                WHERE ifNull(login_key, '') != ''
+                GROUP BY login_key
+            )
+            SELECT
+                modifier_id AS id,
+                account_login AS ulogin,
+                campaign_id,
+                campaign_name,
+                ad_group_id,
+                level,
+                modifier_id,
+                enabled,
+                modifier_type,
+                modifier_name,
+                bid_percent,
+                korrektirovki_bid,
+                audience_id,
+                gs.directologist AS `специалист`,
+                k.campaign_status,
+                CAST(NULL, 'Nullable(String)') AS status,
+                parseDateTimeBestEffortOrNull(synced_at) AS loaded_at
+            FROM raw_data.yandex_direct_korrektirovki k
+            LEFT JOIN gs_login gs ON gs.login_key = lower(ifNull(k.account_login, ''))
+        """,
     }
     out: dict[str, int] = {}
     for table, sql in statements.items():
@@ -218,16 +265,6 @@ def create_light_aliases(client) -> dict[str, int]:
             ("date_from", "Nullable(Date)"), ("date_to", "Nullable(Date)"),
             ("sum", "Nullable(Decimal(18, 6))"), ("agoalnum", "Nullable(String)"),
             ("aconv", "Nullable(Decimal(18, 6))"), ("agoalcost", "Nullable(Decimal(18, 6))"),
-        ],
-        "yandex_direct_korrektirovki": [
-            ("id", "Nullable(Int64)"), ("login", "Nullable(String)"), ("campaign_id", "Nullable(Int64)"),
-            ("campaign_name", "Nullable(String)"), ("ad_group_id", "Nullable(Int64)"),
-            ("level", "Nullable(String)"), ("modifier_id", "Nullable(Int64)"), ("enabled", "Nullable(Bool)"),
-            ("modifier_type", "Nullable(String)"), ("modifier_name", "Nullable(String)"),
-            ("bid_percent", "Nullable(Decimal(18, 6))"), ("korrektirovki_bid", "Nullable(Decimal(18, 6))"),
-            ("audience_id", "Nullable(Int64)"), ("специалист", "Nullable(String)"),
-            ("campaign_status", "Nullable(String)"), ("loaded_at", "Nullable(DateTime)"),
-            ("status", "Nullable(String)"),
         ],
         "yandex_direct_return_commission_report": [
             ("id", "Nullable(Int64)"), ("client_login", "Nullable(String)"), ("date", "Nullable(Date)"),

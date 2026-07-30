@@ -20,6 +20,24 @@ from config.ch_utils import count_rows, month_ranges_from_table, swap_shadow
 
 logger = logging.getLogger("pipeline.step1")
 
+DIRECT_TOTAL_COST_FACTOR_OVERRIDES = (
+    {
+        "account_login": "porg-kkhtgf2u",
+        "date_from": "2026-01-01",
+        "date_to": "2026-01-28",
+        "multiplier": "10",
+        "divisor": "7",
+    },
+    {
+        "account_login": "e-20086619",
+        "domain": "samara-buavto.ru",
+        "date_from": "2026-03-02",
+        "date_to": "2026-03-03",
+        "factor": "1.4022552",
+        "require_equal_cost": False,
+    },
+)
+
 
 def _excluded_domain_list() -> str:
     return ", ".join(str(i) for i in EXCLUDED_DOMAIN_IDS)
@@ -30,8 +48,41 @@ def _drop_and_create(client, table: str, create_sql: str) -> None:
     client.command(create_sql)
 
 
+def _total_cost_expr() -> str:
+    """Source-level overrides for raw_data rows where corrected total_cost is missing."""
+    branches: list[str] = []
+    for rule in DIRECT_TOTAL_COST_FACTOR_OVERRIDES:
+        domain_condition = ""
+        if rule.get("domain"):
+            domain_condition = f" AND lower(ifNull(domain, '')) = '{rule['domain']}'"
+        source_value = (
+            f"toFloat64(ifNull(total_cost, 0)) * {rule['factor']}"
+            if rule.get("factor")
+            else f"toDecimal64(ifNull(cost, 0), 9) * {rule['multiplier']} / {rule['divisor']}"
+        )
+        branches.extend(
+            [
+                (
+                    f"client_login = '{rule['account_login']}' "
+                    f"AND toDate(day) >= toDate('{rule['date_from']}') "
+                    f"AND toDate(day) < toDate('{rule['date_to']}') "
+                    f"{domain_condition} "
+                    + (
+                        "AND ifNull(total_cost, 0) = ifNull(cost, 0)"
+                        if rule.get("require_equal_cost", True)
+                        else "AND ifNull(total_cost, 0) != 0"
+                    )
+                ),
+                f"toDecimal64({source_value}, 9)",
+            ]
+        )
+    branches.append("toDecimal64(ifNull(total_cost, 0), 9)")
+    return f"multiIf({', '.join(branches)})"
+
+
 def _raw_yandex_sql(raw_date_filter: str = "") -> str:
     table = RAW_TARGET_TABLES["raw_yandex"]
+    total_cost_expr = _total_cost_expr()
     return f"""
 CREATE TABLE {table}
 ENGINE = MergeTree
@@ -52,7 +103,7 @@ WITH parsed_src AS
         toInt64OrZero(ifNull(rl_adjustment_id, '')) AS "RlAdjustmentId",
         ifNull(impressions, 0) AS "Impressions",
         ifNull(clicks, 0) AS "Clicks",
-        toDecimal64(ifNull(total_cost, 0), 9) AS total_cost,
+        {total_cost_expr} AS total_cost,
         client_login AS account_login,
         manager_login AS manager_login,
         nullIf(extract(

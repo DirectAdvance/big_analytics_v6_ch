@@ -41,6 +41,8 @@ STEPS = [
     (141, "region_spend.build_region_spend", "region_spend"),
     (142, "adformat_spend.build_adformat_spend", "adformat_spend"),
     (143, "criterion_spend.build_criterion_spend", "criterion_spend"),
+    (1431, "region_spend.build_region_zayavki", "region_zayavki"),
+    (1432, "criterion_spend.build_criterion_zayavki", "criterion_zayavki"),
     (144, "direct_feed_funnel.build", "direct_feed_funnel"),
     (145, "star_refactor.build_star", "build_star"),
     (146, "star_refactor.build_pbi_compat", "build_pbi_compat"),

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_utils import column_names, count_rows, month_ranges_from_table, q, swap_shadow
+from corrections import specialist_correction_expr
 from step3_build_sources.step3 import SOURCE_STORE, _gs_account_cte, _metric_expr, _weekday_expr
 
 logger = logging.getLogger("pipeline.step6")
@@ -71,6 +72,7 @@ def _calls_select(lo: str, hi: str) -> str:
         "toDecimal64(if(ifNull(c.status, '') != '', 1, 0), 6) AS kol_vo_zayavok",
         "toDecimal64(0, 6) AS kol_vo_zayavok",
     )
+    specialist_expr = specialist_correction_expr("c.created_date", "gs.login_key", "gs.directologist")
     return f"""
 WITH
 {_gs_account_cte()}
@@ -110,7 +112,7 @@ SELECT
     CAST('Звонки', 'Nullable(String)') AS `тип_заявки`,
     {metrics},
     gs.status AS `статус`,
-    gs.directologist AS `специалист`,
+    {specialist_expr} AS `специалист`,
     gs.site_type AS `тип_сайта`,
     gs.template AS `шаблон`,
     gs.salon AS `салон`,

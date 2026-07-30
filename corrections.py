@@ -41,17 +41,71 @@ _KUDERKO_LOGINS = (
     "porg-p4uskpj6", "porg-wgyzlarl",
 )
 
+_SERGEEV_DATE = "2026-04-21"
+_SERGEEV_NAME = "Сергеев Алексей"
+_SERGEEV_LOGINS = (
+    "porg-tde4jof6", "kazan-ca-532199-z761", "e-20074360", "porg-wzisnv32",
+    "porg-rmkn7sz4", "porg-2xphfcul", "e-20074359", "porg-fuko7yzw", "e-20074361",
+)
 
-def _rule1_kuderko(client) -> int:
-    """CH-safe equivalent of v5 Rule 1: historical Kuderko reassignment."""
+_PITERKINA_LOGIN = "porg-o2lqtxk5"
+_PITERKINA_DATE = "2026-06-19"
+_PITERKINA_NAME = "Питеркина Дарья"
+_PITERKINA_LOGINS = (
+    "direct175", "e-20074386", "e-20074391", "e-20075581", "e-20076024",
+    "e-20076025", "e-20076032", "e-20076035", "e-20077735", "e-20080927",
+    "e-20086590", "porg-3kybbaqw", "porg-52ddldh4", "porg-a7ysf76k",
+    "porg-asnsozgg", "porg-cy3l6otz", "porg-de56ixiq", "porg-dnprpowd",
+    "porg-efrpw7tl", "porg-g5el6elk", "porg-hwoltj3u", "porg-nqw6yxoc",
+    "porg-o2lqtxk5", "porg-orfyrlvm", "porg-ounlaznf", "porg-p6eyociq",
+    "porg-rrq4agov", "porg-ze76vrem",
+)
+
+SPECIALIST_DATE_RULES = (
+    (_KUDERKO_NAME, _KUDERKO_DATE, _KUDERKO_LOGINS),
+    (_SERGEEV_NAME, _SERGEEV_DATE, _SERGEEV_LOGINS),
+    (_PITERKINA_NAME, _PITERKINA_DATE, _PITERKINA_LOGINS),
+)
+
+
+def _sql_list(items: tuple[str, ...]) -> str:
+    return ", ".join(f"'{item}'" for item in items)
+
+
+def specialist_correction_expr(
+    date_expr: str,
+    account_expr: str,
+    specialist_expr: str,
+) -> str:
+    """Return CH expression matching v5 account-based specialist corrections."""
+    branches: list[str] = []
+    for name, date_barrier, logins in SPECIALIST_DATE_RULES:
+        branches.append(
+            f"{date_expr} < toDate('{date_barrier}') "
+            f"AND lower(ifNull({account_expr}, '')) IN ({_sql_list(logins)}), '{name}'"
+        )
+    branches.append(
+        f"lower(ifNull({account_expr}, '')) = '{_PITERKINA_LOGIN}' "
+        f"AND empty(trim(ifNull({specialist_expr}, ''))), '{_PITERKINA_NAME}'"
+    )
+    branches.append(specialist_expr)
+    return f"multiIf({', '.join(branches)})"
+
+
+def _rule1_specialists(client) -> int:
+    """CH-safe equivalent of v5 account/date specialist reassignment rules."""
     table = "ad_analytics.big_analytics_sources"
     shadow = "ad_analytics.big_analytics_sources_new"
-    logins_sql = ", ".join(f"'{login}'" for login in _KUDERKO_LOGINS)
-    condition = (
-        f"`Date` < toDate('{_KUDERKO_DATE}') "
-        f"AND lower(ifNull(account_login, '')) IN ({logins_sql})"
+    expr = specialist_correction_expr("`Date`", "account_login", "`специалист`")
+    changed = int(
+        client.query(
+            f"""
+            SELECT count()
+            FROM {table}
+            WHERE ifNull({expr}, '') != ifNull(`специалист`, '')
+            """
+        ).result_rows[0][0]
     )
-    changed = int(client.query(f"SELECT count() FROM {table} WHERE {condition}").result_rows[0][0])
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
     client.command(
         f"""
@@ -62,13 +116,13 @@ def _rule1_kuderko(client) -> int:
         AS
         SELECT
             * REPLACE (
-                if({condition}, '{_KUDERKO_NAME}', `специалист`) AS `специалист`
+                {expr} AS `специалист`
             )
         FROM {table}
         """
     )
     swap_shadow(client, table, shadow)
-    logger.info("[corrections] Rule 1 Kuderko reassignment: %d rows", changed)
+    logger.info("[corrections] Specialist account/date reassignment rules: %d rows", changed)
     return changed
 
 
@@ -78,7 +132,7 @@ def apply(conn=None, run_id: str | None = None) -> dict:  # noqa: A001, ARG001
     t0 = time.perf_counter()
     changed = 0
     if table_exists(client, "ad_analytics", "big_analytics_sources"):
-        changed += _rule1_kuderko(client)
+        changed += _rule1_specialists(client)
     total = 0
     parts: list[str] = []
     for table in COMPONENT_TABLES:
@@ -87,7 +141,7 @@ def apply(conn=None, run_id: str | None = None) -> dict:  # noqa: A001, ARG001
         rows = count_rows(client, f"ad_analytics.{table}")
         total += rows
         parts.append(f"{table}={rows:,}")
-    parts.append(f"kuderko_rule_rows={changed:,}")
+    parts.append(f"specialist_rule_rows={changed:,}")
     details = ", ".join(parts)
     logger.info("corrections v6_ch завершены за %.1f сек: %s", time.perf_counter() - t0, details)
     return {"rows": total, "details": details}

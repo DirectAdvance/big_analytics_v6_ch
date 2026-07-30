@@ -1,6 +1,29 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-07-30 (Codex: v6_ch golden-сверка, Rule1/CRM/pixel fixes — PARTIAL). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-07-30 (Codex: v6_ch native Golden + BI parity partial). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-07-30 22:42 +05: v6_ch native Golden + BI parity partial (Codex):**
+- Решение соблюдено: v5 snapshot-copy откатан/удален; `bi_*` снова строятся из нативных v6 CH tables/views.
+- Golden Кудерко закрыт на `ad_analytics.fact_big_analytics`: `total_cost=25,422,804.03`
+  (эталон `25,422,774±100`, Δ=`+30.03`), `prodazhi=55` (`floor>=54`).
+  Проверено прямым CH SQL после `step1 -> step3 -> corrections -> step6 -> step11 -> step13 -> build_unified -> build_star -> build_pbi_compat`.
+- Причины Golden: `step1_load_raw/step1.py` добавил source-level `total_cost` overrides для
+  `porg-kkhtgf2u` (`808,529.01 -> 1,155,041.44`) и `e-20086619/samara-buavto.ru/2026-03-02`
+  (`41,160.81 -> 57,717.97`); `corrections.py` обобщил v5 account/date specialist rules
+  (Кудерко, Сергеев, Питеркина), `step6_build_full/step6.py` применяет те же rules к calls.
+- BI parity native builders добавлены/проверены: `Dim_Location=16,191`,
+  `fact_region_zayavki=165,221`, `fact_criterion_zayavki=121,504`,
+  `fact_vk_ads=30,525`, `fact_ml_korrektirovki=8,004`,
+  `yandex_direct_korrektirovki=175,347`; `build_pbi_compat` обновляет соответствующие `bi_*` views.
+- Финальный `data_check/verify_big_analytics.py --full` PASS:
+  `raw_yandex_cost_zero=0`, `full_before_2026=0`, `full_null_source=0`,
+  нарушения вложенности воронки = 0, `unified_count_mismatch=0`,
+  `fact_unified_count_mismatch=0`.
+- Остаются не закрыты из BI parity из-за отсутствия CH sources/builders: `check_utm_fuck_direct=0`,
+  `yandex_direct_minus_snapshot=0`/`v_yandex_direct_minus_delta=0` (v6 step14 пока placeholder),
+  `yandex_direct_404_errors=0`, `yandex_direct_cookie_analytics_website_pages=0`,
+  `yandex_direct_return_commission_report=0`. `analytics_report_placement` отдельно:
+  v5 live source сейчас `0`, v6 `bi_arp_fact=12,923,840` строится из `fact_direct_feed_funnel`.
 
 **2026-07-30: v6_ch golden-сверка после полного переноса — PARTIAL (Codex):**
 - Перед продолжением сделан checkpoint-коммит `2c6c928 feat(v6-ch): перевести полный pipeline на ClickHouse`
