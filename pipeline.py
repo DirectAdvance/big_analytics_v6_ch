@@ -83,17 +83,25 @@ def log_step(client, run_id: str, step: str, status: str, rows=None, duration=No
     )
 
 
-def run_step(client, run_id: str, step_num: int, module_path: str, label: str) -> bool:
+def run_step(
+    client,
+    run_id: str,
+    step_num: int,
+    module_path: str,
+    label: str,
+    verify_no_star: bool = False,
+) -> bool:
     logger.info("━" * 60)
     logger.info("Шаг %s: %s", step_num, module_path)
     t0 = time.perf_counter()
     try:
         mod = importlib.import_module(module_path)
         if label == "verify":
-            code = mod.run(full=True)
+            code = mod.run(full=True, no_star=verify_no_star)
             if code:
                 raise RuntimeError(f"verify_big_analytics exit={code}")
-            result = {"rows": None, "details": "PASS"}
+            details = "PASS no_star" if verify_no_star else "PASS"
+            result = {"rows": None, "details": details}
         elif hasattr(mod, "apply"):
             result = mod.apply(conn=None, run_id=run_id)
         else:
@@ -164,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         args.include_maintenance,
         args.skip_heavy_pbi,
     ):
-        ok = run_step(client, run_id, step_num, module_path, label)
+        verify_no_star = bool(args.skip_heavy_pbi and label == "verify")
+        ok = run_step(client, run_id, step_num, module_path, label, verify_no_star=verify_no_star)
         if not ok:
             failed = True
             break

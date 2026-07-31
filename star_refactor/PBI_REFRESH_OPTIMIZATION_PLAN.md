@@ -180,6 +180,89 @@ PIPELINE_SKIP_HEAVY_PBI=1 .venv/bin/python3 pipeline.py
 This keeps the default full pipeline unchanged, but gives a low-memory path for
 main-fact troubleshooting after ClickHouse instability.
 
+## BI/source parity sync, 2026-07-31
+
+`step0_sync_local/step0.py` now syncs the v5/BI support tables that are needed
+for crop targeting diagnostics and legacy PBI pages:
+
+- `gsheets_crop_targeting_account`
+- `gsheets_crop_targeting_account_leads`
+- `gsheets_crop_targeting_account_pravilo_utm`
+- `local_telega_in_orders`
+- `local_telega_in_orders_errors`
+- `crop_targeting_api_telegain_lead`
+- `yandex_direct_cookie_analytics_website_pages`
+
+`yandex_direct_cookie_analytics_website_pages` may already exist as an empty
+compatibility `View`; step0 replaces that view with a physical `MergeTree`
+snapshot from v5 `public`.
+
+Post-change verification:
+
+```bash
+.venv/bin/python3 pipeline.py --only-step 0
+```
+
+Then check `system.tables` and row counts for the seven objects above before
+running PBI compatibility rebuilds.
+
+Verified on 2026-07-31:
+
+- `pipeline.py --only-step 0` completed in 399.2 sec.
+- PostgreSQL source counts matched ClickHouse active part counts:
+  `gsheets_crop_targeting_account=1746`,
+  `gsheets_crop_targeting_account_leads=1736`,
+  `gsheets_crop_targeting_account_pravilo_utm=1857`,
+  `local_telega_in_orders=1833`,
+  `local_telega_in_orders_errors=2`,
+  `crop_targeting_api_telegain_lead=1622`,
+  `yandex_direct_cookie_analytics_website_pages=965764`.
+- `yandex_direct_cookie_analytics_website_pages` is now a physical `MergeTree`,
+  not the old empty compatibility `View`.
+
+`step14_minus_snapshot` remains a placeholder in v6_ch, but now creates the
+empty table with the full v5/BI-compatible schema (`has_minus`, `check_ok`,
+`block`, `специалист`, counters). This prevents `bi_yandex_direct_minus_snapshot`
+from crashing parity verification while the live Direct minus-snapshot fetch is
+still not ported.
+
+Verified on 2026-07-31:
+
+- `pipeline.py --only-step 14` completed in 2.4 sec with
+  `yandex_direct_minus_snapshot=0`.
+- `data_check/verify_big_analytics.py --full --no-star` passed after the schema
+  fix and step0 sync.
+
+Current fast path note:
+
+- `fast_pipeline.py` in this directory is still the old v5/PostgreSQL script and
+  should not be used as a v6_ch validation path until it is ported.
+- Use `pipeline.py --skip-heavy-pbi` for low-memory v6_ch validation. A
+  2026-07-31 run completed the main pipeline path through step8 without
+  ClickHouse memory runaway. In this mode step900 is called with `no_star=True`,
+  because `fact_big_analytics` remains from the previous build when heavy
+  star/PBI builders are skipped.
+
+## Safe parallelization notes, 2026-07-31
+
+Do not enable broad parallel execution in the default pipeline yet. The current
+safe order is mostly dependency-bound:
+
+- `step0 -> step1 -> step3/4 -> step6` must stay ordered for correctness.
+  `step3` needs raw tables and campaign status, and `step6` needs corrected
+  sources plus calls.
+- Inside `step1`, `raw_yandex`, `raw_leads`, and `raw_calls` write independent
+  tables, but parallelizing them should be capped at `max_parallel=2` only after
+  another healthy baseline run; `raw_yandex` is already the largest stream.
+- Heavy PBI builders (`region_spend`, `adformat_spend`, `criterion_spend`,
+  `direct_feed_funnel`) write separate facts, but all read large Direct raw data.
+  If parallelized, start with manual pairs and `SAFE_QUERY_SETTINGS`; do not run
+  all four together on the current ClickHouse size.
+- `build_star` and `build_pbi_compat` must remain after their upstream facts and
+  should stay sequential.
+- `step11` and `step13` rebuild shadow targets that feed later facts; keep them
+  sequential.
+
 ## Batching audit, 2026-07-31
 
 Checked heavy ClickHouse materialization code paths after the memory incident.

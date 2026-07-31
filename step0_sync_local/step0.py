@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import CH_RAW_DB, CH_WORK_DB, RAW_SOURCE_TABLES
+from config.ch_utils import SAFE_QUERY_SETTINGS
 from config.settings import DB_DST
 
 logger = logging.getLogger("pipeline.step0")
@@ -132,6 +133,64 @@ COST_TABLES = {
             ORDER BY id
         """,
     },
+    "gsheets_crop_targeting_account": {
+        "columns": [
+            "id",
+            "Специалист",
+            "Дата",
+            "Гео",
+            "Гео2",
+            "Сайт",
+            "Тип закупа",
+            "utm утвержденная",
+            "Источник",
+            "Канал",
+            "НДС",
+            "Цена закупа без ндс",
+            "сумма входящего ндс",
+            "Проценты ак",
+            "Цена продажи клиенту с НДС, руб.",
+            "Наша комиссия с НДС, руб.",
+            "Наша чистая комиссия (без затрат н",
+            "total_cost",
+        ],
+        "ddl": """
+            (
+                id Int32,
+                `Специалист` Nullable(String),
+                `Дата` Nullable(String),
+                `Гео` Nullable(String),
+                `Гео2` Nullable(String),
+                `Сайт` Nullable(String),
+                `Тип закупа` Nullable(String),
+                `utm утвержденная` Nullable(String),
+                `Источник` Nullable(String),
+                `Канал` Nullable(String),
+                `НДС` Nullable(String),
+                `Цена закупа без ндс` Nullable(String),
+                `сумма входящего ндс` Nullable(String),
+                `Проценты ак` Nullable(String),
+                `Цена продажи клиенту с НДС, руб.` Nullable(String),
+                `Наша комиссия с НДС, руб.` Nullable(String),
+                `Наша чистая комиссия (без затрат н` Nullable(String),
+                total_cost Nullable(String)
+            )
+            ENGINE = MergeTree
+            ORDER BY id
+        """,
+    },
+    "gsheets_crop_targeting_account_pravilo_utm": {
+        "columns": ["id", "UTM", "utm утвержденная"],
+        "ddl": """
+            (
+                id Int32,
+                UTM Nullable(String),
+                `utm утвержденная` Nullable(String)
+            )
+            ENGINE = MergeTree
+            ORDER BY id
+        """,
+    },
     "crop_targeting_api_telegain_lead": {
         "columns": [
             "id",
@@ -198,6 +257,182 @@ COST_TABLES = {
             ORDER BY id
         """,
     },
+    "local_telega_in_orders": {
+        "columns": [
+            "id",
+            "uid",
+            "order_id",
+            "order_project_name",
+            "order_comment",
+            "channel_id",
+            "channel_name",
+            "channel_link",
+            "post_link",
+            "placement_format",
+            "status",
+            "cancel_comment",
+            "price",
+            "total_price",
+            "total_views",
+            "clicks",
+            "post_links",
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_content",
+            "utm_term",
+            "created_at",
+            "completed_at",
+            "done_at",
+            "run_at",
+            "raw",
+            "updated_at",
+        ],
+        "select_exprs": {"raw": '"raw"::text'},
+        "ddl": """
+            (
+                id Int64,
+                uid Nullable(String),
+                order_id Nullable(Int64),
+                order_project_name Nullable(String),
+                order_comment Nullable(String),
+                channel_id Nullable(Int64),
+                channel_name Nullable(String),
+                channel_link Nullable(String),
+                post_link Nullable(String),
+                placement_format Nullable(String),
+                status Nullable(String),
+                cancel_comment Nullable(String),
+                price Nullable(Decimal(18, 6)),
+                total_price Nullable(Decimal(18, 6)),
+                total_views Nullable(Int64),
+                clicks Nullable(Int64),
+                post_links Nullable(String),
+                utm_source Nullable(String),
+                utm_medium Nullable(String),
+                utm_campaign Nullable(String),
+                utm_content Nullable(String),
+                utm_term Nullable(String),
+                created_at Nullable(DateTime),
+                completed_at Nullable(DateTime),
+                done_at Nullable(DateTime),
+                run_at Nullable(DateTime),
+                raw Nullable(String),
+                updated_at Nullable(DateTime)
+            )
+            ENGINE = MergeTree
+            ORDER BY id
+        """,
+    },
+    "local_telega_in_orders_errors": {
+        "columns": [
+            "id",
+            "order_id",
+            "order_project_name",
+            "post_links",
+            "status",
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "utm_content",
+            "utm_content_norm",
+            "effective_domain",
+            "site_status",
+            "directologist",
+            "salon",
+            "city",
+            "region",
+            "total_price",
+            "created_at",
+            "error_type",
+            "error_detail",
+            "checked_at",
+        ],
+        "ddl": """
+            (
+                id Nullable(Int64),
+                order_id Nullable(Int64),
+                order_project_name Nullable(String),
+                post_links Nullable(String),
+                status Nullable(String),
+                utm_source Nullable(String),
+                utm_medium Nullable(String),
+                utm_campaign Nullable(String),
+                utm_content Nullable(String),
+                utm_content_norm Nullable(String),
+                effective_domain Nullable(String),
+                site_status Nullable(String),
+                directologist Nullable(String),
+                salon Nullable(String),
+                city Nullable(String),
+                region Nullable(String),
+                total_price Nullable(Decimal(18, 6)),
+                created_at Nullable(DateTime),
+                error_type Nullable(String),
+                error_detail Nullable(String),
+                checked_at Nullable(DateTime)
+            )
+            ENGINE = MergeTree
+            ORDER BY (ifNull(id, 0), ifNull(order_id, 0), ifNull(error_type, ''))
+        """,
+    },
+    "yandex_direct_cookie_analytics_website_pages": {
+        "columns": [
+            "id",
+            "login_key",
+            "domain",
+            "banner_href",
+            "date_from",
+            "date_to",
+            "sum",
+            "clicks",
+            "agoalnum",
+            "aconv",
+            "agoalcost",
+            "goal_all_forms",
+            "goal_crm_order_created",
+            "goal_crm_order_paid",
+            "final_url",
+            "directologist",
+            "template",
+            "salon",
+            "city",
+            "region",
+            "site_type",
+            "page_type",
+            "loaded_at",
+        ],
+        "select_exprs": {"agoalnum": '"agoalnum"::text'},
+        "ddl": """
+            (
+                id Int64,
+                login_key String,
+                domain Nullable(String),
+                banner_href String,
+                date_from Date,
+                date_to Date,
+                `sum` Nullable(Decimal(18, 6)),
+                clicks Nullable(Decimal(18, 6)),
+                agoalnum Nullable(String),
+                aconv Nullable(Decimal(18, 6)),
+                agoalcost Nullable(Decimal(18, 6)),
+                goal_all_forms Nullable(Decimal(18, 6)),
+                goal_crm_order_created Nullable(Decimal(18, 6)),
+                goal_crm_order_paid Nullable(Decimal(18, 6)),
+                final_url Nullable(String),
+                directologist Nullable(String),
+                template Nullable(String),
+                salon Nullable(String),
+                city Nullable(String),
+                region Nullable(String),
+                site_type Nullable(String),
+                page_type Nullable(String),
+                loaded_at Nullable(DateTime)
+            )
+            ENGINE = MergeTree
+            ORDER BY (login_key, date_from, date_to, id)
+        """,
+    },
     "local_vk_ads_stats_day": {
         "columns": [
             "date",
@@ -240,11 +475,29 @@ COST_TABLES = {
 
 
 def _count_table(client, table: str) -> int:
-    return int(client.query(f"SELECT count() FROM {table}").result_rows[0][0])
+    return int(client.query(f"SELECT count() FROM {table}", settings=SAFE_QUERY_SETTINGS).result_rows[0][0])
 
 
 def _pg_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
+
+
+def _pg_select_expr(col: str, spec: dict) -> str:
+    expr = spec.get("select_exprs", {}).get(col, _pg_ident(col))
+    return f"{expr} AS {_pg_ident(col)}"
+
+
+def _ch_target_engine(ch_client, table: str) -> str | None:
+    rows = ch_client.query(
+        """
+        SELECT engine
+        FROM system.tables
+        WHERE database={db:String} AND name={table:String}
+        """,
+        parameters={"db": COST_DB, "table": table},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+    return rows[0][0] if rows else None
 
 
 def _sync_cost_table(ch_client, pg_conn, table: str, spec: dict) -> int:
@@ -252,10 +505,10 @@ def _sync_cost_table(ch_client, pg_conn, table: str, spec: dict) -> int:
     shadow = f"{COST_DB}.{table}__new"
     target = f"{COST_DB}.{table}"
 
-    ch_client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    ch_client.command(f"CREATE TABLE {shadow} {spec['ddl']}")
+    ch_client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
+    ch_client.command(f"CREATE TABLE {shadow} {spec['ddl']}", settings=SAFE_QUERY_SETTINGS)
 
-    pg_cols = ", ".join(_pg_ident(col) for col in columns)
+    pg_cols = ", ".join(_pg_select_expr(col, spec) for col in columns)
     select_sql = f"SELECT {pg_cols} FROM public.{_pg_ident(table)} ORDER BY 1"
     rows_inserted = 0
 
@@ -269,21 +522,15 @@ def _sync_cost_table(ch_client, pg_conn, table: str, spec: dict) -> int:
             ch_client.insert(shadow, batch, column_names=columns)
             rows_inserted += len(batch)
 
-    exists = bool(
-        ch_client.query(
-            """
-            SELECT count()
-            FROM system.tables
-            WHERE database={db:String} AND name={table:String}
-            """,
-            parameters={"db": COST_DB, "table": table},
-        ).result_rows[0][0]
-    )
-    if exists:
-        ch_client.command(f"EXCHANGE TABLES {target} AND {shadow}")
-        ch_client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    engine = _ch_target_engine(ch_client, table)
+    if engine and engine != "View":
+        ch_client.command(f"EXCHANGE TABLES {target} AND {shadow}", settings=SAFE_QUERY_SETTINGS)
+        ch_client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
+    elif engine:
+        ch_client.command(f"DROP TABLE IF EXISTS {target} SYNC", settings=SAFE_QUERY_SETTINGS)
+        ch_client.command(f"RENAME TABLE {shadow} TO {target}", settings=SAFE_QUERY_SETTINGS)
     else:
-        ch_client.command(f"RENAME TABLE {shadow} TO {target}")
+        ch_client.command(f"RENAME TABLE {shadow} TO {target}", settings=SAFE_QUERY_SETTINGS)
 
     return rows_inserted
 
