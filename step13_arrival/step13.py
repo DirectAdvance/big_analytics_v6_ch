@@ -10,7 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import column_names, count_rows, month_ranges_from_table, q, swap_shadow
+from config.ch_settings import DATE_FROM
+from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow
 
 logger = logging.getLogger("pipeline.step13")
 
@@ -24,7 +25,8 @@ def _create_empty(client, target: str) -> None:
         PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
         ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(domain, ''), ifNull(_source_table, ''))
         AS SELECT * FROM ad_analytics.big_analytics_full WHERE 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -54,14 +56,8 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     cols = column_names(client, "ad_analytics", "big_analytics_full")
     target_cols = ", ".join(q(col) for col in cols)
     select_exprs = _select_exprs(cols)
-    ranges = month_ranges_from_table(
-        client,
-        "ad_analytics.big_analytics_full",
-        "`Date`",
-        "`Date` IS NOT NULL",
-    )
+    ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow} ({target_cols})
@@ -69,10 +65,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             FROM ad_analytics.big_analytics_full AS s
             WHERE s.`Date` >= toDate('{lo}') AND s.`Date` < toDate('{hi}')
               AND (s.priezd > 0 OR s.prodazhi > 0)
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        logger.info("  arrival batch %d/%d: +%d строк", idx, len(ranges), after - before)
+        logger.info("  arrival daily batch %d/%d inserted: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.big_analytics_full_arrival", shadow)
     rows = count_rows(client, "ad_analytics.big_analytics_full_arrival")
     logger.info("Шаг 13 v6_ch завершён за %.1f сек: rows=%d", time.perf_counter() - t0, rows)

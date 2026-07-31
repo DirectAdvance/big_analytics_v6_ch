@@ -320,15 +320,14 @@ _ALL_TABLES = [
     'fact_criterion_spend', 'fact_criterion_zayavki',   # «Ключевые слова» (расход + воронка по критерию)
     'dim_criterion', 'analytics_report_criterion',      # справочник + отчёт по критериям
     'fact_region_spend', 'fact_region_zayavki', 'Dim_Location',  # «расстояние»/область
-    'fact_direct_feed_funnel', 'analytics_report_feed',         # «Фиды»
+    'Dim_PlacementFeed', 'fact_direct_feed_funnel', 'analytics_report_feed',  # «Фиды»
     # MINUS_TABLES_2026-07-18: «Я.Директ проверки → Количество минус слов».
     # Обе присутствуют в опубликованном датасете (проверено executeQueries 18.07),
     # обе — mode: import над PG (delta — VIEW на стороне PG, для PBI обычная таблица).
     'yandex_direct_minus_snapshot', 'v_yandex_direct_minus_delta',
-    # ML_KORREKTIROVKI_PBI_2026-07-28: ночной билдер build_ml_korrektirovki_night.py.
-    # ⚠️ PENDING: таблица НЕ опубликована в датасете PBI Desktop (нет fact_ml_korrektirovki.tmdl
-    # в SemanticModel). Перед активацией refresh — опубликовать датасет из Desktop с этой таблицей.
-    # 'fact_ml_korrektirovki',  # PENDING ML_KORREKTIROVKI_COMMENTED_2026-07-28: датасет не опубликован (нет TMDL), активировать после публикации из Desktop
+    # ML_KORREKTIROVKI_PBI_2026-07-31: таблица есть в admin_ch SemanticModel,
+    # поэтому selective refresh должен обновлять её вместе с остальными PBI-объектами.
+    'fact_ml_korrektirovki',
 ]
 
 

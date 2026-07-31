@@ -1,7 +1,7 @@
 """Step 6 for v6_ch: build `big_analytics_full` in ClickHouse.
 
 The v5 step used PostgreSQL CTAS. This v6 implementation keeps the same
-pipeline contract, but writes to ClickHouse with shadow tables and monthly
+pipeline contract, but writes to ClickHouse with shadow tables and daily
 INSERT batches so large source tables are never materialized in one statement.
 """
 
@@ -15,7 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import column_names, count_rows, month_ranges_from_table, q, swap_shadow
+from config.ch_settings import DATE_FROM
+from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow
 from corrections import specialist_correction_expr
 from step3_build_sources.step3 import SOURCE_STORE, _gs_account_cte, _metric_expr, _weekday_expr
 
@@ -50,7 +51,8 @@ def _create_full_shadow(client, shadow: str, source_cols: list[str]) -> None:
             CAST(NULL, 'Nullable(String)') AS key_pixel_score
         FROM ad_analytics.{SOURCE_STORE}
         WHERE 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -63,7 +65,8 @@ def _create_calls_shadow(client, shadow: str) -> None:
         PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
         ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(domain, ''), ifNull(key3, ''))
         AS SELECT * FROM ad_analytics.{SOURCE_STORE} WHERE 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -150,32 +153,19 @@ WHERE c.created_date >= toDate('{lo}')
 def _rebuild_calls(client) -> int:
     shadow = "ad_analytics.big_analytics_calls_new"
     _create_calls_shadow(client, shadow)
-    ranges = month_ranges_from_table(
-        client,
-        "ad_analytics.raw_calls",
-        "created_date",
-        "created_date IS NOT NULL",
-    )
+    ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
-        before = count_rows(client, shadow)
-        client.command(f"INSERT INTO {shadow}\n{_calls_select(lo, hi)}")
-        after = count_rows(client, shadow)
-        logger.info("  calls batch %d/%d: +%d строк", idx, len(ranges), after - before)
+        client.command(f"INSERT INTO {shadow}\n{_calls_select(lo, hi)}", settings=SAFE_QUERY_SETTINGS)
+        logger.info("  calls daily batch %d/%d inserted: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.big_analytics_calls", shadow)
     return count_rows(client, "ad_analytics.big_analytics_calls")
 
 
 def _insert_source_batches(client, shadow: str, source_table: str, base_cols: list[str], extra_where: str = "1 = 1") -> int:
-    ranges = month_ranges_from_table(
-        client,
-        f"ad_analytics.{source_table}",
-        "`Date`",
-        "`Date` IS NOT NULL",
-    )
+    ranges = day_ranges(DATE_FROM)
     target_cols = ", ".join(q(col) for col in [*base_cols, "key_pixel_score"])
     select_cols = ", ".join(f"s.{q(col)}" for col in base_cols)
     for idx, (lo, hi) in enumerate(ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow} ({target_cols})
@@ -185,11 +175,11 @@ def _insert_source_batches(client, shadow: str, source_table: str, base_cols: li
             FROM ad_analytics.{source_table} AS s
             WHERE s.`Date` >= toDate('{lo}') AND s.`Date` < toDate('{hi}')
               AND {extra_where}
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        logger.info("  full %s batch %d/%d: +%d строк", source_table, idx, len(ranges), after - before)
-    return count_rows(client, shadow)
+        logger.info("  full %s daily batch %d/%d inserted: %s -> %s", source_table, idx, len(ranges), lo, hi)
+    return 0
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001

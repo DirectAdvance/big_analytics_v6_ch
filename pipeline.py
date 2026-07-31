@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import logging
+import os
 import sys
 import time
 import uuid
@@ -52,6 +53,7 @@ STEPS = [
 ]
 
 MAINTENANCE_STEPS = {2, 5, 7, 10}
+HEAVY_PBI_STEPS = {141, 142, 143, 1431, 1432, 144, 145, 146}
 
 
 def ensure_quality_log(client) -> None:
@@ -109,21 +111,29 @@ def run_step(client, run_id: str, step_num: int, module_path: str, label: str) -
         return False
 
 
-def selected_steps(from_step: int | None, only_step: int | None, include_maintenance: bool):
+def selected_steps(
+    from_step: int | None,
+    only_step: int | None,
+    include_maintenance: bool,
+    skip_heavy_pbi: bool,
+):
     if only_step is not None:
         return [item for item in STEPS if item[0] == only_step]
+    skip_steps = set()
+    if skip_heavy_pbi:
+        skip_steps.update(HEAVY_PBI_STEPS)
     if from_step is not None:
         selected = []
         started = False
         for item in STEPS:
             if item[0] == from_step:
                 started = True
-            if started and (include_maintenance or item[0] not in MAINTENANCE_STEPS):
+            if started and item[0] not in skip_steps and (include_maintenance or item[0] not in MAINTENANCE_STEPS):
                 selected.append(item)
         return selected
     if include_maintenance:
-        return STEPS
-    return [item for item in STEPS if item[0] not in MAINTENANCE_STEPS]
+        return [item for item in STEPS if item[0] not in skip_steps]
+    return [item for item in STEPS if item[0] not in MAINTENANCE_STEPS and item[0] not in skip_steps]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,6 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from-step", type=int)
     parser.add_argument("--only-step", type=int)
     parser.add_argument("--include-maintenance", action="store_true")
+    parser.add_argument(
+        "--skip-heavy-pbi",
+        action="store_true",
+        default=os.getenv("PIPELINE_SKIP_HEAVY_PBI", "").lower() in {"1", "true", "yes"},
+        help="Skip spend/feed/star/PBI compatibility rebuilds for low-memory debug runs.",
+    )
     args = parser.parse_args(argv)
 
     run_id = uuid.uuid4().hex[:12]
@@ -139,7 +155,15 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("big_analytics_v6_ch ClickHouse pipeline start run_id=%s", run_id)
 
     failed = False
-    for step_num, module_path, label in selected_steps(args.from_step, args.only_step, args.include_maintenance):
+    if args.skip_heavy_pbi:
+        logger.info("skip-heavy-pbi enabled: пропускаю шаги %s", sorted(HEAVY_PBI_STEPS))
+
+    for step_num, module_path, label in selected_steps(
+        args.from_step,
+        args.only_step,
+        args.include_maintenance,
+        args.skip_heavy_pbi,
+    ):
         ok = run_step(client, run_id, step_num, module_path, label)
         if not ok:
             failed = True

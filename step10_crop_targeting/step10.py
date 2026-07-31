@@ -16,7 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows, replace_view, swap_shadow, table_exists
+from config.ch_settings import DATE_FROM
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
 from step3_build_sources.step3 import SOURCE_STORE
 
 logger = logging.getLogger("pipeline.step10")
@@ -68,7 +69,8 @@ def _create_empty_overlay(client, shadow: str) -> None:
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
         ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(domain, ''), ifNull(key3, ''))
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -179,7 +181,8 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
           AND {_GS_DATE} >= toDate('2026-01-01')
           AND {_GS_DATE} < toDate('2026-05-01')
           AND {_GS_COST} != 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -271,7 +274,8 @@ def _insert_crop_api_costs(client, target: str) -> None:
         LEFT JOIN gs_salon gs ON gs.salon_key = lowerUTF8(trim(ifNull(t.`салон`, '')))
         WHERE t.`Date` >= toDate('2026-05-01')
           AND ifNull(t.total_cost, toDecimal64(0, 6)) != 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -353,7 +357,8 @@ def _insert_vk_ads_costs(client, target: str) -> None:
         WHERE date >= toDate('2026-01-01')
           AND spent != 0
         GROUP BY date, account_id, ad_plan_id
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -379,7 +384,10 @@ def _rebuild_cost_overlays(client) -> tuple[int, float]:
         SELECT * FROM ad_analytics.{COST_OVERLAY_TABLE} WHERE _source_table = 'crop_targeting'
         """,
     )
-    row = client.query(f"SELECT count(), toFloat64(sum(total_cost)) FROM ad_analytics.{COST_OVERLAY_TABLE}").result_rows[0]
+    row = client.query(
+        f"SELECT count(), toFloat64(sum(total_cost)) FROM ad_analytics.{COST_OVERLAY_TABLE}",
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows[0]
     return int(row[0]), float(row[1] or 0)
 
 
@@ -393,7 +401,8 @@ def _overlay_full(client) -> tuple[int, float, float]:
             toFloat64(sum(total_cost)),
             toFloat64(sum(kol_vo_zayavok) + sum(korr) + sum(kval) + sum(priezd) + sum(prodazhi))
         FROM ad_analytics.big_analytics_full
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     ).result_rows[0]
     before_cost = float(before[0] or 0)
     before_funnel = float(before[1] or 0)
@@ -402,27 +411,34 @@ def _overlay_full(client) -> tuple[int, float, float]:
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
     client.command(
         """
-        CREATE TABLE ad_analytics.big_analytics_full_new AS ad_analytics.big_analytics_full
+        CREATE TABLE ad_analytics.big_analytics_full_new
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
         ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(domain, ''), ifNull(_source_table, ''))
-        """
+        AS SELECT * FROM ad_analytics.big_analytics_full WHERE 0
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
-    client.command(
-        """
-        INSERT INTO ad_analytics.big_analytics_full_new
-        SELECT *
-        FROM ad_analytics.big_analytics_full
-        WHERE NOT startsWith(key3, 'crop_cost|')
-          AND NOT startsWith(key3, 'vk_ads_cost|')
-        """
-    )
+    for idx, (lo, hi) in enumerate(day_ranges(DATE_FROM), start=1):
+        client.command(
+            f"""
+            INSERT INTO ad_analytics.big_analytics_full_new
+            SELECT *
+            FROM ad_analytics.big_analytics_full
+            WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
+              AND NOT startsWith(key3, 'crop_cost|')
+              AND NOT startsWith(key3, 'vk_ads_cost|')
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        logger.info("  full crop-overlay keep daily batch %d: %s -> %s", idx, lo, hi)
     client.command(
         f"""
         INSERT INTO ad_analytics.big_analytics_full_new
         SELECT c.*, CAST(NULL, 'Nullable(String)') AS key_pixel_score
         FROM ad_analytics.{COST_OVERLAY_TABLE} AS c
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
     swap_shadow(client, "ad_analytics.big_analytics_full", shadow)
 
@@ -433,7 +449,8 @@ def _overlay_full(client) -> tuple[int, float, float]:
             toFloat64(sum(total_cost)),
             toFloat64(sum(kol_vo_zayavok) + sum(korr) + sum(kval) + sum(priezd) + sum(prodazhi))
         FROM ad_analytics.big_analytics_full
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     ).result_rows[0]
     after_rows = int(after[0])
     after_cost = float(after[1] or 0)

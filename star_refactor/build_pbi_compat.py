@@ -67,11 +67,6 @@ def _replace_view(client, name: str, select_sql: str) -> None:
     client.command(f"CREATE VIEW ad_analytics.{q(name)} AS {select_sql}")
 
 
-def _replace_table(client, name: str, engine_sql: str, select_sql: str) -> None:
-    client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC")
-    client.command(f"CREATE TABLE ad_analytics.{q(name)} {engine_sql} AS {select_sql}", settings=SAFE_QUERY_SETTINGS)
-
-
 def drop_bi_views(client) -> None:
     for table in PBI_SOURCE_OBJECTS:
         client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(f'bi_{table}')} SYNC")
@@ -174,22 +169,35 @@ def build_pixel_score(client) -> int:
 
 
 def build_dim_placement_feed(client) -> int:
-    _replace_table(
-        client,
-        "Dim_PlacementFeed",
-        "ENGINE = MergeTree ORDER BY placement_feed_key",
-        """
+    stage = "ad_analytics.Dim_PlacementFeed_stage_new"
+    shadow = "ad_analytics.Dim_PlacementFeed_new"
+    client.command(f"DROP TABLE IF EXISTS {stage} SYNC")
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {stage}
+        ENGINE = MergeTree
+        ORDER BY placement_feed_key
+        AS
         SELECT
-            placement_feed_key,
-            argMax(placement, sort_weight) AS placement,
-            CAST(NULL, 'Nullable(String)') AS feed_name,
-            CAST(NULL, 'Nullable(String)') AS feed_url,
-            argMax(feed_key, sort_weight) AS feed_key,
-            argMax(feed_url_key, sort_weight) AS feed_url_key,
-            argMax(ad_network_type, sort_weight) AS ad_network_type,
-            argMax(AdNetworkType, sort_weight) AS AdNetworkType
-        FROM
-        (
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
+            trim(BOTH ' ' FROM ifNull(placement, '')) AS placement,
+            trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_key,
+            trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_url_key,
+            ad_network_type,
+            ad_network_type AS AdNetworkType,
+            tuple(count(), lengthUTF8(placement)) AS sort_weight
+        FROM ad_analytics.fact_direct_feed_funnel
+        WHERE 0
+        GROUP BY placement_feed_key, placement, ad_network_type
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {stage}
             SELECT
                 lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
                 trim(BOTH ' ' FROM ifNull(placement, '')) AS placement,
@@ -199,12 +207,35 @@ def build_dim_placement_feed(client) -> int:
                 ad_network_type AS AdNetworkType,
                 tuple(count(), lengthUTF8(placement)) AS sort_weight
             FROM ad_analytics.fact_direct_feed_funnel
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))))
+            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
+              AND notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))))
             GROUP BY placement_feed_key, placement, ad_network_type
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
+        log.info("  Dim_PlacementFeed daily stage batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY placement_feed_key
+        AS
+        SELECT
+            placement_feed_key,
+            argMax(placement, sort_weight) AS placement,
+            CAST(NULL, 'Nullable(String)') AS feed_name,
+            CAST(NULL, 'Nullable(String)') AS feed_url,
+            argMax(feed_key, sort_weight) AS feed_key,
+            argMax(feed_url_key, sort_weight) AS feed_url_key,
+            argMax(ad_network_type, sort_weight) AS ad_network_type,
+            argMax(AdNetworkType, sort_weight) AS AdNetworkType
+        FROM {stage}
         GROUP BY placement_feed_key
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
+    swap_shadow(client, "ad_analytics.Dim_PlacementFeed", shadow)
+    client.command(f"DROP TABLE IF EXISTS {stage} SYNC")
     return count_rows(client, "ad_analytics.Dim_PlacementFeed")
 
 

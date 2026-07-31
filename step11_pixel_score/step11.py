@@ -10,7 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import column_names, count_rows, month_ranges_from_table, q, swap_shadow
+from config.ch_settings import DATE_FROM
+from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow
 from step3_build_sources.step3 import SOURCE_STORE, _gs_account_cte
 
 logger = logging.getLogger("pipeline.step11")
@@ -32,7 +33,8 @@ def _create_empty_from_full(client, target: str) -> None:
         PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
         ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(domain, ''), ifNull(_source_table, ''))
         AS SELECT * FROM ad_analytics.big_analytics_full WHERE 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -332,7 +334,7 @@ def _direct_pixel_select_cols(cols: list[str]) -> str:
 def _rebuild_pixel_score(client) -> int:
     shadow = "ad_analytics.big_analytics_pixel_score_new"
     _create_empty_from_full(client, shadow)
-    client.command(_insert_weighted_pixel_sql(shadow))
+    client.command(_insert_weighted_pixel_sql(shadow), settings=SAFE_QUERY_SETTINGS)
     swap_shadow(client, "ad_analytics.big_analytics_pixel_score", shadow)
     return count_rows(client, "ad_analytics.big_analytics_pixel_score")
 
@@ -343,14 +345,8 @@ def _rebuild_full_with_pixel(client) -> int:
     shadow = "ad_analytics.big_analytics_full_new"
     _create_empty_from_full(client, shadow)
 
-    full_ranges = month_ranges_from_table(
-        client,
-        "ad_analytics.big_analytics_full",
-        "`Date`",
-        "`Date` IS NOT NULL",
-    )
+    full_ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(full_ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow} ({cols_sql})
@@ -358,39 +354,27 @@ def _rebuild_full_with_pixel(client) -> int:
             FROM ad_analytics.big_analytics_full
             WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
               AND _source_table NOT IN ('pixel', 'пиксель_атрибуц')
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        logger.info("  full keep batch %d/%d: +%d строк", idx, len(full_ranges), after - before)
+        logger.info("  full keep daily batch %d/%d inserted: %s -> %s", idx, len(full_ranges), lo, hi)
 
-    pixel_ranges = month_ranges_from_table(
-        client,
-        "ad_analytics.big_analytics_pixel_score",
-        "`Date`",
-        "`Date` IS NOT NULL",
-    )
+    pixel_ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(pixel_ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow} ({cols_sql})
             SELECT {cols_sql}
             FROM ad_analytics.big_analytics_pixel_score
             WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        logger.info("  full pixel batch %d/%d: +%d строк", idx, len(pixel_ranges), after - before)
+        logger.info("  full pixel daily batch %d/%d inserted: %s -> %s", idx, len(pixel_ranges), lo, hi)
 
-    source_ranges = month_ranges_from_table(
-        client,
-        f"ad_analytics.{SOURCE_STORE}",
-        "`Date`",
-        "`Date` IS NOT NULL AND _source_table = 'pixel'",
-    )
+    source_ranges = day_ranges(DATE_FROM)
     select_cols = _direct_pixel_select_cols(cols)
     for idx, (lo, hi) in enumerate(source_ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow} ({cols_sql})
@@ -401,10 +385,10 @@ def _rebuild_full_with_pixel(client) -> int:
             LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(s.domain, '')))
             WHERE s.`Date` >= toDate('{lo}') AND s.`Date` < toDate('{hi}')
               AND s._source_table = 'pixel'
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        logger.info("  full direct pixel batch %d/%d: +%d строк", idx, len(source_ranges), after - before)
+        logger.info("  full direct pixel daily batch %d/%d inserted: %s -> %s", idx, len(source_ranges), lo, hi)
 
     swap_shadow(client, "ad_analytics.big_analytics_full", shadow)
     return count_rows(client, "ad_analytics.big_analytics_full")

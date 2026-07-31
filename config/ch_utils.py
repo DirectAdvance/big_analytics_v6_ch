@@ -30,6 +30,7 @@ def table_exists(client, database: str, table: str) -> bool:
             WHERE database={database:String} AND name={table:String}
             """,
             parameters={"database": database, "table": table},
+            settings=SAFE_QUERY_SETTINGS,
         ).result_rows[0][0]
     )
 
@@ -43,6 +44,7 @@ def column_names(client, database: str, table: str) -> list[str]:
         ORDER BY position
         """,
         parameters={"database": database, "table": table},
+        settings=SAFE_QUERY_SETTINGS,
     ).result_rows
     return [row[0] for row in rows]
 
@@ -61,9 +63,9 @@ def create_empty_like(client, target: str, source: str, engine_sql: str | None =
     """
     client.command(f"DROP TABLE IF EXISTS {target} SYNC")
     if engine_sql:
-        client.command(f"CREATE TABLE {target} AS {source} {engine_sql}")
+        client.command(f"CREATE TABLE {target} AS {source} {engine_sql}", settings=SAFE_QUERY_SETTINGS)
     else:
-        client.command(f"CREATE TABLE {target} AS {source}")
+        client.command(f"CREATE TABLE {target} AS {source}", settings=SAFE_QUERY_SETTINGS)
 
 
 def swap_shadow(client, target: str, shadow: str) -> None:
@@ -89,7 +91,8 @@ def month_ranges_from_table(
         WHERE {where_sql}
           AND {date_expr} IS NOT NULL
           AND toDate({date_expr}) >= toDate('{date_from}')
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     ).result_rows[0]
     if row[0] is None or row[1] is None:
         return []
@@ -117,10 +120,10 @@ def day_ranges(date_from: str = "2026-01-01", date_to: str | None = None) -> lis
 
 
 def count_rows(client, table: str) -> int:
-    return int(client.query(f"SELECT count() FROM {table}").result_rows[0][0])
+    return int(client.query(f"SELECT count() FROM {table}", settings=SAFE_QUERY_SETTINGS).result_rows[0][0])
 
 
 def replace_view(client, name: str, select_sql: str) -> None:
     """Replace a ClickHouse table-like object with a normal VIEW."""
     client.command(f"DROP TABLE IF EXISTS {name} SYNC")
-    client.command(f"CREATE VIEW {name} AS {select_sql}")
+    client.command(f"CREATE VIEW {name} AS {select_sql}", settings=SAFE_QUERY_SETTINGS)

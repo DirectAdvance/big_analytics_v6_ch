@@ -212,16 +212,8 @@ def build_dims(client) -> dict[str, int]:
     return rows
 
 
-def build_ml_korrektirovki_fact(client) -> int:
-    shadow = "ad_analytics.fact_ml_korrektirovki_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(
-        f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
-        ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(`RlAdjustmentId`, 0), ifNull(domain, ''))
-        AS
+def _ml_korrektirovki_sql(where_sql: str) -> str:
+    return f"""
         WITH ml_korr AS
         (
             SELECT
@@ -229,13 +221,9 @@ def build_ml_korrektirovki_fact(client) -> int:
                 anyLast(modifier_name) AS modifier_name,
                 anyLast(bid_percent) AS bid_percent,
                 anyLast(korrektirovki_bid) AS korrektirovki_bid
-            FROM
-            (
-                SELECT *
-                FROM raw_data.yandex_direct_korrektirovki
-                WHERE positionCaseInsensitive(ifNull(korrektirovki_bid, ''), '_ml_') > 0
-                  AND audience_id IS NOT NULL
-            )
+            FROM raw_data.yandex_direct_korrektirovki
+            WHERE positionCaseInsensitive(ifNull(korrektirovki_bid, ''), '_ml_') > 0
+              AND audience_id IS NOT NULL
             GROUP BY audience_id
         )
         SELECT
@@ -295,26 +283,42 @@ def build_ml_korrektirovki_fact(client) -> int:
             lower(extract(ifNull(k.modifier_name, ''), '_ml_all_(\\\\d+p(?:_[a-z0-9]+)?)')) AS ml_tier
         FROM ad_analytics.fact_big_analytics f
         INNER JOIN ml_korr k ON f.`RlAdjustmentId` = k.audience_id
+        {where_sql}
+    """
+
+
+def build_ml_korrektirovki_fact(client) -> int:
+    shadow = "ad_analytics.fact_ml_korrektirovki_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
+        ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(`RlAdjustmentId`, 0), ifNull(domain, ''))
+        AS
+        {_ml_korrektirovki_sql("WHERE 0")}
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            {_ml_korrektirovki_sql(f"WHERE f.`Date` >= toDate('{lo}') AND f.`Date` < toDate('{hi}')")}
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  fact_ml_korrektirovki daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.fact_ml_korrektirovki", shadow)
     rows = count_rows(client, "ad_analytics.fact_ml_korrektirovki")
     log.info("  fact_ml_korrektirovki=%d", rows)
     return rows
 
 
-def build_vk_ads_fact(client) -> int:
-    shadow = "ad_analytics.fact_vk_ads_new"
-    metrics = _metric_expr("status", "reason", "source_type", "salon")
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(
-        f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(date)
-        ORDER BY (date, ifNull(account_id, 0), ifNull(ad_plan_id, 0), ifNull(ad_group_id, 0), ifNull(banner_id, 0), `атрибуция`)
-        AS
+def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, zayavka_where_sql: str, visit_where_sql: str) -> str:
+    return f"""
         WITH
         vk_leads AS
         (
@@ -330,6 +334,7 @@ def build_vk_ads_fact(client) -> int:
             FROM ad_analytics.raw_leads
             WHERE lower(ifNull(utm_source, '')) = 'vkads'
               AND is_copy_for_removal = 0
+              {lead_source_where_sql}
         ),
         lead_metrics AS
         (
@@ -357,6 +362,7 @@ def build_vk_ads_fact(client) -> int:
                 toInt64(sum(prodazhi)) AS `продажи`
             FROM lead_metrics
             WHERE created_date IS NOT NULL
+              {zayavka_where_sql}
             GROUP BY date, ad_group_id, banner_id
         ),
         visit_agg AS
@@ -374,6 +380,7 @@ def build_vk_ads_fact(client) -> int:
                 toInt64(sum(prodazhi)) AS `продажи`
             FROM lead_metrics
             WHERE arrival_date IS NOT NULL
+              {visit_where_sql}
             GROUP BY date, ad_group_id, banner_id
         ),
         banner_dim AS
@@ -426,6 +433,7 @@ def build_vk_ads_fact(client) -> int:
             CAST(NULL, 'LowCardinality(Nullable(String))') AS `специалист`
         FROM raw_data.vk_ads_stats_day s
         WHERE toDateOrNull(s.date) >= toDate('{DATE_FROM}')
+          {stats_where_sql}
           AND (ifNull(s.shows, 0) != 0 OR ifNull(s.clicks, 0) != 0 OR ifNull(s.spent, 0) != 0)
 
         UNION ALL
@@ -485,9 +493,43 @@ def build_vk_ads_fact(client) -> int:
         FROM visit_agg va
         LEFT JOIN banner_dim bd ON bd.banner_id = va.banner_id
         LEFT JOIN salon_dim sd ON sd.salon_key = lower(trim(ifNull(va.`салон`, '')))
+    """
+
+
+def build_vk_ads_fact(client) -> int:
+    shadow = "ad_analytics.fact_vk_ads_new"
+    metrics = _metric_expr("status", "reason", "source_type", "salon")
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(date)
+        ORDER BY (date, ifNull(account_id, 0), ifNull(ad_plan_id, 0), ifNull(ad_group_id, 0), ifNull(banner_id, 0), `атрибуция`)
+        AS
+        {_vk_ads_sql(metrics, "AND 0", "AND 0", "AND 0", "AND 0")}
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            {_vk_ads_sql(
+                metrics,
+                f"AND toDateOrNull(s.date) >= toDate('{lo}') AND toDateOrNull(s.date) < toDate('{hi}')",
+                (
+                    f"AND ((created_date >= toDate('{lo}') AND created_date < toDate('{hi}')) "
+                    f"OR (arrival_date >= toDate('{lo}') AND arrival_date < toDate('{hi}')))"
+                ),
+                f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')",
+                f"AND arrival_date >= toDate('{lo}') AND arrival_date < toDate('{hi}')",
+            )}
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  fact_vk_ads daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.fact_vk_ads", shadow)
     rows = count_rows(client, "ad_analytics.fact_vk_ads")
     log.info("  fact_vk_ads=%d", rows)

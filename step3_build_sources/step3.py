@@ -11,22 +11,18 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows, q, replace_view, swap_shadow
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, q, replace_view, swap_shadow
 
 logger = logging.getLogger("pipeline.step3")
 
 
 SOURCE_STORE = "big_analytics_sources"
 DIRECT_SOURCE_TYPES = ("direct", "tp8", "tp9", "tp10")
-
-BATCH_DATE_FROM = date(2026, 1, 1)
-
 
 def _weekday_expr(date_expr: str) -> str:
     return (
@@ -595,32 +591,6 @@ def _select_from_create(create_sql: str) -> str:
     return create_sql.split(marker, 1)[1].strip()
 
 
-def _month_ranges(client, source_table: str, date_expr: str, where_sql: str = "1 = 1") -> list[tuple[str, str]]:
-    row = client.query(
-        f"""
-        SELECT min(toDate({date_expr})), max(toDate({date_expr}))
-        FROM {source_table}
-        WHERE {where_sql}
-          AND {date_expr} IS NOT NULL
-          AND toDate({date_expr}) >= toDate('2026-01-01')
-        """
-    ).result_rows[0]
-    if row[0] is None or row[1] is None:
-        return []
-
-    current = max(row[0].replace(day=1), BATCH_DATE_FROM)
-    last = row[1].replace(day=1)
-    ranges: list[tuple[str, str]] = []
-    while current <= last:
-        if current.month == 12:
-            nxt = date(current.year + 1, 1, 1)
-        else:
-            nxt = date(current.year, current.month + 1, 1)
-        ranges.append((current.isoformat(), nxt.isoformat()))
-        current = nxt
-    return ranges
-
-
 def _swap_shadow(client, table: str) -> None:
     swap_shadow(client, f"ad_analytics.{table}", f"ad_analytics.{table}_new")
 
@@ -629,17 +599,13 @@ def _rebuild_batched(client, table: str, empty_create_sql: str, batch_select_sql
     target = f"ad_analytics.{table}"
     shadow = f"ad_analytics.{table}_new"
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(empty_create_sql.replace(target, shadow, 1))
-    total = 0
+    client.command(empty_create_sql.replace(target, shadow, 1), settings=SAFE_QUERY_SETTINGS)
     for idx, select_sql in enumerate(batch_select_sqls, start=1):
         t0 = time.perf_counter()
-        client.command(f"INSERT INTO {shadow}\n{select_sql}")
-        rows = int(client.query(f"SELECT count() FROM {shadow}").result_rows[0][0])
-        inserted = rows - total
-        total = rows
-        logger.info("    batch %s %d/%d: +%d строк за %.1f сек", table, idx, len(batch_select_sqls), inserted, time.perf_counter() - t0)
+        client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
+        logger.info("    batch %s %d/%d inserted за %.1f сек", table, idx, len(batch_select_sqls), time.perf_counter() - t0)
     _swap_shadow(client, table)
-    return int(client.query(f"SELECT count() FROM {target}").result_rows[0][0])
+    return int(client.query(f"SELECT count() FROM {target}", settings=SAFE_QUERY_SETTINGS).result_rows[0][0])
 
 
 def _source_types_sql(source_types: tuple[str, ...]) -> str:
@@ -684,45 +650,27 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     parts: list[str] = []
     shadow = f"ad_analytics.{SOURCE_STORE}_new"
 
-    direct_ranges = _month_ranges(
-        client,
-        "ad_analytics.raw_yandex",
-        "`Date`",
-        "`CampaignId` != 0",
-    )
+    direct_ranges = day_ranges("2026-01-01")
     direct_batches = [
         _select_from_create(_build_direct_sql(SOURCE_STORE, f"AND ry.`Date` >= toDate('{lo}') AND ry.`Date` < toDate('{hi}')"))
         for lo, hi in direct_ranges
     ]
-    logger.info("  rebuild ad_analytics.%s (%d direct monthly batches)", SOURCE_STORE, len(direct_batches))
+    logger.info("  rebuild ad_analytics.%s (%d direct daily batches)", SOURCE_STORE, len(direct_batches))
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(_build_direct_sql(f"{SOURCE_STORE}_new", "AND 0"))
-    before_direct = count_rows(client, shadow)
-    inserted_before = before_direct
+    client.command(_build_direct_sql(f"{SOURCE_STORE}_new", "AND 0"), settings=SAFE_QUERY_SETTINGS)
     for idx, select_sql in enumerate(direct_batches, start=1):
         t_batch = time.perf_counter()
-        client.command(f"INSERT INTO {shadow}\n{select_sql}")
-        after = count_rows(client, shadow)
+        client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
         logger.info(
-            "    batch %s %d/%d: +%d строк за %.1f сек",
+            "    batch %s %d/%d inserted за %.1f сек",
             SOURCE_STORE,
             idx,
             len(direct_batches),
-            after - inserted_before,
             time.perf_counter() - t_batch,
         )
-        inserted_before = after
-    rows = count_rows(client, shadow) - before_direct
-    total += rows
-    parts.append(f"direct={rows:,}")
-    logger.info("  %s direct rows: %d", SOURCE_STORE, rows)
+    parts.append("direct=inserted")
 
-    lead_ranges = _month_ranges(
-        client,
-        "ad_analytics.raw_leads",
-        "created_date",
-        "created_date IS NOT NULL",
-    )
+    lead_ranges = day_ranges("2026-01-01")
 
     lead_builders = [
         ("big_analytics_seo", _build_seo_sql),
@@ -735,33 +683,28 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             _select_from_create(builder(f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"))
             for lo, hi in lead_ranges
         ]
-        logger.info("  append %s into ad_analytics.%s (%d monthly batches)", table, SOURCE_STORE, len(batch_selects))
-        before_table = count_rows(client, shadow)
-        inserted_before = before_table
+        logger.info("  append %s into ad_analytics.%s (%d daily batches)", table, SOURCE_STORE, len(batch_selects))
         for idx, select_sql in enumerate(batch_selects, start=1):
             t_batch = time.perf_counter()
-            client.command(f"INSERT INTO {shadow}\n{select_sql}")
-            after = count_rows(client, shadow)
+            client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
             logger.info(
-                "    batch %s %d/%d: +%d строк за %.1f сек",
+                "    batch %s %d/%d inserted за %.1f сек",
                 table,
                 idx,
                 len(batch_selects),
-                after - inserted_before,
                 time.perf_counter() - t_batch,
             )
-            inserted_before = after
-        rows = count_rows(client, shadow) - before_table
-        total += rows
-        parts.append(f"{table}={rows:,}")
-        logger.info("  %s: %d строк за %.1f сек", table, rows, time.perf_counter() - t_table)
+        parts.append(f"{table}=inserted")
+        logger.info("  %s inserted за %.1f сек", table, time.perf_counter() - t_table)
 
     _swap_shadow(client, SOURCE_STORE)
     recreate_source_views(client)
 
+    source_rows = count_rows(client, f"ad_analytics.{SOURCE_STORE}")
     rows = count_rows(client, "ad_analytics.big_analytics_reviews")
     parts.append(f"big_analytics_reviews={rows:,}")
-    parts.append(f"{SOURCE_STORE}={count_rows(client, f'ad_analytics.{SOURCE_STORE}'):,}")
+    parts.append(f"{SOURCE_STORE}={source_rows:,}")
+    total = source_rows + rows
 
     details = ", ".join(parts)
     logger.info("Шаг 3 v6_ch завершён за %.1f сек: %s", time.perf_counter() - t0, details)

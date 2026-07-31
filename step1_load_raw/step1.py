@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, EXCLUDED_DOMAIN_IDS, RAW_TARGET_TABLES
-from config.ch_utils import count_rows, month_ranges_from_table, swap_shadow
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
 
 logger = logging.getLogger("pipeline.step1")
 
@@ -45,7 +45,7 @@ def _excluded_domain_list() -> str:
 
 def _drop_and_create(client, table: str, create_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS {table} SYNC")
-    client.command(create_sql)
+    client.command(create_sql, settings=SAFE_QUERY_SETTINGS)
 
 
 def _total_cost_expr() -> str:
@@ -306,14 +306,10 @@ def _rebuild_batched(client, logical_name: str, empty_sql: str, batch_selects: l
     table = RAW_TARGET_TABLES[logical_name]
     shadow = f"{table}_new"
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(empty_sql.replace(table, shadow, 1))
-    total = 0
+    client.command(empty_sql.replace(table, shadow, 1), settings=SAFE_QUERY_SETTINGS)
     for idx, select_sql in enumerate(batch_selects, start=1):
-        before = count_rows(client, shadow)
-        client.command(f"INSERT INTO {shadow}\n{select_sql}")
-        after = count_rows(client, shadow)
-        total = after
-        logger.info("    %s batch %d/%d: +%d строк", logical_name, idx, len(batch_selects), after - before)
+        client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
+        logger.info("    %s daily batch %d/%d inserted", logical_name, idx, len(batch_selects))
     swap_shadow(client, table, shadow)
     return count_rows(client, table)
 
@@ -327,36 +323,24 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     total = 0
 
     t_table = time.perf_counter()
-    yandex_ranges = month_ranges_from_table(
-        client,
-        "raw_data.yandex_direct_report_rows",
-        "toDate(day)",
-        "campaign_id != 0",
-        DATE_FROM,
-    )
+    yandex_ranges = day_ranges(DATE_FROM)
     yandex_batches = [
         _select_from_create(_raw_yandex_sql(f"AND toDate(day) >= toDate('{lo}') AND toDate(day) < toDate('{hi}')"))
         for lo, hi in yandex_ranges
     ]
-    logger.info("  rebuild %s (%d monthly batches)", RAW_TARGET_TABLES["raw_yandex"], len(yandex_batches))
+    logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_yandex"], len(yandex_batches))
     rows = _rebuild_batched(client, "raw_yandex", _raw_yandex_sql("AND 0"), yandex_batches)
     total += rows
     details_parts.append(f"raw_yandex={rows:,}")
     logger.info("  raw_yandex: %d строк за %.1f сек", rows, time.perf_counter() - t_table)
 
-    lead_ranges = month_ranges_from_table(
-        client,
-        "raw_data.leads_all",
-        "created_date",
-        "created_date IS NOT NULL",
-        DATE_FROM,
-    )
+    lead_ranges = day_ranges(DATE_FROM)
     t_table = time.perf_counter()
     lead_batches = [
         _select_from_create(_raw_leads_sql(f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"))
         for lo, hi in lead_ranges
     ]
-    logger.info("  rebuild %s (%d monthly batches)", RAW_TARGET_TABLES["raw_leads"], len(lead_batches))
+    logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_leads"], len(lead_batches))
     rows = _rebuild_batched(client, "raw_leads", _raw_leads_sql("AND 0"), lead_batches)
     total += rows
     details_parts.append(f"raw_leads={rows:,}")
@@ -367,7 +351,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         _select_from_create(_raw_calls_sql(f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"))
         for lo, hi in lead_ranges
     ]
-    logger.info("  rebuild %s (%d monthly batches)", RAW_TARGET_TABLES["raw_calls"], len(call_batches))
+    logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_calls"], len(call_batches))
     rows = _rebuild_batched(client, "raw_calls", _raw_calls_sql("AND 0"), call_batches)
     total += rows
     details_parts.append(f"raw_calls={rows:,}")
@@ -386,7 +370,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         details_parts.append(f"{logical_name}={rows:,}")
         logger.info("  %s: %d строк за %.1f сек", logical_name, rows, time.perf_counter() - t_table)
 
-    cost_sum = client.query(f"SELECT sum(total_cost) FROM {RAW_TARGET_TABLES['raw_yandex']}").result_rows[0][0]
+    cost_sum = client.query(
+        f"SELECT sum(total_cost) FROM {RAW_TARGET_TABLES['raw_yandex']}",
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows[0][0]
     if not cost_sum:
         raise RuntimeError(
             f"RAW_YANDEX_COST_GUARD: {RAW_TARGET_TABLES['raw_yandex']}.total_cost=0 после загрузки"

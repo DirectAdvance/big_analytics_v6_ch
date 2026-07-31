@@ -1,0 +1,145 @@
+"""Optional extra star dimensions for the ClickHouse Power BI model.
+
+These builders are intentionally not wired into the default pipeline. They are
+for the next PBI remap phase: build dimensions, audit coverage, then remove
+duplicated descriptive columns from large facts only after parity checks.
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from config.ch_db import get_client
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, q, swap_shadow
+
+log = logging.getLogger("build_star_extensions")
+
+
+def _replace_table(client, name: str, engine_sql: str, select_sql: str) -> int:
+    shadow = f"ad_analytics.{name}_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        {engine_sql}
+        AS
+        {select_sql}
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    swap_shadow(client, f"ad_analytics.{name}", shadow)
+    rows = count_rows(client, f"ad_analytics.{q(name)}")
+    log.info("  %s=%d", name, rows)
+    return rows
+
+
+def build_dim_adformat(client) -> int:
+    return _replace_table(
+        client,
+        "Dim_AdFormat",
+        "ENGINE = MergeTree ORDER BY ad_format_key",
+        """
+        SELECT
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_format, ''))) AS ad_format_key,
+            anyLast(ad_format) AS ad_format
+        FROM ad_analytics.fact_adformat_spend
+        WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_format, ''))))
+        GROUP BY ad_format_key
+        """,
+    )
+
+
+def build_dim_adnetwork(client) -> int:
+    return _replace_table(
+        client,
+        "Dim_AdNetworkType",
+        "ENGINE = MergeTree ORDER BY ad_network_type_key",
+        """
+        SELECT
+            ad_network_type_key,
+            anyLast(ad_network_type) AS ad_network_type,
+            anyLast(AdNetworkType) AS AdNetworkType
+        FROM
+        (
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
+                ad_network_type,
+                ad_network_type AS AdNetworkType
+            FROM ad_analytics.fact_region_spend
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))))
+            GROUP BY ad_network_type_key, ad_network_type
+
+            UNION ALL
+
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
+                ad_network_type,
+                ad_network_type AS AdNetworkType
+            FROM ad_analytics.fact_adformat_spend
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))))
+            GROUP BY ad_network_type_key, ad_network_type
+
+            UNION ALL
+
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
+                ad_network_type,
+                ad_network_type AS AdNetworkType
+            FROM ad_analytics.fact_criterion_spend
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))))
+            GROUP BY ad_network_type_key, ad_network_type
+
+            UNION ALL
+
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))) AS ad_network_type_key,
+                AdNetworkType AS ad_network_type,
+                AdNetworkType
+            FROM ad_analytics.fact_big_analytics
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))))
+            GROUP BY ad_network_type_key, AdNetworkType
+        )
+        GROUP BY ad_network_type_key
+        """,
+    )
+
+
+def build_dim_source(client) -> int:
+    return _replace_table(
+        client,
+        "Dim_Source",
+        "ENGINE = MergeTree ORDER BY source_key",
+        """
+        SELECT
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))) AS source_key,
+            anyLast(`источник`) AS `источник`,
+            anyLast(`поставщик`) AS `поставщик`,
+            anyLast(_source_table) AS _source_table
+        FROM ad_analytics.fact_big_analytics
+        WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))))
+        GROUP BY source_key
+        """,
+    )
+
+
+def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    client = get_client()
+    t0 = time.perf_counter()
+    rows = {
+        "Dim_AdFormat": build_dim_adformat(client),
+        "Dim_AdNetworkType": build_dim_adnetwork(client),
+        "Dim_Source": build_dim_source(client),
+    }
+    details = ", ".join(f"{key}={value:,}" for key, value in rows.items())
+    log.info("build_star_extensions завершён за %.1f сек: %s", time.perf_counter() - t0, details)
+    return {"rows": sum(rows.values()), "details": details}
+
+
+if __name__ == "__main__":
+    print(run())
