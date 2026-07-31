@@ -33,6 +33,7 @@ PBI_SOURCE_OBJECTS = [
     "Dim_Campaign",
     "Dim_Date",
     "Dim_Location",
+    "Dim_PlacementFeed",
     "Dim_Site",
     "arc_fact",
     "arf_fact",
@@ -63,6 +64,11 @@ PBI_SOURCE_OBJECTS = [
 def _replace_view(client, name: str, select_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC")
     client.command(f"CREATE VIEW ad_analytics.{q(name)} AS {select_sql}")
+
+
+def _replace_table(client, name: str, engine_sql: str, select_sql: str) -> None:
+    client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC")
+    client.command(f"CREATE TABLE ad_analytics.{q(name)} {engine_sql} AS {select_sql}")
 
 
 def drop_bi_views(client) -> None:
@@ -141,10 +147,46 @@ def build_pixel_score(client) -> int:
     return count_rows(client, "ad_analytics.pixel_score")
 
 
+def build_dim_placement_feed(client) -> int:
+    _replace_table(
+        client,
+        "Dim_PlacementFeed",
+        "ENGINE = MergeTree ORDER BY placement_feed_key",
+        """
+        SELECT
+            placement_feed_key,
+            argMax(placement, sort_weight) AS placement,
+            CAST(NULL, 'Nullable(String)') AS feed_name,
+            CAST(NULL, 'Nullable(String)') AS feed_url,
+            argMax(feed_key, sort_weight) AS feed_key,
+            argMax(feed_url_key, sort_weight) AS feed_url_key,
+            argMax(ad_network_type, sort_weight) AS ad_network_type,
+            argMax(AdNetworkType, sort_weight) AS AdNetworkType
+        FROM
+        (
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
+                trim(BOTH ' ' FROM ifNull(placement, '')) AS placement,
+                trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_key,
+                trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_url_key,
+                ad_network_type,
+                ad_network_type AS AdNetworkType,
+                tuple(count(), lengthUTF8(placement)) AS sort_weight
+            FROM ad_analytics.fact_direct_feed_funnel
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))))
+            GROUP BY placement_feed_key, placement, ad_network_type
+        )
+        GROUP BY placement_feed_key
+        """
+    )
+    return count_rows(client, "ad_analytics.Dim_PlacementFeed")
+
+
 def _feed_funnel_pbi_sql() -> str:
     return """
         SELECT
             date,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
             CAST(NULL, 'Nullable(Int64)') AS feed_id,
             CAST(NULL, 'Nullable(String)') AS feed_name,
             CAST(NULL, 'Nullable(String)') AS feed_url,
@@ -214,6 +256,7 @@ def build_arp_fact(client) -> int:
         f"""
         SELECT
             date, domain AS `домен`, account_login AS `логин`, ad_network_type, placement,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
             placement AS placement_key, cost, all_forms AS `Все формы`,
             crm_order_created AS `CRM: Заказ создан`, crm_order_paid AS `CRM: Заказ оплачен`,
             toDecimal64(0, 6) AS `CRM: Спам заказ`, toDecimal64(0, 6) AS `CRM: Заказ отменен`,
@@ -417,6 +460,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     rows = {
         "pbi_big_analytics_full": build_pbi_full(client),
         "pixel_score": build_pixel_score(client),
+        "Dim_PlacementFeed": build_dim_placement_feed(client),
         "arp_fact": build_arp_fact(client),
     }
     rows.update(create_light_aliases(client))
