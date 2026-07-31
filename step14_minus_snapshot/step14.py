@@ -26,8 +26,8 @@ for _p in Path(__file__).resolve().parents:
 from loader import load_yandex_direct, load_yandex_direct_reviews  # noqa: E402
 
 from config.ch_db import get_client  # noqa: E402
+from config.ch_settings import MINUS_SNAPSHOT_BLOCKS  # noqa: E402
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, q, swap_shadow, table_exists  # noqa: E402
-from config.settings import MINUS_SNAPSHOT_BLOCKS  # noqa: E402
 
 logger = logging.getLogger("pipeline.step14")
 
