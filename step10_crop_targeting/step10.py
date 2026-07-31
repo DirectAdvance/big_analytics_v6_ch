@@ -8,21 +8,26 @@ step adds those costs as zero-funnel overlay rows to avoid double-counting leads
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
-from step3_build_sources.step3 import SOURCE_STORE
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, range_batches, replace_view, swap_shadow, table_exists
+from step3_build_sources.step3 import SOURCE_STORE, _metric_expr
 
 logger = logging.getLogger("pipeline.step10")
 
 COST_OVERLAY_TABLE = "big_analytics_cost_overlays"
+TELEGA_PRICE_OVERRIDES = "telega_in_order_price_overrides"
+TELEGA_FIELD_OVERRIDES = "telega_in_order_field_overrides"
+JOIN_QUERY_SETTINGS = {**SAFE_QUERY_SETTINGS, "join_use_nulls": 1}
 
 
 _GS_DATE = "assumeNotNull(toDate(parseDateTimeBestEffortOrNull(ifNull(g.`Дата`, ''))))"
@@ -59,6 +64,515 @@ _API_SOURCE = """
 def _require(client, database: str, table: str) -> None:
     if not table_exists(client, database, table):
         raise RuntimeError(f"{database}.{table} отсутствует")
+
+
+def _telega_replacements_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "step0_sync_local" / "telega_in_orders_replacements.json"
+
+
+def _ensure_telega_field_overrides(client) -> int:
+    client.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS ad_analytics.{TELEGA_FIELD_OVERRIDES}
+        (
+            id Int64,
+            post_links Nullable(String),
+            utm_source Nullable(String),
+            utm_medium Nullable(String),
+            utm_campaign Nullable(String),
+            utm_content Nullable(String),
+            utm_term Nullable(String),
+            loaded_at DateTime DEFAULT now()
+        )
+        ENGINE = ReplacingMergeTree(loaded_at)
+        ORDER BY id
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+
+    path = _telega_replacements_path()
+    if not path.exists():
+        return 0
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = []
+    for item in payload.get("replacements", []):
+        rows.append(
+            (
+                int(item["id"]),
+                item.get("post_links"),
+                item.get("utm_source"),
+                item.get("utm_medium"),
+                item.get("utm_campaign"),
+                item.get("utm_content"),
+                item.get("utm_term"),
+            )
+        )
+    client.command(f"TRUNCATE TABLE ad_analytics.{TELEGA_FIELD_OVERRIDES}", settings=SAFE_QUERY_SETTINGS)
+    if rows:
+        client.insert(
+            f"ad_analytics.{TELEGA_FIELD_OVERRIDES}",
+            rows,
+            column_names=[
+                "id",
+                "post_links",
+                "utm_source",
+                "utm_medium",
+                "utm_campaign",
+                "utm_content",
+                "utm_term",
+            ],
+        )
+    return len(rows)
+
+
+def _ensure_telega_price_overrides(client) -> int:
+    client.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS ad_analytics.{TELEGA_PRICE_OVERRIDES}
+        (
+            id Int64,
+            total_price Decimal(18, 6),
+            source String,
+            loaded_at DateTime DEFAULT now()
+        )
+        ENGINE = ReplacingMergeTree(loaded_at)
+        ORDER BY id
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    current_rows = int(
+        client.query(
+            f"SELECT count() FROM ad_analytics.{TELEGA_PRICE_OVERRIDES}",
+            settings=SAFE_QUERY_SETTINGS,
+        ).result_rows[0][0]
+    )
+    if current_rows:
+        return current_rows
+
+    if table_exists(client, "ad_analytics", "local_telega_in_orders"):
+        legacy_rows = client.query(
+            """
+            SELECT id, total_price
+            FROM ad_analytics.local_telega_in_orders
+            WHERE id IS NOT NULL AND total_price IS NOT NULL
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        ).result_rows
+        if legacy_rows:
+            client.insert(
+                f"ad_analytics.{TELEGA_PRICE_OVERRIDES}",
+                [(int(row[0]), Decimal(str(row[1])), "seed_from_ch_legacy_local_telega") for row in legacy_rows],
+                column_names=["id", "total_price", "source"],
+            )
+            return len(legacy_rows)
+    return 0
+
+
+def _rebuild_local_telega_orders(client) -> int:
+    _require(client, "raw_data", "telega_in_orders")
+    shadow = "ad_analytics.local_telega_in_orders_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY (id, ifNull(order_id, 0))
+        AS
+        WITH
+        field_override AS
+        (
+            SELECT
+                id,
+                anyLast(post_links) AS post_links,
+                anyLast(utm_source) AS utm_source,
+                anyLast(utm_medium) AS utm_medium,
+                anyLast(utm_campaign) AS utm_campaign,
+                anyLast(utm_content) AS utm_content,
+                anyLast(utm_term) AS utm_term
+            FROM ad_analytics.{TELEGA_FIELD_OVERRIDES}
+            GROUP BY id
+        ),
+        price_override AS
+        (
+            SELECT id, argMax(total_price, loaded_at) AS total_price
+            FROM ad_analytics.{TELEGA_PRICE_OVERRIDES}
+            GROUP BY id
+        )
+        SELECT
+            toInt64(ifNull(r.id, 0)) AS id,
+            CAST(r.uid, 'Nullable(String)') AS uid,
+            CAST(r.order_id, 'Nullable(Int64)') AS order_id,
+            CAST(r.order_project_name, 'Nullable(String)') AS order_project_name,
+            CAST(r.order_comment, 'Nullable(String)') AS order_comment,
+            CAST(r.channel_id, 'Nullable(Int64)') AS channel_id,
+            CAST(r.channel_name, 'Nullable(String)') AS channel_name,
+            CAST(r.channel_link, 'Nullable(String)') AS channel_link,
+            CAST(r.post_link, 'Nullable(String)') AS post_link,
+            CAST(r.placement_format, 'Nullable(String)') AS placement_format,
+            CAST(r.status, 'Nullable(String)') AS status,
+            CAST(r.cancel_comment, 'Nullable(String)') AS cancel_comment,
+            CAST(toDecimal64OrNull(toString(r.price), 6), 'Nullable(Decimal(18, 6))') AS price,
+            CAST(coalesce(p.total_price, toDecimal64OrNull(toString(r.price), 6)), 'Nullable(Decimal(18, 6))') AS total_price,
+            CAST(r.total_views, 'Nullable(Int64)') AS total_views,
+            CAST(r.clicks, 'Nullable(Int64)') AS clicks,
+            CAST(coalesce(f.post_links, r.post_links), 'Nullable(String)') AS post_links,
+            CAST(coalesce(f.utm_source, r.utm_source), 'Nullable(String)') AS utm_source,
+            CAST(coalesce(f.utm_medium, r.utm_medium), 'Nullable(String)') AS utm_medium,
+            CAST(coalesce(f.utm_campaign, r.utm_campaign), 'Nullable(String)') AS utm_campaign,
+            CAST(coalesce(f.utm_content, r.utm_content), 'Nullable(String)') AS utm_content,
+            CAST(coalesce(f.utm_term, r.utm_term), 'Nullable(String)') AS utm_term,
+            CAST(parseDateTimeBestEffortOrNull(ifNull(r.created_at, '')), 'Nullable(DateTime)') AS created_at,
+            CAST(parseDateTimeBestEffortOrNull(ifNull(r.completed_at, '')), 'Nullable(DateTime)') AS completed_at,
+            CAST(parseDateTimeBestEffortOrNull(ifNull(r.done_at, '')), 'Nullable(DateTime)') AS done_at,
+            CAST(parseDateTimeBestEffortOrNull(ifNull(r.run_at, '')), 'Nullable(DateTime)') AS run_at,
+            CAST(r.raw, 'Nullable(String)') AS raw,
+            toDateTime(r.loaded_at) AS updated_at
+        FROM raw_data.telega_in_orders r
+        LEFT JOIN field_override f ON f.id = toInt64(ifNull(r.id, 0))
+        LEFT JOIN price_override p ON p.id = toInt64(ifNull(r.id, 0))
+        """,
+        settings=JOIN_QUERY_SETTINGS,
+    )
+    swap_shadow(client, "ad_analytics.local_telega_in_orders", shadow)
+    return count_rows(client, "ad_analytics.local_telega_in_orders")
+
+
+def _effective_date_expr(alias: str = "o") -> str:
+    return (
+        f"coalesce(if(match(ifNull({alias}.utm_content, ''), '^[0-9]{{8}}$'), "
+        f"toDateOrNull(concat(substring(ifNull({alias}.utm_content, ''), 5, 4), '-', "
+        f"substring(ifNull({alias}.utm_content, ''), 3, 2), '-', substring(ifNull({alias}.utm_content, ''), 1, 2))), NULL), "
+        f"toDate({alias}.completed_at), toDate({alias}.done_at), toDate({alias}.created_at))"
+    )
+
+
+def _raw_domain_expr(alias: str = "o") -> str:
+    return (
+        f"lowerUTF8(trim(coalesce("
+        f"nullIf(extract(JSONExtractString(ifNull({alias}.post_links, ''), 1), 'https?://([^/\"?]+)'), ''), "
+        f"nullIf(extract(ifNull({alias}.post_link, ''), 'https?://([^/\"?]+)'), '')"
+        f"))) "
+    )
+
+
+def _campaign_source_expr(channel_link: str, utm_source: str) -> str:
+    return f"""
+        replaceRegexpOne(
+            multiIf(
+                positionCaseInsensitive(ifNull({channel_link}, ''), 't.me/') > 0
+                    OR positionCaseInsensitive(ifNull({channel_link}, ''), 'telegram.me/') > 0, 'telegram',
+                positionCaseInsensitive(ifNull({channel_link}, ''), 'instagram.com/') > 0, 'instagram',
+                positionCaseInsensitive(ifNull({channel_link}, ''), 'vk.com/') > 0, 'VK',
+                positionCaseInsensitive(ifNull({channel_link}, ''), 'tiktok.com/') > 0, 'TikTok',
+                positionCaseInsensitive(ifNull({channel_link}, ''), 'max.ru/') > 0, 'Max',
+                lowerUTF8(ifNull({utm_source}, '')) = 'max', 'Max',
+                lowerUTF8(ifNull({utm_source}, '')) = 'telegram', 'telegram',
+                ifNull({utm_source}, '')
+            ),
+            '_tp8$',
+            ''
+        )
+    """
+
+
+def _rebuild_telega_leads_agg(client) -> int:
+    _require(client, "ad_analytics", "raw_leads")
+    target = "ad_analytics._tmp_telega_leads_agg"
+    metrics = _metric_expr("status", "reason", "source_type", "salon")
+    client.command(f"DROP TABLE IF EXISTS {target} SYNC", settings=SAFE_QUERY_SETTINGS)
+    client.command(
+        f"""
+        CREATE TABLE {target}
+        ENGINE = MergeTree
+        ORDER BY (
+            ifNull(utm_campaign, ''),
+            ifNull(lead_utm_content, ''),
+            ifNull(lead_domain, ''),
+            ifNull(lead_utm_source, ''),
+            ifNull(lead_utm_medium, '')
+        )
+        AS
+        WITH lead_scored AS
+        (
+            SELECT
+                utm_campaign,
+                leftPad(trim(ifNull(utm_content, '')), 8, '0') AS lead_utm_content,
+                lowerUTF8(trim(ifNull(domain, ''))) AS lead_domain,
+                lowerUTF8(trim(ifNull(utm_source, ''))) AS lead_utm_source,
+                lowerUTF8(trim(ifNull(utm_medium, ''))) AS lead_utm_medium,
+                {metrics}
+            FROM ad_analytics.raw_leads
+            WHERE ifNull(utm_campaign, '') != ''
+        )
+        SELECT
+            utm_campaign,
+            lead_utm_content,
+            lead_domain,
+            lead_utm_source,
+            lead_utm_medium,
+            toInt64(sum(kol_vo_zayavok)) AS kol_vo_zayavok,
+            toInt64(sum(korr)) AS korr,
+            toInt64(sum(kval)) AS kval,
+            toInt64(sum(priezd)) AS priezd,
+            toInt64(sum(prodazhi)) AS prodazhi,
+            toInt64(sum(nekorr)) AS nekorr,
+            toInt64(sum(ne_otvechaet)) AS ne_otvechaet,
+            toInt64(sum(filtr)) AS filtr,
+            toInt64(sum(nedozvon)) AS nedozvon,
+            toInt64(sum(priedet)) AS priedet,
+            toInt64(sum(dohod_do_kredita)) AS dohod_do_kredita,
+            toInt64(sum(dobro)) AS dobro
+        FROM lead_scored
+        GROUP BY utm_campaign, lead_utm_content, lead_domain, lead_utm_source, lead_utm_medium
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    return count_rows(client, target)
+
+
+def _rebuild_telega_lead_fact(client) -> int:
+    _require(client, "ad_analytics", "local_telega_in_orders")
+    _require(client, "raw_data", "gsheet_sites")
+    leads_agg = _rebuild_telega_leads_agg(client)
+    logger.info("  Telega leads aggregate: %d rows", leads_agg)
+    shadow = "ad_analytics.crop_targeting_api_telegain_lead_new"
+    effective_date = _effective_date_expr("o")
+    raw_domain = _raw_domain_expr("o")
+    source_expr = _campaign_source_expr("d.channel_link", "d.utm_source")
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(domain, ''), ifNull(utm_campaign, ''), id)
+        AS
+        WITH
+        tio_raw AS
+        (
+            SELECT
+                o.*,
+                {effective_date} AS effective_date,
+                {raw_domain} AS raw_domain
+            FROM ad_analytics.local_telega_in_orders o
+            WHERE ifNull(o.status, '') = 'complete'
+        ),
+        tio_dated AS
+        (
+            SELECT
+                *,
+                multiIf(
+                    nullIf(raw_domain, '') IS NOT NULL AND raw_domain NOT IN ('telega.io', 'max.ru', 't.me'),
+                    raw_domain,
+                    lowerUTF8(trim(arrayElement(splitByChar(' ', ifNull(order_project_name, '')), 1)))
+                ) AS effective_domain
+            FROM tio_raw
+            WHERE effective_date >= toDate('{DATE_FROM}')
+        ),
+        tio_dedup AS
+        (
+            SELECT *
+            FROM
+            (
+                SELECT
+                    *,
+                    row_number() OVER (
+                        PARTITION BY
+                            effective_domain,
+                            ifNull(utm_campaign, ''),
+                            leftPad(trim(ifNull(utm_content, '')), 8, '0'),
+                            lowerUTF8(trim(ifNull(utm_source, ''))),
+                            lowerUTF8(trim(ifNull(utm_medium, ''))),
+                            ifNull(channel_link, ''),
+                            ifNull(total_price, toDecimal64(0, 6)),
+                            effective_date
+                        ORDER BY coalesce(completed_at, done_at, created_at) DESC, id DESC
+                    ) AS rn
+                FROM tio_dated
+            )
+            WHERE rn = 1
+        ),
+        gs_domain AS
+        (
+            SELECT
+                lowerUTF8(trim(ifNull(domain, ''))) AS domain_key,
+                anyLast(salon) AS salon,
+                anyLast(city) AS city,
+                anyLast(directologist) AS directologist,
+                anyLast(status) AS status,
+                anyLast(site_type) AS site_type,
+                anyLast(template) AS template,
+                anyLast(region) AS region,
+                anyLast(direction) AS direction
+            FROM raw_data.gsheet_sites
+            WHERE ifNull(domain, '') != ''
+            GROUP BY domain_key
+        )
+        SELECT
+            toInt32(row_number() OVER (ORDER BY d.effective_date, d.effective_domain, d.id)) AS id,
+            CAST(d.effective_date, 'Nullable(Date)') AS `Date`,
+            CAST(d.total_price, 'Nullable(Decimal(18, 6))') AS total_cost,
+            CAST(d.channel_link, 'Nullable(String)') AS `CampaignName`,
+            CAST(d.effective_domain, 'Nullable(String)') AS domain,
+            CAST(gs.salon, 'Nullable(String)') AS `салон`,
+            CAST(gs.city, 'Nullable(String)') AS `город`,
+            CAST({source_expr}, 'Nullable(String)') AS `источник`,
+            CAST('Telega IN', 'Nullable(String)') AS `поставщик`,
+            CAST(gs.directologist, 'Nullable(String)') AS `специалист`,
+            CAST(gs.status, 'Nullable(String)') AS `статус`,
+            CAST(gs.site_type, 'Nullable(String)') AS `тип_сайта`,
+            CAST(gs.template, 'Nullable(String)') AS `шаблон`,
+            CAST(gs.region, 'Nullable(String)') AS `регион`,
+            CAST(coalesce(gs.direction, 'Авто'), 'Nullable(String)') AS direction,
+            CAST(ifNull(l.kol_vo_zayavok, 0), 'Nullable(Int64)') AS kol_vo_zayavok,
+            CAST(ifNull(l.korr, 0), 'Nullable(Int64)') AS korr,
+            CAST(ifNull(l.kval, 0), 'Nullable(Int64)') AS kval,
+            CAST(ifNull(l.priezd, 0), 'Nullable(Int64)') AS priezd,
+            CAST(ifNull(l.prodazhi, 0), 'Nullable(Int64)') AS prodazhi,
+            CAST(ifNull(l.nekorr, 0), 'Nullable(Int64)') AS nekorr,
+            CAST(ifNull(l.ne_otvechaet, 0), 'Nullable(Int64)') AS ne_otvechaet,
+            CAST(ifNull(l.filtr, 0), 'Nullable(Int64)') AS filtr,
+            CAST(ifNull(l.nedozvon, 0), 'Nullable(Int64)') AS nedozvon,
+            CAST(ifNull(l.priedet, 0), 'Nullable(Int64)') AS priedet,
+            CAST(ifNull(l.dohod_do_kredita, 0), 'Nullable(Int64)') AS dohod_do_kredita,
+            CAST(ifNull(l.dobro, 0), 'Nullable(Int64)') AS dobro,
+            CAST(d.utm_campaign, 'Nullable(String)') AS utm_campaign
+        FROM tio_dedup d
+        LEFT JOIN gs_domain gs ON gs.domain_key = d.effective_domain
+        LEFT JOIN ad_analytics._tmp_telega_leads_agg l
+          ON l.utm_campaign = ifNull(d.utm_campaign, '')
+         AND l.lead_utm_content = leftPad(trim(ifNull(d.utm_content, '')), 8, '0')
+         AND l.lead_domain = d.effective_domain
+         AND l.lead_utm_source = lowerUTF8(trim(ifNull(d.utm_source, '')))
+         AND l.lead_utm_medium = lowerUTF8(trim(ifNull(d.utm_medium, '')))
+        """,
+        settings=JOIN_QUERY_SETTINGS,
+    )
+    swap_shadow(client, "ad_analytics.crop_targeting_api_telegain_lead", shadow)
+    client.command("DROP TABLE IF EXISTS ad_analytics._tmp_telega_leads_agg SYNC", settings=SAFE_QUERY_SETTINGS)
+    return count_rows(client, "ad_analytics.crop_targeting_api_telegain_lead")
+
+
+def _rebuild_telega_errors(client) -> int:
+    _require(client, "ad_analytics", "local_telega_in_orders")
+    _require(client, "raw_data", "gsheet_sites")
+    shadow = "ad_analytics.local_telega_in_orders_errors_new"
+    effective_date = _effective_date_expr("o")
+    raw_domain = _raw_domain_expr("o")
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY (ifNull(id, 0), ifNull(error_type, ''))
+        AS
+        WITH
+        orders AS
+        (
+            SELECT
+                o.*,
+                {effective_date} AS effective_date,
+                multiIf(
+                    nullIf({raw_domain}, '') IS NOT NULL AND {raw_domain} NOT IN ('telega.io', 'max.ru', 't.me'),
+                    {raw_domain},
+                    lowerUTF8(trim(arrayElement(splitByChar(' ', ifNull(o.order_project_name, '')), 1)))
+                ) AS effective_domain,
+                leftPad(trim(ifNull(o.utm_content, '')), 8, '0') AS utm_content_norm
+            FROM ad_analytics.local_telega_in_orders o
+            WHERE ifNull(o.status, '') = 'complete'
+              AND o.created_at >= toDateTime('2026-05-01 00:00:00')
+        ),
+        gs_domain AS
+        (
+            SELECT
+                lowerUTF8(trim(ifNull(domain, ''))) AS domain_key,
+                anyLast(status) AS status,
+                anyLast(directologist) AS directologist,
+                anyLast(salon) AS salon,
+                anyLast(city) AS city,
+                anyLast(region) AS region
+            FROM raw_data.gsheet_sites
+            WHERE ifNull(domain, '') != ''
+            GROUP BY domain_key
+        ),
+        error_rows AS
+        (
+            SELECT
+                o.id,
+                o.order_id,
+                o.order_project_name,
+                o.post_links,
+                o.status,
+                o.utm_source,
+                o.utm_medium,
+                o.utm_campaign,
+                o.utm_content,
+                o.utm_content_norm,
+                o.effective_domain,
+                gs.status AS site_status,
+                gs.directologist,
+                gs.salon,
+                gs.city,
+                gs.region,
+                o.total_price,
+                o.created_at,
+                arrayFilter(x -> x.2 != '', [
+                    ('неверный utm_content',
+                     multiIf(ifNull(o.utm_content, '') = '', 'utm_content пустой/NULL',
+                             NOT match(o.utm_content_norm, '^[0-9]{{8}}$'), concat('после lpad не 8 цифр: ', o.utm_content_norm), '')),
+                    ('пустой utm_campaign', if(ifNull(trim(o.utm_campaign), '') = '', 'utm_campaign пустой/NULL', '')),
+                    ('пустой utm_source', if(ifNull(trim(o.utm_source), '') = '', 'utm_source пустой/NULL', '')),
+                    ('пустой utm_medium', if(ifNull(trim(o.utm_medium), '') = '', 'utm_medium пустой/NULL', '')),
+                    ('домен не извлекается', if(ifNull(trim(o.effective_domain), '') = '', 'effective_domain пустой/NULL (нет host в post_links и пустой order_project_name)', ''))
+                ]) AS errors
+            FROM orders o
+            LEFT JOIN gs_domain gs ON gs.domain_key = o.effective_domain
+        )
+        SELECT
+            CAST(id, 'Nullable(Int64)') AS id,
+            CAST(order_id, 'Nullable(Int64)') AS order_id,
+            CAST(order_project_name, 'Nullable(String)') AS order_project_name,
+            CAST(post_links, 'Nullable(String)') AS post_links,
+            CAST(status, 'Nullable(String)') AS status,
+            CAST(utm_source, 'Nullable(String)') AS utm_source,
+            CAST(utm_medium, 'Nullable(String)') AS utm_medium,
+            CAST(utm_campaign, 'Nullable(String)') AS utm_campaign,
+            CAST(utm_content, 'Nullable(String)') AS utm_content,
+            CAST(utm_content_norm, 'Nullable(String)') AS utm_content_norm,
+            CAST(effective_domain, 'Nullable(String)') AS effective_domain,
+            CAST(site_status, 'Nullable(String)') AS site_status,
+            CAST(directologist, 'Nullable(String)') AS directologist,
+            CAST(salon, 'Nullable(String)') AS salon,
+            CAST(city, 'Nullable(String)') AS city,
+            CAST(region, 'Nullable(String)') AS region,
+            CAST(total_price, 'Nullable(Decimal(18, 6))') AS total_price,
+            CAST(created_at, 'Nullable(DateTime)') AS created_at,
+            CAST(arrayStringConcat(arrayMap(x -> x.1, errors), '; '), 'Nullable(String)') AS error_type,
+            CAST(arrayStringConcat(arrayMap(x -> x.2, errors), '; '), 'Nullable(String)') AS error_detail,
+            now() AS checked_at
+        FROM error_rows
+        WHERE length(errors) > 0
+        """,
+        settings=JOIN_QUERY_SETTINGS,
+    )
+    swap_shadow(client, "ad_analytics.local_telega_in_orders_errors", shadow)
+    return count_rows(client, "ad_analytics.local_telega_in_orders_errors")
+
+
+def _rebuild_telega_sources(client) -> tuple[int, int, int, int]:
+    field_rows = _ensure_telega_field_overrides(client)
+    price_rows = _ensure_telega_price_overrides(client)
+    local_rows = _rebuild_local_telega_orders(client)
+    lead_rows = _rebuild_telega_lead_fact(client)
+    error_rows = _rebuild_telega_errors(client)
+    logger.info(
+        "  Telega v6 rebuild: field_overrides=%d, price_overrides=%d, local=%d, lead_fact=%d, errors=%d",
+        field_rows,
+        price_rows,
+        local_rows,
+        lead_rows,
+        error_rows,
+    )
+    return local_rows, lead_rows, error_rows, price_rows
 
 
 def _create_empty_overlay(client, shadow: str) -> None:
@@ -280,26 +794,49 @@ def _insert_crop_api_costs(client, target: str) -> None:
 
 
 def _insert_vk_ads_costs(client, target: str) -> None:
-    _require(client, "ad_analytics", "local_vk_ads_stats_day")
+    _require(client, "raw_data", "vk_ads_stats_day")
     client.command(
         f"""
         INSERT INTO {target}
+        WITH vk_spend AS
+        (
+            SELECT
+                event_date,
+                account_id,
+                ad_plan_id,
+                anyLast(ad_plan_name) AS ad_plan_name,
+                sum(spent) AS spent
+            FROM
+            (
+                SELECT
+                    toDateOrNull(date) AS event_date,
+                    account_id,
+                    ad_plan_id,
+                    ad_plan_name,
+                    ifNull(spent, 0) AS spent
+                FROM raw_data.vk_ads_stats_day
+                WHERE toDateOrNull(date) >= toDate('{DATE_FROM}')
+                  AND ifNull(spent, 0) != 0
+            )
+            WHERE event_date IS NOT NULL
+            GROUP BY event_date, account_id, ad_plan_id
+        )
         SELECT
-            concat('vk_ads_cost|', toString(date), '|', toString(ifNull(account_id, 0)), '|', toString(ifNull(ad_plan_id, 0))) AS key3,
-            date AS `Date`,
-            multiIf(toDayOfWeek(date) = 1, '1_Понедельник', toDayOfWeek(date) = 2, '2_Вторник',
-                    toDayOfWeek(date) = 3, '3_Среда', toDayOfWeek(date) = 4, '4_Четверг',
-                    toDayOfWeek(date) = 5, '5_Пятница', toDayOfWeek(date) = 6, '6_Суббота', '7_Воскресенье') AS `День недели`,
-            toStartOfWeek(date, 1) AS week_start,
+            concat('vk_ads_cost|', toString(event_date), '|', toString(ifNull(account_id, 0)), '|', toString(ifNull(ad_plan_id, 0))) AS key3,
+            event_date AS `Date`,
+            multiIf(toDayOfWeek(event_date) = 1, '1_Понедельник', toDayOfWeek(event_date) = 2, '2_Вторник',
+                    toDayOfWeek(event_date) = 3, '3_Среда', toDayOfWeek(event_date) = 4, '4_Четверг',
+                    toDayOfWeek(event_date) = 5, '5_Пятница', toDayOfWeek(event_date) = 6, '6_Суббота', '7_Воскресенье') AS `День недели`,
+            toStartOfWeek(event_date, 1) AS week_start,
             toInt64(ifNull(ad_plan_id, 0)) AS `CampaignId`,
-            anyLast(ad_plan_name) AS `CampaignName`,
+            ad_plan_name AS `CampaignName`,
             toInt64(0) AS `AdGroupId`,
             CAST(NULL, 'Nullable(String)') AS `AdGroupName`,
             CAST(NULL, 'Nullable(String)') AS `AdNetworkType`,
             CAST(NULL, 'Nullable(String)') AS `Device`,
             toDecimal64(0, 6) AS `Impressions`,
             toDecimal64(0, 6) AS `Clicks`,
-            toDecimal64(sum(spent), 6) AS total_cost,
+            toDecimal64(spent, 6) AS total_cost,
             CAST(NULL, 'Nullable(String)') AS domain,
             toInt64(0) AS `RlAdjustmentId`,
             '' AS `RlAdjustmentId_total`,
@@ -353,10 +890,7 @@ def _insert_vk_ads_costs(client, target: str) -> None:
             CAST('cost_overlay', 'Nullable(String)') AS cascade_level,
             CAST(NULL, 'Nullable(String)') AS campaign_status,
             CAST(NULL, 'Nullable(String)') AS payment_model
-        FROM ad_analytics.local_vk_ads_stats_day
-        WHERE date >= toDate('2026-01-01')
-          AND spent != 0
-        GROUP BY date, account_id, ad_plan_id
+        FROM vk_spend
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
@@ -365,8 +899,7 @@ def _insert_vk_ads_costs(client, target: str) -> None:
 def _rebuild_cost_overlays(client) -> tuple[int, float]:
     _require(client, "ad_analytics", SOURCE_STORE)
     _require(client, "ad_analytics", "gsheets_crop_targeting_account_leads")
-    _require(client, "ad_analytics", "crop_targeting_api_telegain_lead")
-    _require(client, "ad_analytics", "local_vk_ads_stats_day")
+    _rebuild_telega_sources(client)
 
     shadow = f"ad_analytics.{COST_OVERLAY_TABLE}_new"
     _create_empty_overlay(client, shadow)
@@ -419,7 +952,8 @@ def _overlay_full(client) -> tuple[int, float, float]:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    for idx, (lo, hi) in enumerate(day_ranges(DATE_FROM), start=1):
+    full_ranges = range_batches(DATE_FROM, days=7)
+    for idx, (lo, hi) in enumerate(full_ranges, start=1):
         client.command(
             f"""
             INSERT INTO ad_analytics.big_analytics_full_new
@@ -431,7 +965,7 @@ def _overlay_full(client) -> tuple[int, float, float]:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        logger.info("  full crop-overlay keep daily batch %d: %s -> %s", idx, lo, hi)
+        logger.info("  full crop-overlay keep weekly batch %d/%d: %s -> %s", idx, len(full_ranges), lo, hi)
     client.command(
         f"""
         INSERT INTO ad_analytics.big_analytics_full_new

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import importlib
 import logging
 import os
@@ -46,6 +47,7 @@ STEPS = [
     (1432, "criterion_spend.build_criterion_zayavki", "criterion_zayavki"),
     (144, "direct_feed_funnel.build", "direct_feed_funnel"),
     (145, "star_refactor.build_star", "build_star"),
+    (1451, "star_refactor.build_star_extensions", "build_star_extensions"),
     (146, "star_refactor.build_pbi_compat", "build_pbi_compat"),
     (14, "step14_minus_snapshot.step14", "step14"),
     (8, "step8_stats.step8", "step8"),
@@ -53,7 +55,9 @@ STEPS = [
 ]
 
 MAINTENANCE_STEPS = {2, 5, 7, 10}
-HEAVY_PBI_STEPS = {141, 142, 143, 1431, 1432, 144, 145, 146}
+HEAVY_PBI_STEPS = {141, 142, 143, 1431, 1432, 144, 145, 1451, 146}
+PARALLEL_BACKGROUND_STEPS = {14}
+STEP14_START_AT = {13, 131, 141, 142, 143, 1431, 1432, 144, 145, 1451, 146, 14, 8, 900}
 
 
 def ensure_quality_log(client) -> None:
@@ -119,6 +123,12 @@ def run_step(
         return False
 
 
+def run_step_isolated(run_id: str, step_num: int, module_path: str, label: str, verify_no_star: bool = False) -> bool:
+    client = get_client()
+    ensure_quality_log(client)
+    return run_step(client, run_id, step_num, module_path, label, verify_no_star=verify_no_star)
+
+
 def selected_steps(
     from_step: int | None,
     only_step: int | None,
@@ -155,6 +165,12 @@ def main(argv: list[str] | None = None) -> int:
         default=os.getenv("PIPELINE_SKIP_HEAVY_PBI", "").lower() in {"1", "true", "yes"},
         help="Skip spend/feed/star/PBI compatibility rebuilds for low-memory debug runs.",
     )
+    parser.add_argument(
+        "--no-parallel-safe",
+        action="store_true",
+        default=os.getenv("PIPELINE_PARALLEL_SAFE", "").lower() in {"0", "false", "no"},
+        help="Disable safe background steps such as Direct minus snapshot.",
+    )
     args = parser.parse_args(argv)
 
     run_id = uuid.uuid4().hex[:12]
@@ -165,18 +181,57 @@ def main(argv: list[str] | None = None) -> int:
     failed = False
     if args.skip_heavy_pbi:
         logger.info("skip-heavy-pbi enabled: пропускаю шаги %s", sorted(HEAVY_PBI_STEPS))
+    parallel_safe = not args.no_parallel_safe and args.only_step is None
+    if parallel_safe:
+        logger.info("parallel-safe enabled: step14 can run in background")
 
-    for step_num, module_path, label in selected_steps(
+    steps = selected_steps(
         args.from_step,
         args.only_step,
         args.include_maintenance,
         args.skip_heavy_pbi,
-    ):
+    )
+    step14_item = next((item for item in steps if item[0] == 14), None)
+    step14_future: concurrent.futures.Future | None = None
+    executor: concurrent.futures.ThreadPoolExecutor | None = None
+
+    def start_step14_background() -> None:
+        nonlocal executor, step14_future
+        if not parallel_safe or step14_item is None or step14_future is not None:
+            return
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline-step14")
+        step_num, module_path, label = step14_item
+        logger.info("parallel-safe: запускаю step14 в фоне")
+        step14_future = executor.submit(run_step_isolated, run_id, step_num, module_path, label, False)
+
+    def wait_step14_background() -> bool:
+        nonlocal executor, step14_future
+        if step14_future is None:
+            return True
+        logger.info("parallel-safe: жду завершения step14")
+        ok = bool(step14_future.result())
+        if executor is not None:
+            executor.shutdown(wait=True)
+        executor = None
+        step14_future = None
+        return ok
+
+    for step_num, module_path, label in steps:
+        if parallel_safe and step_num in STEP14_START_AT:
+            start_step14_background()
+        if parallel_safe and step_num in {8, 900} and step14_item is not None:
+            if not wait_step14_background():
+                failed = True
+                break
+        if parallel_safe and step_num in PARALLEL_BACKGROUND_STEPS:
+            continue
         verify_no_star = bool(args.skip_heavy_pbi and label == "verify")
         ok = run_step(client, run_id, step_num, module_path, label, verify_no_star=verify_no_star)
         if not ok:
             failed = True
             break
+    if not failed and step14_future is not None:
+        failed = not wait_step14_background()
     logger.info("big_analytics_v6_ch pipeline %s", "FAIL" if failed else "OK")
     return 1 if failed else 0
 

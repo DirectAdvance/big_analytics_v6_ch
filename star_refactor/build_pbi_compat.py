@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, q, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, range_batches, q, swap_shadow, table_exists
 
 log = logging.getLogger("build_pbi_compat")
 
@@ -118,11 +118,8 @@ def build_pbi_full(client) -> int:
     return count_rows(client, "ad_analytics.pbi_big_analytics_full")
 
 
-def build_pixel_score(client) -> int:
-    _replace_view(
-        client,
-        "pixel_score",
-        f"""
+def _pixel_score_sql(where_sql: str = "") -> str:
+    return f"""
         SELECT
             toStartOfMonth(`Date`) AS month,
             `салон`,
@@ -163,8 +160,35 @@ def build_pixel_score(client) -> int:
             prodazhi AS `pixel_продажи_домена`,
             prodazhi AS `attr_pixel_продажи_кампании`
         FROM ad_analytics.big_analytics_pixel_score
-        """
+        {where_sql}
+    """
+
+
+def build_pixel_score(client) -> int:
+    shadow = "ad_analytics.pixel_score_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(month)
+        ORDER BY (month, ifNull(domain, ''), ifNull(`салон`, ''))
+        AS
+        {_pixel_score_sql("WHERE 0")}
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
+    ranges = range_batches(DATE_FROM, days=7)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            {_pixel_score_sql(f"WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')")}
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  pixel_score weekly batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.pixel_score", shadow)
     return count_rows(client, "ad_analytics.pixel_score")
 
 
@@ -193,7 +217,7 @@ def build_dim_placement_feed(client) -> int:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    ranges = day_ranges(DATE_FROM)
+    ranges = range_batches(DATE_FROM, days=7)
     for idx, (lo, hi) in enumerate(ranges, start=1):
         client.command(
             f"""
@@ -213,7 +237,7 @@ def build_dim_placement_feed(client) -> int:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        log.info("  Dim_PlacementFeed daily stage batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+        log.info("  Dim_PlacementFeed weekly stage batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     client.command(
         f"""
         CREATE TABLE {shadow}
@@ -367,6 +391,139 @@ def build_pbi_import_region_spend(client) -> int:
     return count_rows(client, "ad_analytics.pbi_import_region_spend")
 
 
+def build_arf_fact(client) -> int:
+    shadow = "ad_analytics.arf_fact_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(date)
+        ORDER BY (date, campaign_id, adgroup_id, placement_feed_key)
+        AS
+        SELECT *
+        FROM ad_analytics.pbi_import_fact_direct_feed_funnel
+        WHERE 0
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            SELECT *
+            FROM ad_analytics.pbi_import_fact_direct_feed_funnel
+            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  arf_fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.arf_fact", shadow)
+    return count_rows(client, "ad_analytics.arf_fact")
+
+
+def build_arc_fact(client) -> int:
+    shadow = "ad_analytics.arc_fact_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(date)
+        ORDER BY (date, campaign_id, ad_group_id, ifNull(criterion_id, 0), criterion)
+        AS
+        SELECT *
+        FROM ad_analytics.fact_criterion_spend
+        WHERE 0
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            SELECT *
+            FROM ad_analytics.fact_criterion_spend
+            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  arc_fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.arc_fact", shadow)
+    return count_rows(client, "ad_analytics.arc_fact")
+
+
+def _dim_criterion_sql() -> str:
+    return """
+        SELECT
+            argMax(criterion, sort_weight) AS criterion,
+            argMax(criterion_type, sort_weight) AS criterion_type,
+            argMax(criterion_raw, sort_weight) AS criterion_raw
+        FROM
+        (
+            SELECT
+                criterion_key,
+                criterion,
+                criterion_type,
+                criterion_raw,
+                tuple(rows, source_priority, lengthUTF8(criterion)) AS sort_weight
+            FROM
+            (
+                SELECT
+                    lowerUTF8(trim(BOTH ' ' FROM criterion)) AS criterion_key,
+                    trim(BOTH ' ' FROM criterion) AS criterion,
+                    anyLast(criterion_type) AS criterion_type,
+                    anyLast(criterion_raw) AS criterion_raw,
+                    count() AS rows,
+                    2 AS source_priority
+                FROM ad_analytics.fact_criterion_spend
+                WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM criterion)))
+                GROUP BY criterion_key, criterion
+            )
+            UNION ALL
+            SELECT
+                criterion_key,
+                criterion,
+                criterion_type,
+                criterion_raw,
+                tuple(rows, source_priority, lengthUTF8(criterion)) AS sort_weight
+            FROM
+            (
+                SELECT
+                    lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, ''))) AS criterion_key,
+                    trim(BOTH ' ' FROM ifNull(criterion, '')) AS criterion,
+                    anyLast(criterion_type) AS criterion_type,
+                    anyLast(criterion_raw) AS criterion_raw,
+                    count() AS rows,
+                    1 AS source_priority
+                FROM ad_analytics.fact_criterion_zayavki
+                WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, ''))))
+                GROUP BY criterion_key, criterion
+            )
+        )
+        GROUP BY criterion_key
+    """
+
+
+def build_dim_criterion(client) -> int:
+    shadow = "ad_analytics.dim_criterion_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY criterion
+        AS
+        {_dim_criterion_sql()}
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    swap_shadow(client, "ad_analytics.dim_criterion", shadow)
+    return count_rows(client, "ad_analytics.dim_criterion")
+
+
 def _arp_fact_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
@@ -422,57 +579,6 @@ def build_arp_fact(client) -> int:
 
 def create_light_aliases(client) -> dict[str, int]:
     statements = {
-        "arc_fact": "SELECT * FROM ad_analytics.fact_criterion_spend",
-        "arf_fact": "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
-        "dim_criterion": """
-            SELECT
-                argMax(criterion, sort_weight) AS criterion,
-                argMax(criterion_type, sort_weight) AS criterion_type,
-                argMax(criterion_raw, sort_weight) AS criterion_raw
-            FROM
-            (
-                SELECT
-                    criterion_key,
-                    criterion,
-                    criterion_type,
-                    criterion_raw,
-                    tuple(rows, source_priority, lengthUTF8(criterion)) AS sort_weight
-                FROM
-                (
-                    SELECT
-                        lowerUTF8(trim(BOTH ' ' FROM criterion)) AS criterion_key,
-                        trim(BOTH ' ' FROM criterion) AS criterion,
-                        anyLast(criterion_type) AS criterion_type,
-                        anyLast(criterion_raw) AS criterion_raw,
-                        count() AS rows,
-                        2 AS source_priority
-                    FROM ad_analytics.fact_criterion_spend
-                    WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM criterion)))
-                    GROUP BY criterion_key, criterion
-                )
-                UNION ALL
-                SELECT
-                    criterion_key,
-                    criterion,
-                    criterion_type,
-                    criterion_raw,
-                    tuple(rows, source_priority, lengthUTF8(criterion)) AS sort_weight
-                FROM
-                (
-                    SELECT
-                        lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, ''))) AS criterion_key,
-                        trim(BOTH ' ' FROM ifNull(criterion, '')) AS criterion,
-                        anyLast(criterion_type) AS criterion_type,
-                        anyLast(criterion_raw) AS criterion_raw,
-                        count() AS rows,
-                        1 AS source_priority
-                    FROM ad_analytics.fact_criterion_zayavki
-                    WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, ''))))
-                    GROUP BY criterion_key, criterion
-                )
-            )
-            GROUP BY criterion_key
-        """,
         "yandex_direct_korrektirovki": """
             WITH gs_login AS
             (
@@ -611,6 +717,9 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         "pbi_import_fact_direct_feed_funnel": build_pbi_import_direct_feed_funnel(client),
         "pbi_import_region_spend": build_pbi_import_region_spend(client),
         "arp_fact": build_arp_fact(client),
+        "arf_fact": build_arf_fact(client),
+        "arc_fact": build_arc_fact(client),
+        "dim_criterion": build_dim_criterion(client),
     }
     rows.update(create_light_aliases(client))
     rows.update(create_bi_views(client))

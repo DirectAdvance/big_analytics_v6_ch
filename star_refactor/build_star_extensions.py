@@ -45,10 +45,16 @@ def build_dim_adformat(client) -> int:
         "ENGINE = MergeTree ORDER BY ad_format_key",
         """
         SELECT
-            lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_format, ''))) AS ad_format_key,
+            ad_format_key,
             anyLast(ad_format) AS ad_format
-        FROM ad_analytics.fact_adformat_spend
-        WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_format, ''))))
+        FROM
+        (
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_format, ''))) AS ad_format_key,
+                ad_format
+            FROM ad_analytics.fact_adformat_spend
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_adformat_spend.ad_format, ''))))
+        )
         GROUP BY ad_format_key
         """,
     )
@@ -71,8 +77,7 @@ def build_dim_adnetwork(client) -> int:
                 ad_network_type,
                 ad_network_type AS AdNetworkType
             FROM ad_analytics.fact_region_spend
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))))
-            GROUP BY ad_network_type_key, ad_network_type
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_region_spend.ad_network_type, ''))))
 
             UNION ALL
 
@@ -81,8 +86,7 @@ def build_dim_adnetwork(client) -> int:
                 ad_network_type,
                 ad_network_type AS AdNetworkType
             FROM ad_analytics.fact_adformat_spend
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))))
-            GROUP BY ad_network_type_key, ad_network_type
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_adformat_spend.ad_network_type, ''))))
 
             UNION ALL
 
@@ -91,8 +95,7 @@ def build_dim_adnetwork(client) -> int:
                 ad_network_type,
                 ad_network_type AS AdNetworkType
             FROM ad_analytics.fact_criterion_spend
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))))
-            GROUP BY ad_network_type_key, ad_network_type
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_criterion_spend.ad_network_type, ''))))
 
             UNION ALL
 
@@ -101,8 +104,7 @@ def build_dim_adnetwork(client) -> int:
                 AdNetworkType AS ad_network_type,
                 AdNetworkType
             FROM ad_analytics.fact_big_analytics
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))))
-            GROUP BY ad_network_type_key, AdNetworkType
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_big_analytics.AdNetworkType, ''))))
         )
         GROUP BY ad_network_type_key
         """,
@@ -116,12 +118,20 @@ def build_dim_source(client) -> int:
         "ENGINE = MergeTree ORDER BY source_key",
         """
         SELECT
-            lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))) AS source_key,
+            source_key,
             anyLast(`источник`) AS `источник`,
             anyLast(`поставщик`) AS `поставщик`,
             anyLast(_source_table) AS _source_table
-        FROM ad_analytics.fact_big_analytics
-        WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))))
+        FROM
+        (
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))) AS source_key,
+                `источник`,
+                `поставщик`,
+                _source_table
+            FROM ad_analytics.fact_big_analytics
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_big_analytics.`источник`, ''))))
+        )
         GROUP BY source_key
         """,
     )

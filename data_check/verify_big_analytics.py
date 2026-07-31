@@ -40,6 +40,7 @@ PBI_SOURCE_OBJECTS = [
     "Dim_Campaign",
     "Dim_Date",
     "Dim_Location",
+    "Dim_PlacementFeed",
     "Dim_Site",
     "arc_fact",
     "arf_fact",
@@ -80,6 +81,20 @@ PBI_EMPTY_ALLOWED = {
     "bi_yandex_direct_minus_snapshot",
     "bi_yandex_direct_return_commission_report",
 }
+
+FULL_PHYSICAL_TABLES = [
+    "pbi_import_big_analytics_full",
+    "pbi_import_fact_direct_feed_funnel",
+    "pbi_import_region_spend",
+    "pixel_score",
+    "arp_fact",
+    "arf_fact",
+    "arc_fact",
+    "dim_criterion",
+    "Dim_AdFormat",
+    "Dim_AdNetworkType",
+    "Dim_Source",
+]
 
 
 def _scalar(client, sql: str):
@@ -125,6 +140,19 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
         log.info("%s=%d engine=%s", view, rows, engine)
         if view not in PBI_EMPTY_ALLOWED and rows == 0:
             failures.append(f"empty_pbi_view:{view}")
+
+    if not no_star:
+        for table in FULL_PHYSICAL_TABLES:
+            engine = _engine(client, table)
+            if engine is None:
+                failures.append(f"missing_physical:{table}")
+                continue
+            if engine == "View":
+                failures.append(f"physical_is_view:{table}")
+            rows = count_rows(client, f"ad_analytics.`{table}`")
+            log.info("%s=%d engine=%s", table, rows, engine)
+            if rows == 0:
+                failures.append(f"empty_physical:{table}")
 
     checks = {
         "raw_yandex_cost_zero": "SELECT if(sum(total_cost) = 0, 1, 0) FROM ad_analytics.raw_yandex",

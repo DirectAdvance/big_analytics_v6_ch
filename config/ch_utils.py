@@ -35,6 +35,19 @@ def table_exists(client, database: str, table: str) -> bool:
     )
 
 
+def table_engine(client, database: str, table: str) -> str | None:
+    rows = client.query(
+        """
+        SELECT engine
+        FROM system.tables
+        WHERE database={database:String} AND name={table:String}
+        """,
+        parameters={"database": database, "table": table},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+    return rows[0][0] if rows else None
+
+
 def column_names(client, database: str, table: str) -> list[str]:
     rows = client.query(
         """
@@ -70,11 +83,15 @@ def create_empty_like(client, target: str, source: str, engine_sql: str | None =
 
 def swap_shadow(client, target: str, shadow: str) -> None:
     database, table = target.split(".", 1)
-    if table_exists(client, database, table):
-        client.command(f"EXCHANGE TABLES {target} AND {shadow}")
-        client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    engine = table_engine(client, database, table)
+    if engine and engine != "View":
+        client.command(f"EXCHANGE TABLES {target} AND {shadow}", settings=SAFE_QUERY_SETTINGS)
+        client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
+    elif engine:
+        client.command(f"DROP TABLE IF EXISTS {target} SYNC", settings=SAFE_QUERY_SETTINGS)
+        client.command(f"RENAME TABLE {shadow} TO {target}", settings=SAFE_QUERY_SETTINGS)
     else:
-        client.command(f"RENAME TABLE {shadow} TO {target}")
+        client.command(f"RENAME TABLE {shadow} TO {target}", settings=SAFE_QUERY_SETTINGS)
 
 
 def month_ranges_from_table(
@@ -114,6 +131,24 @@ def day_ranges(date_from: str = "2026-01-01", date_to: str | None = None) -> lis
     current = start
     while current < end:
         nxt = current + timedelta(days=1)
+        ranges.append((current.isoformat(), nxt.isoformat()))
+        current = nxt
+    return ranges
+
+
+def range_batches(
+    date_from: str = "2026-01-01",
+    date_to: str | None = None,
+    days: int = 1,
+) -> list[tuple[str, str]]:
+    if days < 1:
+        raise ValueError("days must be >= 1")
+    start = date.fromisoformat(date_from)
+    end = date.fromisoformat(date_to) if date_to else date.today() + timedelta(days=1)
+    ranges: list[tuple[str, str]] = []
+    current = start
+    while current < end:
+        nxt = min(current + timedelta(days=days), end)
         ranges.append((current.isoformat(), nxt.isoformat()))
         current = nxt
     return ranges

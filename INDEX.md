@@ -3,7 +3,7 @@
 > Сгенерировано `scripts/gen_project_index.py`. Руками не править — перегенерировать.
 > Назначение: найти нужный файл БЕЗ обхода дерева грепом.
 
-Файлов в индексе: **247**
+Файлов в индексе: **252**
 
 ## корень проекта
 
@@ -19,13 +19,13 @@
 | `DOD.md` | 17 | DOD — Definition of Done, big_analytics_v5 |  |
 | `FUNNEL.md` | 11 | FUNNEL.md — воронка заявок (`local_crm_statuses`) |  |
 | `GOLDEN_BASELINE.md` | 27 | GOLDEN BASELINE — эталонные значения для проверки данных |  |
-| `INDEX.md` | 30 | INDEX — big_analytics_v6_ch |  |
+| `INDEX.md` | 31 | INDEX — big_analytics_v6_ch |  |
 | `KNOWN_ISSUES.md` | 15 | KNOWN_ISSUES — big_analytics_v5 |  |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |  |
 | `MEMORY_ARCHIVE.md` | 275 | MEMORY.md — ba_pipeline: нетривиальные уроки |  |
 | `PBI_TABLES.md` | 31 | Таблицы, которые читает Power BI — справочник |  |
 | `PIPELINES.md` | 26 | PIPELINES.md — пайплайны, расписание, распределение шагов |  |
-| `PLAN.md` | 40 | PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse) |  |
+| `PLAN.md` | 42 | PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse) |  |
 | `POSEV_LEADS_LOSS_PLAN.md` | 23 | POSEV_LEADS_LOSS_PLAN — системный план ловли и починки потерь посевных ЗАЯВОК |  |
 | `POSEV_LOSSES_PLAYBOOK.md` | 44 | POSEV_LOSSES_PLAYBOOK — направление «посевы» big_analytics_v5 |  |
 | `PROJECT_CHARTER.md` | 32 | PROJECT_CHARTER.md — Устав проекта big_analytics_v5 |  |
@@ -37,21 +37,21 @@
 | `SHEET_RECONCILE_METHODOLOGY.md` | 28 | Методика сверки Google-таблиц салонов ↔ витрина (КОНТЕКСТ) |  |
 | `SPEC.md` | 33 | SPEC — big_analytics v6 на ClickHouse |  |
 | `STAR_REFACTOR_BRIEF.md` | 14 | ТЗ для director — рефакторинг big_analytics_v5 под звезду (star schema) |  |
-| `STATE.md` | 48 | big_analytics_v5 — Состояние (handoff) |  |
+| `STATE.md` | 53 | big_analytics_v5 — Состояние (handoff) |  |
 | `STATE_ARCHIVE.md` | 375 | Сессия 2026-07-15 (oleg_programmer — restore-прогон на откаченном коде) — ⚠️ kval НЕ восстановился |  |
 | `_rebuild_arrival.py` | 1 |  | log |
 | `_set_serverhost_domain.py` | 3 | _set_serverhost_domain.py — сменить ServerHost параметр датасета на домен | load_pbi, get_token, main |
 | `_warm_campaign_status.py` | 3 | _warm_campaign_status.py — точечный прогрев campaign_status/payment_model БЕЗ step0/step8. | main |
 | `copy_metrika.py` | 6 | Копирует данные из локального big_analytics.public.metrika | main |
-| `corrections.py` | 1 | ClickHouse v6 corrections hook. | apply |
+| `corrections.py` | 5 | ClickHouse v6 corrections hook. | specialist_correction_expr, apply |
 | `explain_all.py` | 18 | explain_all.py — EXPLAIN ANALYZE замер всех измеримых шагов пайплайна. | explain_step, skip_step |
 | `explain_capture.py` | 10 | explain_capture.py — захват EXPLAIN ANALYZE планов тяжёлых шагов. | write_header, wrap_explain, log_wall_sub, write_step7_header, capture_step |
 | `fast_pipeline.py` | 109 | fast_pipeline.py — быстрый пайплайн big_analytics_v5 | preflight_check, main |
-| `pipeline.py` | 5 | ClickHouse orchestrator for big_analytics_v6_ch. | ensure_quality_log, log_step, run_step, selected_steps, main |
+| `pipeline.py` | 8 | ClickHouse orchestrator for big_analytics_v6_ch. | ensure_quality_log, log_step, run_step, run_step_isolated, selected_steps, main |
 | `pipeline_mutex.py` | 5 | pipeline_mutex.py — PIPELINE_MUTEX_2026-07-12 | PipelineBusy, acquire |
 | `pipeline_powerbi.py` | 24 | pipeline_powerbi.py — пайплайн big_analytics_v5 с проверкой расходов и триггером Power BI | main |
 | `refresh_cookies.py` | 8 | refresh_cookies.py — автоматическое обновление cookies.json с эндпоинта glavpotok.ru. | refresh_cookies |
-| `refresh_powerbi.py` | 20 | refresh_powerbi.py — только обновление отчётов Power BI Service. | refresh_powerbi |
+| `refresh_powerbi.py` | 19 | refresh_powerbi.py — только обновление отчётов Power BI Service. | refresh_powerbi |
 | `sync_replica_incremental.sh` | 3 | bin/bash |  |
 | `watch_pipeline.py` | 11 | watch_pipeline.py — хвостит /tmp/fast_pipeline.log, детектирует завершение | tail_forever, main |
 
@@ -70,7 +70,7 @@
 | `brand_map.py` | 7 | brand_map.py — маппинг ct-кодов групп объявлений → марки авто | build_brand_case_sql |
 | `ch_db.py` | 2 | Подключение к ClickHouse Victory (Yandex Cloud) для big_analytics_v6_ch. | get_ca_cert_path, get_client |
 | `ch_settings.py` | 1 | ClickHouse-specific constants for big_analytics_v6_ch. |  |
-| `ch_utils.py` | 3 | Small ClickHouse helpers for the v6_ch migration. | q, table_exists, column_names, column_list, create_empty_like, swap_shadow, month_ranges_from_table, count_row |
+| `ch_utils.py` | 5 | Small ClickHouse helpers for the v6_ch migration. | q, table_exists, table_engine, column_names, column_list, create_empty_like, swap_shadow, month_ranges_from_ta |
 | `cookies.py` | 12 | cookies.py — проверка валидности кук Яндекс.Директ перед шагами пайплайна | check_cookies_alive, check_all_cookies_strict, send_tg, send_tg_cookies_dead, CookiesDeadError, ensure_cookies |
 | `db.py` | 7 | db.py — пулы соединений к ad_analytics (SRC) и ad_analytics_bi (DST) | init_pool, get_conn, put_conn, close_pool, init_src_pool, get_src_conn, put_src_conn, close_src_pool |
 | `settings.py` | 7 | settings.py — константы конфигурации big_analytics_v5 |  |
@@ -83,7 +83,7 @@
 |---|---|---|---|
 | `CLAUDE.md` | 6 | criterion_spend — датамарт «расход по критерию (ключ/таргетинг)» |  |
 | `build_criterion_spend.py` | 5 | Build ClickHouse `fact_criterion_spend` from raw Yandex report rows. | run |
-| `build_criterion_zayavki.py` | 16 | criterion_spend/build_criterion_zayavki.py — датамарт «воронка по ЗАЯВКАМ в разрезе | run, main |
+| `build_criterion_zayavki.py` | 5 | Build ClickHouse `fact_criterion_zayavki` from CRM leads by utm_term. | run |
 | `build_dim_criterion.py` | 8 | criterion_spend/build_dim_criterion.py — измерение «критерий» для Power BI. | run, main |
 
 ## `crm_mappings_check/`
@@ -103,7 +103,7 @@
 | `reporter.py` | 5 | step_data_check/reporter.py | format_report, send_telegram |
 | `run.py` | 3 | data_check/run.py — точка входа агента проверки данных. | main |
 | `sheets_reader.py` | 3 | step_data_check/sheets_reader.py | get_sheet_name_by_gid, read_sheet |
-| `verify_big_analytics.py` | 5 | Master verification for big_analytics_v6_ch ClickHouse tables. | run, main |
+| `verify_big_analytics.py` | 6 | Master verification for big_analytics_v6_ch ClickHouse tables. | run, main |
 
 ## `data_check/checks/`
 
@@ -173,7 +173,7 @@
 |---|---|---|---|
 | `CLAUDE.md` | 7 | region_spend — датамарт «расход по регионам показа» |  |
 | `build_region_spend.py` | 6 | Build ClickHouse `fact_region_spend` from raw Yandex report rows. | run |
-| `build_region_zayavki.py` | 13 | region_spend/build_region_zayavki.py — датамарт «воронка по ЗАЯВКАМ в разрезе региона». | run, main |
+| `build_region_zayavki.py` | 5 | Build ClickHouse `fact_region_zayavki` from CRM leads by geoid. | run |
 
 ## `sales_attribution/`
 
@@ -202,8 +202,12 @@
 
 | файл | КБ | назначение | что внутри |
 |---|---|---|---|
-| `build_pbi_compat.py` | 13 | Build compatibility tables expected by the existing Power BI semantic model. | drop_bi_views, build_pbi_full, build_pixel_score, build_arp_fact, create_light_aliases, create_bi_views, run |
-| `build_star.py` | 7 | Build ClickHouse star/Power BI tables for v6_ch. | build_fact, build_dims, run, main |
+| `PBI_REFRESH_OPTIMIZATION_PLAN.md` | 10 | PBI refresh optimization plan |  |
+| `audit_pbi_sources.py` | 7 | Metadata-only audit of Power BI source objects in ClickHouse. | ObjectMeta, build_report, main |
+| `build_pbi_compat.py` | 31 | Build compatibility tables expected by the existing Power BI semantic model. | drop_bi_views, build_pbi_full, build_pixel_score, build_dim_placement_feed, build_pbi_import_direct_feed_funne |
+| `build_star.py` | 22 | Build ClickHouse star/Power BI tables for v6_ch. | build_fact, build_dims, build_ml_korrektirovki_fact, build_vk_ads_fact, run, main |
+| `build_star_extensions.py` | 5 | Optional extra star dimensions for the ClickHouse Power BI model. | build_dim_adformat, build_dim_adnetwork, build_dim_source, run |
+| `pbi_source_audit.md` | 5 | PBI Source Audit |  |
 | `verify_star.py` | 5 | verify_star.py — ШАГ 6 верификация без потерь. | sums, cmp, cmp_grouped |
 
 ## `star_refactor/pbi_handoff/`
@@ -227,7 +231,7 @@
 | `README.md` | 8 | step0_sync_local — Синхронизация локальных копий |  |
 | `STEP.md` | 3 | STEP.md — Шаг 0: Синхронизация локальных копий |  |
 | `__init__.py` | 1 |  |  |
-| `step0.py` | 2 | Step 0 for v6_ch: validate the existing ClickHouse raw_data layer. | run |
+| `step0.py` | 3 | Step 0 for v6_ch: ClickHouse-only source preflight. | run |
 
 ## `step10_crop_targeting/`
 
@@ -243,7 +247,7 @@
 | `load_crop_to_big_analytics.py` | 29 | big analytics_v5/crop_targeting/load_crop_to_big_analytics.py | main |
 | `load_telega_in_orders.py` | 25 | big analytics_v5/crop_targeting/load_telega_in_orders.py | ensure_output_table, run_query, collect_errors, main |
 | `pipeline.py` | 2 | big analytics_v5/crop_targeting/pipeline.py |  |
-| `step10.py` | 1 | Step 10 for v6_ch: crop targeting final check. | run |
+| `step10.py` | 46 | Step 10 for v6_ch: add crop/Telega/VK cost overlays. | run |
 
 ## `step11_pixel_score/`
 
@@ -253,7 +257,7 @@
 | `CLAUDE.md` | 9 | step11_pixel_score — Атрибуция pixel-воронки |  |
 | `PLAN_cpl_score.md` | 18 | ПЛАН: новый скор CPL-качества (0.3–3) для big_analytics_pixel_score |  |
 | `README.md` | 8 | step11_pixel_score — Атрибуция pixel-воронки |  |
-| `step11.py` | 5 | Step 11 for v6_ch: pixel attribution materialization in ClickHouse. | run |
+| `step11.py` | 17 | Step 11 for v6_ch: pixel attribution materialization in ClickHouse. | run |
 
 ## `step12_proverka_big_analytics/`
 
@@ -273,7 +277,7 @@
 | `README.md` | 7 | step13_arrival — Воронка по дате визита |  |
 | `ROLLBACK_mirror_union.md` | 2 | Откат MIRROR+UNION (step13 73-кол зеркало + big_analytics_unified) |  |
 | `__init__.py` | 1 |  |  |
-| `build_unified.py` | 2 | Build `big_analytics_unified` in ClickHouse. | run |
+| `build_unified.py` | 1 | Build `big_analytics_unified` in ClickHouse. | run |
 | `step13.py` | 3 | Step 13 for v6_ch: build arrival mirror table in ClickHouse. | run |
 
 ## `step14_minus_snapshot/`
@@ -281,7 +285,7 @@
 | файл | КБ | назначение | что внутри |
 |---|---|---|---|
 | `CLAUDE.md` | 5 | CLAUDE.md — step14_minus_snapshot |  |
-| `step14.py` | 1 | Step 14 for v6_ch: minus snapshot placeholder from current ClickHouse sources. | run |
+| `step14.py` | 19 | Step 14 for v6_ch: Yandex Direct negative keywords snapshot in ClickHouse. | load_tokens, enumerate_logins, fetch_sets_sizes, process_login, ensure_schema, replace_delta_view, load_specia |
 
 ## `step1_load_raw/`
 
@@ -291,7 +295,7 @@
 | `README.md` | 6 | step1_load_raw — Загрузка RAW UNLOGGED таблиц |  |
 | `STEP.md` | 1 | STEP.md — Шаг 1: RAW UNLOGGED таблицы |  |
 | `__init__.py` | 1 |  |  |
-| `step1.py` | 11 | Step 1 for v6_ch: build RAW tables in ClickHouse from raw_data. | run, get_explain_sql |
+| `step1.py` | 13 | Step 1 for v6_ch: build RAW tables in ClickHouse from raw_data. | run, get_explain_sql |
 
 ## `step2_indexes/`
 
@@ -311,7 +315,7 @@
 | `README.md` | 7 | step3_build_sources — Сборка источниковых таблиц |  |
 | `STEP.md` | 2 | STEP.md — Шаг 3: Сборка таблиц по источникам |  |
 | `__init__.py` | 1 |  |  |
-| `step3.py` | 25 | Step 3 for v6_ch: build source marts in ClickHouse. | recreate_source_views, run, get_explain_sql |
+| `step3.py` | 27 | Step 3 for v6_ch: build source marts in ClickHouse. | recreate_source_views, run, get_explain_sql |
 
 ## `step4_campaign_status/`
 
@@ -320,7 +324,7 @@
 | `CLAUDE.md` | 8 | step4_campaign_status — Статусы кампаний Яндекс.Директ |  |
 | `README.md` | 7 | step4_campaign_status — Статусы кампаний Яндекс.Директ |  |
 | `__init__.py` | 1 |  |  |
-| `step4.py` | 5 | Step 4 for v6_ch: campaign status from ClickHouse raw_data. | prefetch_statuses, run |
+| `step4.py` | 2 | Step 4 for v6_ch: campaign status from ClickHouse raw_data. | prefetch_statuses, run |
 
 ## `step4_campaign_status/check_utm/`
 
@@ -338,7 +342,7 @@
 | `__init__.py` | 1 |  |  |
 | `audit_pixels.py` | 2 | Audit pixel names in local_pixel_config vs local_leads_all. |  |
 | `audit_pixels_detailed.py` | 2 | Detailed audit: pixel names by source_name AND utm_source. |  |
-| `build_pixel.py` | 1 | Step 5 for v6_ch: finalize/check pixel source table. | run |
+| `build_pixel.py` | 10 | Step 5 for v6_ch: finalize/check pixel source table. | run |
 | `set_pixel_price.py` | 9 | set_pixel_price.py — управление дата-эффективной историей цен пикселей. | set_price, list_prices, main |
 | `sync_pixel_config.py` | 7 | pixel/sync_pixel_config.py — синхронизация конфига пикселей из Google Sheets. | sync |
 
@@ -393,7 +397,8 @@
 | `build_ml_korrektirovki_night.py` | 5 | build_ml_korrektirovki_night.py — ночное обновление public.fact_ml_korrektirovki. | main |
 | `build_spend_daily.py` | 17 | step_cron_night/build_spend_daily.py — дневной job (14:00 Екб / 09:00 UTC): сборка 3 spend-витрин. | main |
 | `build_spend_night.py` | 1 | DEPRECATED — переименован в build_spend_daily.py (2026-06-27). |  |
-| `metrika_yandex.py` | 29 | metrika_yandex.py — синхронизация счётчиков Яндекс.Метрики | load_metrika_counters, load_goals, run_sync |
+| `metrika_raw_builders.py` | 16 | Build Metrika-derived ClickHouse tables from existing raw_data snapshots. | build_metrika_yandex, build_404_errors, build_check_utm, run_all |
+| `metrika_yandex.py` | 1 | v6_ch metrika_yandex builder from ClickHouse raw_data. | run, main |
 | `pipeline_night.py` | 5 | pipeline_night.py — ночной пайплайн big_analytics_v5 | run_step, main |
 | `revoke_metrika_grants.py` | 12 | revoke_metrika_grants.py — отзыв грантов Яндекс.Метрики для удалённых/остановленных сайтов. | run |
 
@@ -401,7 +406,7 @@
 
 | файл | КБ | назначение | что внутри |
 |---|---|---|---|
-| `404_errors.py` | 11 |  | get_gspread_client, extract_campaign_id, extract_group_id, get_sites_from_sheet, get_all_counters, match_count |
+| `404_errors.py` | 1 | v6_ch 404 errors builder from raw_data.metrika_yandex_not_found_daily. | run, main |
 | `CLAUDE.md` | 7 | CLAUDE.md — 404_errors |  |
 | `README.md` | 7 | 404_errors — Сбор 404-ошибок через Яндекс.Метрику |  |
 | `recheck_404.py` | 9 | Перепроверка URL из yandex_direct_404_errors реальным HTTP-кодом. | clean_url, is_soft_404, check_url, fetch_urls, main |
@@ -446,7 +451,7 @@
 | `CLAUDE.md` | 7 | utm_direct_audit — UTM-аудит Яндекс.Директ |  |
 | `README.md` | 9 | step13_utm_direct_audit — UTM-аудит Яндекс.Директ |  |
 | `__init__.py` | 1 |  |  |
-| `run.py` | 4 | step13_utm_direct_audit/run.py |  |
+| `run.py` | 1 | v6_ch UTM audit builder from raw_data.metrika_yandex_utm_daily. | run, main |
 
 ## `tests/`
 

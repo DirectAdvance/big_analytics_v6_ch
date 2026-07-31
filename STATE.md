@@ -1,6 +1,33 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-07-30 (Codex: v6_ch native Golden + BI parity partial). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-07-31 (Codex: v6_ch CH-only parity + batch safety audit). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-07-31 17:59 +05: CH-only sources + batch safety audit (Codex):**
+- `step0_sync_local/step0.py` больше не копирует PostgreSQL/v5 facts/local tables. Step0 стал read-only preflight по ClickHouse sources:
+  `raw_data.*` + CH manual inputs (`local_pixel_config`, `gsheets_crop_targeting_account*`,
+  `yandex_direct_cookie_analytics_website_pages`). Проверено `pipeline.py --only-step 0`:
+  все обязательные источники найдены, включая `raw_data.telega_in_orders=7,104`,
+  `raw_data.vk_ads_stats_day=1,882,479`, `yandex_direct_cookie_analytics_website_pages=965,764`.
+- `step10_crop_targeting/step10.py` переведён на v6-native cost overlays:
+  Telega.in rebuild из `raw_data.telega_in_orders` + CH overrides, VK Ads spend из `raw_data.vk_ads_stats_day`,
+  без `local_vk_ads_stats_day`/PostgreSQL copy. Проверено повторным step10:
+  `big_analytics_cost_overlays=8,994`, overlay cost `28,899,544.74`, дублей overlay key = 0,
+  `big_analytics_full=5,243,403`, повторный step10 идемпотентен по full cost.
+- Step145 проверен после downstream refresh: `pipeline.py --only-step 145` PASS за `202.96s`,
+  `fact_big_analytics=5,316,410`, `fact_vk_ads=30,527`, `fact_ml_korrektirovki=9,470`.
+  Экономия батчей оставлена только там, где прошла проверка: `fact_vk_ads` и
+  `fact_ml_korrektirovki` по 31 недельному batch вместо 212 дневных.
+- Аудит сокращения 212 дневных PBI-batches:
+  `pbi_import_big_analytics_full`, `pbi_import_fact_direct_feed_funnel`, `pbi_import_region_spend`,
+  `arp_fact`, `arf_fact`, `arc_fact` оставлены дневными. Проверенные укрупнения 2/3/7 дней давали
+  `MEMORY_LIMIT_EXCEEDED` на текущем лимите `488.28 MiB` (пики `488.74..508.94 MiB`).
+  Безопасно сокращены только узкие `pixel_score` и `Dim_PlacementFeed`: 31 недельный batch вместо 212.
+- PBI compatibility layer восстановлен tail-build без повторной сборки уже готовых первых таблиц:
+  `pbi_import_big_analytics_full=5,316,410`, `pbi_import_fact_direct_feed_funnel=12,923,840`,
+  `pbi_import_region_spend=12,787,282`, `arp_fact=12,923,840`, `arf_fact=12,923,840`,
+  `arc_fact=4,578,648`, `dim_criterion=90,810`; все `bi_*` views пересозданы.
+- Финальные проверки после rebuild: `python3 data_check/verify_big_analytics.py` PASS,
+  `unified_count_mismatch=0`, `fact_unified_count_mismatch=0`; `py_compile` изменённых Python-файлов PASS.
 
 **2026-07-30 22:42 +05: v6_ch native Golden + BI parity partial (Codex):**
 - Решение соблюдено: v5 snapshot-copy откатан/удален; `bi_*` снова строятся из нативных v6 CH tables/views.

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
-from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, range_batches, swap_shadow, table_exists
 from step3_build_sources.step3 import _metric_expr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -217,14 +217,14 @@ def _ml_korrektirovki_sql(where_sql: str) -> str:
         WITH ml_korr AS
         (
             SELECT
-                audience_id,
-                anyLast(modifier_name) AS modifier_name,
-                anyLast(bid_percent) AS bid_percent,
-                anyLast(korrektirovki_bid) AS korrektirovki_bid
-            FROM raw_data.yandex_direct_korrektirovki
-            WHERE positionCaseInsensitive(ifNull(korrektirovki_bid, ''), '_ml_') > 0
-              AND audience_id IS NOT NULL
-            GROUP BY audience_id
+                k.audience_id AS audience_id,
+                anyLast(k.modifier_name) AS modifier_name,
+                anyLast(k.bid_percent) AS bid_percent,
+                anyLast(k.korrektirovki_bid) AS korrektirovki_bid
+            FROM raw_data.yandex_direct_korrektirovki AS k
+            WHERE positionCaseInsensitive(ifNull(k.korrektirovki_bid, ''), '_ml_') > 0
+              AND k.audience_id IS NOT NULL
+            GROUP BY k.audience_id
         )
         SELECT
             f.`CampaignId`,
@@ -301,7 +301,7 @@ def build_ml_korrektirovki_fact(client) -> int:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    ranges = day_ranges(DATE_FROM)
+    ranges = range_batches(DATE_FROM, days=7)
     for idx, (lo, hi) in enumerate(ranges, start=1):
         client.command(
             f"""
@@ -310,7 +310,7 @@ def build_ml_korrektirovki_fact(client) -> int:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        log.info("  fact_ml_korrektirovki daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+        log.info("  fact_ml_korrektirovki weekly batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.fact_ml_korrektirovki", shadow)
     rows = count_rows(client, "ad_analytics.fact_ml_korrektirovki")
     log.info("  fact_ml_korrektirovki=%d", rows)
@@ -511,7 +511,7 @@ def build_vk_ads_fact(client) -> int:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    ranges = day_ranges(DATE_FROM)
+    ranges = range_batches(DATE_FROM, days=7)
     for idx, (lo, hi) in enumerate(ranges, start=1):
         client.command(
             f"""
@@ -529,7 +529,7 @@ def build_vk_ads_fact(client) -> int:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        log.info("  fact_vk_ads daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+        log.info("  fact_vk_ads weekly batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.fact_vk_ads", shadow)
     rows = count_rows(client, "ad_analytics.fact_vk_ads")
     log.info("  fact_vk_ads=%d", rows)
