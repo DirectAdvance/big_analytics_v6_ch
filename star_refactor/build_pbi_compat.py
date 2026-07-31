@@ -99,16 +99,15 @@ def build_pixel_score(client) -> int:
         SELECT
             toStartOfMonth(`Date`) AS month,
             `салон`,
-            domain AS `домен`,
+            domain,
             `источник`,
             `CampaignId`,
-            `CampaignName` AS `Название кампании`,
-            `номер кампании | название кампании`,
-            kol_vo_zayavok AS `Обращения`,
-            korr AS `Заявки`,
-            kval AS `Квал`,
-            priezd AS `Приезд`,
-            prodazhi AS `Продажи`,
+            `CampaignName`,
+            kol_vo_zayavok,
+            korr,
+            kval,
+            priezd,
+            prodazhi,
             `направление`,
             toDecimal64(1, 4) AS cpl_score,
             kol_vo_zayavok AS `pixel_kol_vo_домена`,
@@ -142,6 +141,72 @@ def build_pixel_score(client) -> int:
     return count_rows(client, "ad_analytics.pixel_score")
 
 
+def _feed_funnel_pbi_sql() -> str:
+    return """
+        SELECT
+            date,
+            CAST(NULL, 'Nullable(Int64)') AS feed_id,
+            CAST(NULL, 'Nullable(String)') AS feed_name,
+            CAST(NULL, 'Nullable(String)') AS feed_url,
+            placement AS feed_key,
+            placement AS feed_url_key,
+            campaign_id,
+            campaign_name,
+            ad_group_id AS adgroup_id,
+            ad_group_name AS adgroup_name,
+            domain,
+            account_login AS login_key,
+            cost AS total_cost,
+            clicks,
+            impressions,
+            all_forms AS kol_vo_zayavok,
+            crm_order_created AS korr,
+            toDecimal64(0, 6) AS nekorr,
+            toDecimal64(0, 6) AS kval,
+            toDecimal64(0, 6) AS priezd,
+            crm_order_paid AS prodazhi,
+            toDecimal64(0, 6) AS dobro,
+            toDecimal64(0, 6) AS dohod_do_kredita,
+            toDecimal64(0, 6) AS filtr,
+            all_forms AS attributed_leads,
+            toDecimal64(0, 6) AS ne_otvechaet,
+            toDecimal64(0, 6) AS nedozvon,
+            toDecimal64(0, 6) AS priedet,
+            all_forms AS goal_all_forms,
+            crm_order_created AS goal_crm_order_created,
+            crm_order_paid AS goal_crm_order_paid,
+            toDecimal64(0, 6) AS goal_crm_order_canceled,
+            toDecimal64(0, 6) AS goal_crm_spam_order,
+            concat(toString(date), '|', ifNull(domain, ''), '|', ifNull(placement, '')) AS dk2,
+            toUInt8(0) AS is_tp67,
+            gs.directologist AS `специалист`,
+            gs.site_type AS `тип_сайта`,
+            gs.region AS `регион`,
+            gs.salon AS `салон`,
+            gs.city AS `город`,
+            gs.template AS `шаблон`,
+            CAST(NULL, 'Nullable(String)') AS `направление`,
+            concat(ifNull(account_login, ''), '|', ifNull(domain, '')) AS `аккаунт|сайт`,
+            CAST(NULL, 'Nullable(String)') AS `канал`,
+            CAST(NULL, 'Nullable(String)') AS `ниша`,
+            CAST(NULL, 'Nullable(String)') AS `статус_кампании`,
+            CAST(NULL, 'Nullable(String)') AS `тип_оплаты`,
+            concat(toString(campaign_id), ' | ', ifNull(campaign_name, '')) AS `номер кампании | название кампании`,
+            concat(toString(ad_group_id), ' | ', ifNull(ad_group_name, '')) AS `номер группы | название группы`,
+            CAST(NULL, 'Nullable(String)') AS tp,
+            CAST(NULL, 'Nullable(String)') AS campaign_code,
+            CAST(NULL, 'Nullable(String)') AS `тип_заявки`,
+            CAST(NULL, 'Nullable(String)') AS `Название crm`,
+            CAST(NULL, 'Nullable(String)') AS `статус`,
+            'direct_feed_funnel' AS `источник`,
+            domain AS `домен`,
+            ad_network_type AS AdNetworkType,
+            now() AS generated_at
+        FROM ad_analytics.fact_direct_feed_funnel f
+        LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(f.account_login)
+    """
+
+
 def build_arp_fact(client) -> int:
     _replace_view(
         client,
@@ -173,23 +238,55 @@ def build_arp_fact(client) -> int:
 def create_light_aliases(client) -> dict[str, int]:
     statements = {
         "arc_fact": "SELECT * FROM ad_analytics.fact_criterion_spend",
-        "arf_fact": "SELECT * FROM ad_analytics.fact_direct_feed_funnel",
+        "arf_fact": _feed_funnel_pbi_sql(),
         "dim_criterion": """
             SELECT
-                criterion,
-                anyLast(criterion_type) AS criterion_type,
-                anyLast(criterion_raw) AS criterion_raw
+                argMax(criterion, sort_weight) AS criterion,
+                argMax(criterion_type, sort_weight) AS criterion_type,
+                argMax(criterion_raw, sort_weight) AS criterion_raw
             FROM
             (
-                SELECT criterion, criterion_type, criterion_raw, 1 AS priority
-                FROM ad_analytics.fact_criterion_spend
-                WHERE notEmpty(criterion)
+                SELECT
+                    criterion_key,
+                    criterion,
+                    criterion_type,
+                    criterion_raw,
+                    tuple(rows, source_priority, lengthUTF8(criterion)) AS sort_weight
+                FROM
+                (
+                    SELECT
+                        lowerUTF8(trim(BOTH ' ' FROM criterion)) AS criterion_key,
+                        trim(BOTH ' ' FROM criterion) AS criterion,
+                        anyLast(criterion_type) AS criterion_type,
+                        anyLast(criterion_raw) AS criterion_raw,
+                        count() AS rows,
+                        2 AS source_priority
+                    FROM ad_analytics.fact_criterion_spend
+                    WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM criterion)))
+                    GROUP BY criterion_key, criterion
+                )
                 UNION ALL
-                SELECT criterion, criterion_type, criterion_raw, 2 AS priority
-                FROM ad_analytics.fact_criterion_zayavki
-                WHERE ifNull(criterion, '') != ''
+                SELECT
+                    criterion_key,
+                    criterion,
+                    criterion_type,
+                    criterion_raw,
+                    tuple(rows, source_priority, lengthUTF8(criterion)) AS sort_weight
+                FROM
+                (
+                    SELECT
+                        lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, ''))) AS criterion_key,
+                        trim(BOTH ' ' FROM ifNull(criterion, '')) AS criterion,
+                        anyLast(criterion_type) AS criterion_type,
+                        anyLast(criterion_raw) AS criterion_raw,
+                        count() AS rows,
+                        1 AS source_priority
+                    FROM ad_analytics.fact_criterion_zayavki
+                    WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, ''))))
+                    GROUP BY criterion_key, criterion
+                )
             )
-            GROUP BY criterion
+            GROUP BY criterion_key
         """,
         "yandex_direct_korrektirovki": """
             WITH gs_login AS
@@ -232,8 +329,17 @@ def create_light_aliases(client) -> dict[str, int]:
             ("id", "Nullable(Int64)"), ("login", "Nullable(String)"), ("CampaignId", "Nullable(Int64)"),
             ("CampaignName", "Nullable(String)"), ("group_id", "Nullable(Int64)"), ("group_name", "Nullable(String)"),
             ("tracking_params", "Nullable(String)"), ("домен", "Nullable(String)"),
-            ("Расходы", "Nullable(Decimal(18, 6))"), ("специалист", "Nullable(String)"),
-            ("date", "Nullable(Date)"), ("utm_source_type", "Nullable(String)"), ("Месяц", "Nullable(String)"),
+            ("cost", "Nullable(Decimal(18, 6))"), ("специалист", "Nullable(String)"),
+            ("date", "Nullable(Date)"), ("utm_source_type", "Nullable(String)"),
+        ],
+        "yandex_direct_minus_snapshot": [
+            ("id", "Nullable(Int64)"), ("date", "Nullable(Date)"), ("login", "Nullable(String)"),
+            ("campaign_id", "Nullable(Int64)"), ("campaign_name", "Nullable(String)"),
+            ("campaign_state", "Nullable(String)"), ("block", "Nullable(String)"),
+            ("minus_in_campaign", "Nullable(Int64)"), ("minus_in_groups", "Nullable(Int64)"),
+            ("minus_in_sets", "Nullable(Int64)"), ("minus_total", "Nullable(Int64)"),
+            ("has_minus", "Nullable(Bool)"), ("check_ok", "Nullable(Bool)"),
+            ("loaded_at", "Nullable(DateTime)"), ("специалист", "Nullable(String)"),
         ],
         "v_yandex_direct_minus_delta": [
             ("date", "Nullable(Date)"), ("login", "Nullable(String)"), ("campaign_id", "Nullable(Int64)"),
@@ -286,7 +392,19 @@ def create_bi_views(client) -> dict[str, int]:
     out: dict[str, int] = {}
     for table in PBI_SOURCE_OBJECTS:
         view_name = f"bi_{table}"
-        _replace_view(client, view_name, f"SELECT * FROM ad_analytics.{q(table)}")
+        if table == "fact_direct_feed_funnel":
+            select_sql = _feed_funnel_pbi_sql()
+        elif table == "Dim_Site":
+            select_sql = """
+                SELECT
+                    domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`, `направление`,
+                    `статус`, status, `специалист`, `проджект`, project_manager, `id_салона`,
+                    `менеджер`, `Название crm`
+                FROM ad_analytics.Dim_Site
+            """
+        else:
+            select_sql = f"SELECT * FROM ad_analytics.{q(table)}"
+        _replace_view(client, view_name, select_sql)
         out[view_name] = count_rows(client, f"ad_analytics.{q(view_name)}")
     return out
 
