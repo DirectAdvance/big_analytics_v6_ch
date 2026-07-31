@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
-from config.ch_utils import column_names, count_rows, month_ranges_from_table, q, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow, table_exists
 from step3_build_sources.step3 import _metric_expr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -29,7 +29,8 @@ def _create_fact_empty(client, target: str, select_sql: str) -> None:
         AS SELECT {select_sql}
         FROM ad_analytics.big_analytics_unified
         WHERE 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
 
 
@@ -45,24 +46,18 @@ def build_fact(client) -> int:
     cols_sql = ", ".join(q(col) for col in target_cols)
     shadow = "ad_analytics.fact_big_analytics_new"
     _create_fact_empty(client, shadow, select_sql)
-    ranges = month_ranges_from_table(
-        client,
-        "ad_analytics.big_analytics_unified",
-        "`Date`",
-        "`Date` IS NOT NULL",
-    )
+    ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow} ({cols_sql})
             SELECT {select_sql}
             FROM ad_analytics.big_analytics_unified
             WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        log.info("  fact batch %d/%d: +%d rows", idx, len(ranges), after - before)
+        log.info("  fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.fact_big_analytics", shadow)
     return count_rows(client, "ad_analytics.fact_big_analytics")
 
@@ -210,7 +205,7 @@ def build_dims(client) -> dict[str, int]:
     for table, sql in ddl.items():
         shadow = f"ad_analytics.{table}_new"
         client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-        client.command(sql)
+        client.command(sql, settings=SAFE_QUERY_SETTINGS)
         swap_shadow(client, f"ad_analytics.{table}", shadow)
         rows[table] = count_rows(client, f"ad_analytics.{table}")
         log.info("  %s=%d", table, rows[table])
@@ -300,7 +295,8 @@ def build_ml_korrektirovki_fact(client) -> int:
             lower(extract(ifNull(k.modifier_name, ''), '_ml_all_(\\\\d+p(?:_[a-z0-9]+)?)')) AS ml_tier
         FROM ad_analytics.fact_big_analytics f
         INNER JOIN ml_korr k ON f.`RlAdjustmentId` = k.audience_id
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
     swap_shadow(client, "ad_analytics.fact_ml_korrektirovki", shadow)
     rows = count_rows(client, "ad_analytics.fact_ml_korrektirovki")
@@ -489,7 +485,8 @@ def build_vk_ads_fact(client) -> int:
         FROM visit_agg va
         LEFT JOIN banner_dim bd ON bd.banner_id = va.banner_id
         LEFT JOIN salon_dim sd ON sd.salon_key = lower(trim(ifNull(va.`салон`, '')))
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
     swap_shadow(client, "ad_analytics.fact_vk_ads", shadow)
     rows = count_rows(client, "ad_analytics.fact_vk_ads")

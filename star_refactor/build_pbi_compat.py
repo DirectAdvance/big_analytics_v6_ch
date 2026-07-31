@@ -10,7 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows, q
+from config.ch_settings import DATE_FROM
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, q, swap_shadow, table_exists
 
 log = logging.getLogger("build_pbi_compat")
 
@@ -68,7 +69,7 @@ def _replace_view(client, name: str, select_sql: str) -> None:
 
 def _replace_table(client, name: str, engine_sql: str, select_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC")
-    client.command(f"CREATE TABLE ad_analytics.{q(name)} {engine_sql} AS {select_sql}")
+    client.command(f"CREATE TABLE ad_analytics.{q(name)} {engine_sql} AS {select_sql}", settings=SAFE_QUERY_SETTINGS)
 
 
 def drop_bi_views(client) -> None:
@@ -86,13 +87,38 @@ def _pbi_full_expr(col: str) -> str:
 
 def build_pbi_full(client) -> int:
     select_sql = ", ".join(_pbi_full_expr(col) for col in PBI_FULL_COLS)
+    shadow = "ad_analytics.pbi_import_big_analytics_full_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
+        ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(`CampaignId`, 0), ifNull(`AdGroupId`, 0), ifNull(`домен`, ''))
+        AS
+        SELECT {select_sql}
+        FROM ad_analytics.fact_big_analytics
+        WHERE 0
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            SELECT {select_sql}
+            FROM ad_analytics.fact_big_analytics
+            WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  pbi_import_big_analytics_full daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.pbi_import_big_analytics_full", shadow)
     _replace_view(
         client,
         "pbi_big_analytics_full",
-        f"""
-        SELECT {select_sql}
-        FROM ad_analytics.fact_big_analytics
-        """
+        "SELECT * FROM ad_analytics.pbi_import_big_analytics_full"
     )
     return count_rows(client, "ad_analytics.pbi_big_analytics_full")
 
@@ -182,8 +208,8 @@ def build_dim_placement_feed(client) -> int:
     return count_rows(client, "ad_analytics.Dim_PlacementFeed")
 
 
-def _feed_funnel_pbi_sql() -> str:
-    return """
+def _feed_funnel_pbi_sql(where_sql: str = "") -> str:
+    return f"""
         SELECT
             date,
             lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
@@ -246,14 +272,72 @@ def _feed_funnel_pbi_sql() -> str:
             now() AS generated_at
         FROM ad_analytics.fact_direct_feed_funnel f
         LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(f.account_login)
+        {where_sql}
     """
 
 
-def build_arp_fact(client) -> int:
-    _replace_view(
-        client,
-        "arp_fact",
+def build_pbi_import_direct_feed_funnel(client) -> int:
+    shadow = "ad_analytics.pbi_import_fact_direct_feed_funnel_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
         f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(date)
+        ORDER BY (date, campaign_id, adgroup_id, placement_feed_key)
+        AS
+        {_feed_funnel_pbi_sql("WHERE 0")}
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            {_feed_funnel_pbi_sql(f"WHERE f.date >= toDate('{lo}') AND f.date < toDate('{hi}')")}
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  pbi_import_fact_direct_feed_funnel daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.pbi_import_fact_direct_feed_funnel", shadow)
+    return count_rows(client, "ad_analytics.pbi_import_fact_direct_feed_funnel")
+
+
+def build_pbi_import_region_spend(client) -> int:
+    shadow = "ad_analytics.pbi_import_region_spend_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(date)
+        ORDER BY (date, campaign_id, ifNull(ad_group_id, 0), ifNull(id_location, 0))
+        AS
+        SELECT *
+        FROM ad_analytics.fact_region_spend
+        WHERE 0
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            SELECT *
+            FROM ad_analytics.fact_region_spend
+            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  pbi_import_region_spend daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.pbi_import_region_spend", shadow)
+    return count_rows(client, "ad_analytics.pbi_import_region_spend")
+
+
+def _arp_fact_sql(where_sql: str = "") -> str:
+    return f"""
         SELECT
             date, domain AS `домен`, account_login AS `логин`, ad_network_type, placement,
             lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
@@ -273,15 +357,42 @@ def build_arp_fact(client) -> int:
             date AS Date, domain, CAST(NULL, 'Nullable(String)') AS `тип_заявки`
         FROM ad_analytics.fact_direct_feed_funnel f
         LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(f.account_login)
-        """
+        {where_sql}
+    """
+
+
+def build_arp_fact(client) -> int:
+    shadow = "ad_analytics.arp_fact_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(date)
+        ORDER BY (date, ifNull(domain, ''), ifNull(placement, ''))
+        AS
+        {_arp_fact_sql("WHERE 0")}
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            {_arp_fact_sql(f"WHERE f.date >= toDate('{lo}') AND f.date < toDate('{hi}')")}
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  arp_fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.arp_fact", shadow)
     return count_rows(client, "ad_analytics.arp_fact")
 
 
 def create_light_aliases(client) -> dict[str, int]:
     statements = {
         "arc_fact": "SELECT * FROM ad_analytics.fact_criterion_spend",
-        "arf_fact": _feed_funnel_pbi_sql(),
+        "arf_fact": "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
         "dim_criterion": """
             SELECT
                 argMax(criterion, sort_weight) AS criterion,
@@ -425,6 +536,9 @@ def create_light_aliases(client) -> dict[str, int]:
         ],
     }
     for table, cols in empty_views.items():
+        if table_exists(client, "ad_analytics", table):
+            out[table] = count_rows(client, f"ad_analytics.{table}")
+            continue
         select_sql = ", ".join(f"CAST(NULL, '{typ}') AS {q(name)}" for name, typ in cols)
         _replace_view(client, table, f"SELECT {select_sql} WHERE 0")
         out[table] = count_rows(client, f"ad_analytics.{table}")
@@ -436,7 +550,7 @@ def create_bi_views(client) -> dict[str, int]:
     for table in PBI_SOURCE_OBJECTS:
         view_name = f"bi_{table}"
         if table == "fact_direct_feed_funnel":
-            select_sql = _feed_funnel_pbi_sql()
+            select_sql = "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel"
         elif table == "Dim_Site":
             select_sql = """
                 SELECT
@@ -445,6 +559,8 @@ def create_bi_views(client) -> dict[str, int]:
                     `менеджер`, `Название crm`
                 FROM ad_analytics.Dim_Site
             """
+        elif table == "fact_region_spend":
+            select_sql = "SELECT * FROM ad_analytics.pbi_import_region_spend"
         else:
             select_sql = f"SELECT * FROM ad_analytics.{q(table)}"
         _replace_view(client, view_name, select_sql)
@@ -461,6 +577,8 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         "pbi_big_analytics_full": build_pbi_full(client),
         "pixel_score": build_pixel_score(client),
         "Dim_PlacementFeed": build_dim_placement_feed(client),
+        "pbi_import_fact_direct_feed_funnel": build_pbi_import_direct_feed_funnel(client),
+        "pbi_import_region_spend": build_pbi_import_region_spend(client),
         "arp_fact": build_arp_fact(client),
     }
     rows.update(create_light_aliases(client))

@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, swap_shadow
 
 logger = logging.getLogger("pipeline.step4")
 
@@ -54,10 +54,10 @@ def run(conn=None, run_id: str | None = None, prefetch_thread=None) -> dict:  # 
             payment_model,
             now() AS _version
         FROM raw_data.direct_campaigns
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
-    client.command("EXCHANGE TABLES ad_analytics.campaign_status AND ad_analytics.campaign_status_new")
-    client.command("DROP TABLE IF EXISTS ad_analytics.campaign_status_new SYNC")
+    swap_shadow(client, "ad_analytics.campaign_status", "ad_analytics.campaign_status_new")
 
     rows = count_rows(client, "ad_analytics.campaign_status")
     logger.info("Шаг 4 v6_ch завершён за %.1f сек: campaign_status=%d", time.perf_counter() - t0, rows)

@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+
+
+SAFE_QUERY_SETTINGS = {
+    "max_threads": 1,
+    "max_execution_time": 60,
+    "max_memory_usage": 512_000_000,
+    "max_bytes_before_external_group_by": 128_000_000,
+    "max_bytes_before_external_sort": 128_000_000,
+    "max_temporary_data_on_disk_size_for_query": 2_000_000_000,
+    "max_block_size": 16_384,
+}
 
 
 def q(name: str) -> str:
@@ -88,6 +99,18 @@ def month_ranges_from_table(
     ranges: list[tuple[str, str]] = []
     while current <= last:
         nxt = date(current.year + 1, 1, 1) if current.month == 12 else date(current.year, current.month + 1, 1)
+        ranges.append((current.isoformat(), nxt.isoformat()))
+        current = nxt
+    return ranges
+
+
+def day_ranges(date_from: str = "2026-01-01", date_to: str | None = None) -> list[tuple[str, str]]:
+    start = date.fromisoformat(date_from)
+    end = date.fromisoformat(date_to) if date_to else date.today() + timedelta(days=1)
+    ranges: list[tuple[str, str]] = []
+    current = start
+    while current < end:
+        nxt = current + timedelta(days=1)
         ranges.append((current.isoformat(), nxt.isoformat()))
         current = nxt
     return ranges

@@ -10,7 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows, month_ranges_from_table, swap_shadow
+from config.ch_settings import DATE_FROM
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
 
 logger = logging.getLogger("pipeline.criterion_spend")
 
@@ -64,11 +65,11 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             CAST(NULL, 'Nullable(String)') AS `город`,
             CAST(NULL, 'Nullable(String)') AS `регион`
         WHERE 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
-    ranges = month_ranges_from_table(client, "raw_data.yandex_direct_report_rows", "toDate(day)", "campaign_id != 0")
+    ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow}
@@ -110,10 +111,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             FROM cleaned y
             LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(y.client_login)
             GROUP BY date, campaign_id, ad_group_id, ad_network_type, criterion_id, criterion_norm, client_login
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        logger.info("  criterion batch %d/%d: +%d строк", idx, len(ranges), after - before)
+        logger.info("  criterion daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.fact_criterion_spend", shadow)
     rows = count_rows(client, "ad_analytics.fact_criterion_spend")
     logger.info("criterion_spend v6_ch завершён за %.1f сек: rows=%d", time.perf_counter() - t0, rows)

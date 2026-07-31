@@ -10,7 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows, month_ranges_from_table, swap_shadow
+from config.ch_settings import DATE_FROM
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
 
 logger = logging.getLogger("pipeline.adformat_spend")
 
@@ -53,11 +54,11 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             CAST(NULL, 'Nullable(String)') AS `проджект`,
             CAST(NULL, 'Nullable(String)') AS `id_салона`
         WHERE 0
-        """
+        """,
+        settings=SAFE_QUERY_SETTINGS,
     )
-    ranges = month_ranges_from_table(client, "raw_data.yandex_direct_report_rows", "toDate(day)", "campaign_id != 0")
+    ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
-        before = count_rows(client, shadow)
         client.command(
             f"""
             INSERT INTO {shadow}
@@ -90,10 +91,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             WHERE toDate(day) >= toDate('{lo}') AND toDate(day) < toDate('{hi}')
               AND campaign_id != 0
             GROUP BY date, campaign_id, ad_group_id, ad_network_type, ad_format, client_login
-            """
+            """,
+            settings=SAFE_QUERY_SETTINGS,
         )
-        after = count_rows(client, shadow)
-        logger.info("  adformat batch %d/%d: +%d строк", idx, len(ranges), after - before)
+        logger.info("  adformat daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.fact_adformat_spend", shadow)
     rows = count_rows(client, "ad_analytics.fact_adformat_spend")
     logger.info("adformat_spend v6_ch завершён за %.1f сек: rows=%d", time.perf_counter() - t0, rows)
