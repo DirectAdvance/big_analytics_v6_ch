@@ -22,6 +22,7 @@ logger = logging.getLogger("pipeline.step3")
 
 
 SOURCE_STORE = "big_analytics_sources"
+LEADS_DEDUPED_STAGE = "_step3_leads_deduped"
 DIRECT_SOURCE_TYPES = ("direct", "tp8", "tp9", "tp10")
 
 def _weekday_expr(date_expr: str) -> str:
@@ -220,6 +221,80 @@ crm_by_domain AS
 """
 
 
+def _leads_deduped_cte() -> str:
+    return """
+perform_domains AS
+(
+    SELECT lowerUTF8(trim(ifNull(domain, ''))) AS domain
+    FROM raw_data.gsheet_sites
+    WHERE client_id = 'avto_0415'
+      AND ifNull(domain, '') != ''
+),
+priezd_statuses AS
+(
+    SELECT DISTINCT status
+    FROM raw_data.crm_status_mapping
+    WHERE category IN ('visit', 'sale', 'credit', 'approved')
+      AND ifNull(status, '') != ''
+),
+all_leads AS
+(
+    SELECT *
+    FROM ad_analytics.raw_leads
+    WHERE lowerUTF8(trim(ifNull(domain, ''))) NOT IN (SELECT domain FROM perform_domains)
+    UNION ALL
+    SELECT *
+    FROM ad_analytics.raw_perform_leads
+),
+ranked_leads AS
+(
+    SELECT
+        *,
+        max(if(status IN (SELECT status FROM priezd_statuses), 1, 0))
+            OVER (PARTITION BY phone, yclid) AS _hp,
+        row_number() OVER (
+            PARTITION BY phone, yclid
+            ORDER BY if(status IN (SELECT status FROM priezd_statuses), 0, 1), created_date
+        ) AS _rn
+    FROM all_leads
+    WHERE ifNull(phone, '') != ''
+      AND ifNull(yclid, '') != ''
+),
+leads_deduped AS
+(
+    SELECT * EXCEPT(_hp, _rn)
+    FROM all_leads
+    WHERE ifNull(phone, '') = ''
+       OR ifNull(yclid, '') = ''
+    UNION ALL
+    SELECT * EXCEPT(_hp, _rn)
+    FROM ranked_leads
+    WHERE (_hp = 1 AND status IN (SELECT status FROM priezd_statuses))
+       OR (_hp = 0 AND _rn = 1)
+)
+"""
+
+
+def _rebuild_leads_deduped_stage(client) -> int:
+    target = f"ad_analytics.{LEADS_DEDUPED_STAGE}"
+    client.command(f"DROP TABLE IF EXISTS {target} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {target}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(ifNull(created_date, toDate('2026-01-01')))
+        ORDER BY (ifNull(created_date, toDate('2026-01-01')), ifNull(key3, ''), id)
+        AS
+        WITH
+        {_leads_deduped_cte()}
+        SELECT *
+        FROM leads_deduped
+        WHERE ifNull(created_date, toDate('1970-01-01')) >= toDate('2026-01-01')
+        """
+    )
+    return count_rows(client, target)
+
+
 def _ag_parts_expr(prefix: str = "") -> str:
     ag = f"{prefix}adgroup_code"
     return f"""
@@ -330,7 +405,7 @@ lead_scored AS
         domain AS domain,
         fid AS fid,
         {_metric_expr("status", "reason", "source_type", "salon")}
-    FROM ad_analytics.raw_leads
+    FROM ad_analytics.{LEADS_DEDUPED_STAGE}
     WHERE ifNull(key3, '') != ''
       AND NOT (ifNull(utm_source, '') = '' OR (utm_source = 'seo' AND utm_medium = 'organic'))
       AND ifNull(utm_source, '') NOT LIKE 'victory_%'
@@ -457,7 +532,7 @@ lead_scored AS
         l.*,
         lower(trim(ifNull(l.domain, ''))) AS domain_key,
         {_metric_expr("l.status", "l.reason", "l.source_type", "l.salon")}
-    FROM ad_analytics.raw_leads l
+    FROM ad_analytics.{LEADS_DEDUPED_STAGE} l
     WHERE {source_filter}
       {lead_date_filter}
 )
@@ -565,8 +640,23 @@ def _build_crop_sql() -> str:
 
 
 def _build_seo_sql(lead_date_filter: str = "") -> str:
-    filt = "(ifNull(utm_source, '') = '' OR (utm_source = 'seo' AND ifNull(utm_medium, '') = 'organic'))"
-    return _build_lead_source_sql("big_analytics_seo", filt, "SEO", "SEO", "Victory", lead_date_filter)
+    filt = """
+(
+    ifNull(utm_source, '') = ''
+    OR (utm_source = 'seo' AND ifNull(utm_medium, '') = 'organic')
+)
+AND lowerUTF8(trim(ifNull(domain, ''))) IN (
+    SELECT lowerUTF8(trim(ifNull(gs2.domain, '')))
+    FROM raw_data.gsheet_sites gs2
+    WHERE ifNull(gs2.domain, '') != ''
+)
+AND lowerUTF8(trim(ifNull(domain, ''))) NOT IN (
+    SELECT lowerUTF8(trim(ifNull(ca.`Сайт`, '')))
+    FROM ad_analytics.gsheets_crop_targeting_account ca
+    WHERE ifNull(ca.`Сайт`, '') != ''
+)
+"""
+    return _build_lead_source_sql("big_analytics_seo", filt, "SEO", "Комплекс", "Victory", lead_date_filter)
 
 
 def _build_pixel_sql(lead_date_filter: str = "") -> str:
@@ -649,6 +739,11 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     total = 0
     parts: list[str] = []
     shadow = f"ad_analytics.{SOURCE_STORE}_new"
+
+    t_stage = time.perf_counter()
+    leads_rows = _rebuild_leads_deduped_stage(client)
+    parts.append(f"{LEADS_DEDUPED_STAGE}={leads_rows:,}")
+    logger.info("  rebuilt ad_analytics.%s: %s rows за %.1f сек", LEADS_DEDUPED_STAGE, f"{leads_rows:,}", time.perf_counter() - t_stage)
 
     direct_ranges = day_ranges("2026-01-01")
     direct_batches = [
