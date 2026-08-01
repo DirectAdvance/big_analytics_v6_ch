@@ -952,7 +952,9 @@ def _overlay_full(client) -> tuple[int, float, float]:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    full_ranges = range_batches(DATE_FROM, days=7)
+    # Keep the wide full-table copy under the current managed CH memory limit
+    # (~488 MiB). Weekly batches are too close to the cap on the July slice.
+    full_ranges = range_batches(DATE_FROM, days=1)
     for idx, (lo, hi) in enumerate(full_ranges, start=1):
         client.command(
             f"""

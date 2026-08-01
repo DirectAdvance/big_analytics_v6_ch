@@ -49,11 +49,13 @@ def _weekday_expr(date_expr: str) -> str:
     )
 
 
-def _insert_weighted_pixel_sql(target: str) -> str:
+def _insert_weighted_pixel_sql(target: str, lo: str, hi: str) -> str:
     return f"""
 INSERT INTO {target}
 WITH
 {_gs_account_cte()},
+toStartOfMonth(toDate('{lo}')) AS batch_month,
+addMonths(batch_month, 1) AS next_month,
 campaign_monthly AS
 (
     SELECT
@@ -76,6 +78,7 @@ campaign_monthly AS
       AND domain IS NOT NULL
       AND `салон` IS NOT NULL
       AND `Date` IS NOT NULL
+      AND `Date` >= batch_month AND `Date` < next_month
     GROUP BY month, `салон`, domain, `источник`, `_source_table`, `CampaignId`
     HAVING cost > 0 AND clicks > 0
 ),
@@ -114,6 +117,7 @@ pixel_daily AS
     FROM ad_analytics.{SOURCE_STORE}
     WHERE `_source_table` = 'pixel'
       AND `Date` IS NOT NULL
+      AND `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
       AND domain IS NOT NULL
       AND `салон` IS NOT NULL
     GROUP BY `Date`, month, `салон`, domain
@@ -150,6 +154,7 @@ campaign_attrs AS
     FROM ad_analytics.big_analytics_full
     WHERE `_source_table` IN ('direct', 'crop_targeting', 'tp8', 'tp9', 'tp10')
       AND `CampaignId` != 0
+      AND `Date` >= batch_month AND `Date` < next_month
     GROUP BY `CampaignId`
 ),
 attributed AS
@@ -334,7 +339,10 @@ def _direct_pixel_select_cols(cols: list[str]) -> str:
 def _rebuild_pixel_score(client) -> int:
     shadow = "ad_analytics.big_analytics_pixel_score_new"
     _create_empty_from_full(client, shadow)
-    client.command(_insert_weighted_pixel_sql(shadow), settings=SAFE_QUERY_SETTINGS)
+    pixel_ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(pixel_ranges, start=1):
+        client.command(_insert_weighted_pixel_sql(shadow, lo, hi), settings=SAFE_QUERY_SETTINGS)
+        logger.info("  pixel_score daily batch %d/%d inserted: %s -> %s", idx, len(pixel_ranges), lo, hi)
     swap_shadow(client, "ad_analytics.big_analytics_pixel_score", shadow)
     return count_rows(client, "ad_analytics.big_analytics_pixel_score")
 

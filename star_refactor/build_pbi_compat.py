@@ -11,23 +11,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, range_batches, q, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, range_batches, q, swap_shadow, table_exists
+from criterion_spend.cleaning import CRITERION_CLEAN
+from spend.build_direct_spend_staging import STAGING_TABLE
 
 log = logging.getLogger("build_pbi_compat")
 
-PBI_FULL_COLS = [
-    "Date", "CampaignId", "AdNetworkType", "Device", "total_cost", "campaign_code", "tp", "cpc_cpa",
-    "Обращения", "korr", "kval", "priezd", "prodazhi", "nekorr", "ne_otvechaet", "filtr", "nedozvon",
-    "RlAdjustmentId", "RlAdjustmentId_total", "fid", "Clicks", "источник", "План заявки", "План приезда",
-    "аккаунт|сайт", "поставщик", "домен", "priedet", "dohod_do_kredita", "dobro", "атрибуция",
-    "AdGroupId", "направление", "site_quiz", "марки авто", "специалист", "тип_сайта", "статус",
-    "status", "салон", "шаблон", "id_салона", "город", "регион", "проджект", "project_manager",
-    "менеджер", "Название crm",
-    "тип_заявки", "manager_login", "CampaignName", "AdGroupName", "account_login", "adgroup_code",
-    "ag_part1", "ag_part2", "ag_part3", "ag_part4", "ag_part5", "ag_part6", "ag_part7",
-    "campaign_status", "payment_model", "неверный_кодер_new", "week_start", "День недели",
-    "номер группы | название группы", "номер кампании | название кампании",
-]
+
+def _site_key_expr(alias: str = "f") -> str:
+    return f"cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull({alias}.domain, ''))))"
+
 
 PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
@@ -72,44 +65,95 @@ def drop_bi_views(client) -> None:
         client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(f'bi_{table}')} SYNC")
 
 
-def _pbi_full_expr(col: str) -> str:
-    if col == "Обращения":
-        return "kol_vo_zayavok AS `Обращения`"
-    if col == "домен":
-        return "domain AS `домен`"
-    return q(col)
+def _pbi_full_sql(where_sql: str = "") -> str:
+    return f"""
+        SELECT
+            f.`Date` AS `Date`,
+            f.`CampaignId` AS `CampaignId`,
+            f.`AdNetworkType`,
+            f.`Device`,
+            toFloat64(f.total_cost) AS total_cost,
+            dc.campaign_code,
+            dc.tp,
+            dc.cpc_cpa,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0.0, toFloat64(f.kol_vo_zayavok)) AS `Обращения`,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0.0, toFloat64(f.korr)) AS korr,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0.0, toFloat64(f.kval)) AS kval,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0.0, toFloat64(f.priezd)) AS priezd,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0.0, toFloat64(f.prodazhi)) AS prodazhi,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0, toInt64(round(f.nekorr))) AS nekorr,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0, toInt64(round(f.ne_otvechaet))) AS ne_otvechaet,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0, toInt64(round(f.filtr))) AS filtr,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0, toInt64(round(f.nedozvon))) AS nedozvon,
+            f.`RlAdjustmentId`,
+            f.RlAdjustmentId_total,
+            f.fid,
+            -- PBI v00 historically treats the Clicks field as the v5 "Clicks" column,
+            -- which contains Yandex impressions. Keep this compatibility alias here
+            -- while the CH fact keeps physical Clicks/Impressions semantics.
+            toFloat64(f.`Impressions`) AS `Clicks`,
+            f.`источник`,
+            f.`План заявки`,
+            f.`План приезда`,
+            concat(ifNull(f.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`,
+            f.`поставщик`,
+            f.domain AS `домен`,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0, toInt64(round(f.priedet))) AS priedet,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0, f.dohod_do_kredita) AS dohod_do_kredita,
+            if(lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 0, f.dobro) AS dobro,
+            f.`атрибуция`,
+            f.`AdGroupId` AS `AdGroupId`,
+            multiIf(
+                f.`источник` = 'Пиксель_атрибуц', 'пиксель_атрибуц',
+                lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 'пиксель',
+                ds.`направление`
+            ) AS `направление`,
+            dc.site_quiz,
+            dag.`марки авто`,
+            ds.`специалист`,
+            ds.`тип_сайта`,
+            ds.`статус`,
+            ds.status,
+            ds.`салон`,
+            ds.`шаблон`,
+            ds.`id_салона`,
+            ds.`город`,
+            ds.`регион`,
+            ds.`проджект`,
+            ds.project_manager,
+            ds.`менеджер`,
+            ds.`Название crm`,
+            f.`тип_заявки`,
+            f.manager_login,
+            dc.`CampaignName`,
+            dag.`AdGroupName`,
+            f.account_login AS account_login,
+            dag.adgroup_code,
+            dag.ag_part1,
+            dag.ag_part2,
+            dag.ag_part3,
+            dag.ag_part4,
+            dag.ag_part5,
+            dag.ag_part6,
+            dag.ag_part7,
+            dc.campaign_status,
+            dc.payment_model,
+            f.`неверный_кодер_new`,
+            dd.week_start,
+            dd.`День недели`,
+            dag.`номер группы | название группы`,
+            dc.`номер кампании | название кампании`
+        FROM ad_analytics.fact_big_analytics f
+        LEFT JOIN ad_analytics.Dim_Date dd ON dd.`Date` = f.`Date`
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.`CampaignId` = f.`CampaignId`
+        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.`AdGroupId` = f.`AdGroupId`
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
+        {where_sql}
+    """
 
 
 def build_pbi_full(client) -> int:
-    select_sql = ", ".join(_pbi_full_expr(col) for col in PBI_FULL_COLS)
-    shadow = "ad_analytics.pbi_import_big_analytics_full_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(
-        f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
-        ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(`CampaignId`, 0), ifNull(`AdGroupId`, 0), ifNull(`домен`, ''))
-        AS
-        SELECT {select_sql}
-        FROM ad_analytics.fact_big_analytics
-        WHERE 0
-        """,
-        settings=SAFE_QUERY_SETTINGS,
-    )
-    ranges = day_ranges(DATE_FROM)
-    for idx, (lo, hi) in enumerate(ranges, start=1):
-        client.command(
-            f"""
-            INSERT INTO {shadow}
-            SELECT {select_sql}
-            FROM ad_analytics.fact_big_analytics
-            WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-        log.info("  pbi_import_big_analytics_full daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
-    swap_shadow(client, "ad_analytics.pbi_import_big_analytics_full", shadow)
+    _replace_view(client, "pbi_import_big_analytics_full", _pbi_full_sql())
     _replace_view(
         client,
         "pbi_big_analytics_full",
@@ -127,38 +171,38 @@ def _pixel_score_sql(where_sql: str = "") -> str:
             `источник`,
             `CampaignId`,
             `CampaignName`,
-            kol_vo_zayavok,
-            korr,
-            kval,
-            priezd,
-            prodazhi,
+            toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
+            toFloat64(korr) AS korr,
+            toFloat64(kval) AS kval,
+            toFloat64(priezd) AS priezd,
+            toFloat64(prodazhi) AS prodazhi,
             `направление`,
-            toDecimal64(1, 4) AS cpl_score,
-            kol_vo_zayavok AS `pixel_kol_vo_домена`,
-            kol_vo_zayavok AS `pixel_kol_vo_кампании`,
-            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_avg_квал`,
-            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_avg_визит`,
-            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_avg_продажа`,
-            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_кам_квал`,
-            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_кам_визит`,
-            CAST(NULL, 'Nullable(Decimal(18, 4))') AS `cpl_кам_продажа`,
-            toDecimal64(1, 4) AS `score_квал`,
-            toDecimal64(1, 4) AS `score_визит`,
-            toDecimal64(1, 4) AS `score_продажа`,
-            toDecimal64(1, 4) AS `w_квал`,
-            toDecimal64(1, 4) AS `w_визит`,
-            toDecimal64(1, 4) AS `w_продажа`,
+            toFloat64(1) AS cpl_score,
+            toFloat64(kol_vo_zayavok) AS `pixel_kol_vo_домена`,
+            toFloat64(kol_vo_zayavok) AS `pixel_kol_vo_кампании`,
+            CAST(NULL, 'Nullable(Float64)') AS `cpl_avg_квал`,
+            CAST(NULL, 'Nullable(Float64)') AS `cpl_avg_визит`,
+            CAST(NULL, 'Nullable(Float64)') AS `cpl_avg_продажа`,
+            CAST(NULL, 'Nullable(Float64)') AS `cpl_кам_квал`,
+            CAST(NULL, 'Nullable(Float64)') AS `cpl_кам_визит`,
+            CAST(NULL, 'Nullable(Float64)') AS `cpl_кам_продажа`,
+            toFloat64(1) AS `score_квал`,
+            toFloat64(1) AS `score_визит`,
+            toFloat64(1) AS `score_продажа`,
+            toFloat64(1) AS `w_квал`,
+            toFloat64(1) AS `w_визит`,
+            toFloat64(1) AS `w_продажа`,
             'данные' AS `status_квал`,
             'данные' AS `status_визит`,
             'данные' AS `status_продажа`,
-            total_cost AS `расход`,
-            toDecimal64(100, 4) AS weight,
-            kval AS `pixel_квал_домена`,
-            kval AS `attr_pixel_квал_кампании`,
-            priezd AS `pixel_приезд_домена`,
-            priezd AS `attr_pixel_приезд_кампании`,
-            prodazhi AS `pixel_продажи_домена`,
-            prodazhi AS `attr_pixel_продажи_кампании`
+            toFloat64(total_cost) AS `расход`,
+            toFloat64(100) AS weight,
+            toFloat64(kval) AS `pixel_квал_домена`,
+            toFloat64(kval) AS `attr_pixel_квал_кампании`,
+            toFloat64(priezd) AS `pixel_приезд_домена`,
+            toFloat64(priezd) AS `attr_pixel_приезд_кампании`,
+            toFloat64(prodazhi) AS `pixel_продажи_домена`,
+            toFloat64(prodazhi) AS `attr_pixel_продажи_кампании`
         FROM ad_analytics.big_analytics_pixel_score
         {where_sql}
     """
@@ -195,6 +239,10 @@ def build_pixel_score(client) -> int:
 def build_dim_placement_feed(client) -> int:
     stage = "ad_analytics.Dim_PlacementFeed_stage_new"
     shadow = "ad_analytics.Dim_PlacementFeed_new"
+    use_staging = table_exists(client, "ad_analytics", "direct_spend_staging")
+    source_table = STAGING_TABLE if use_staging else "raw_data.yandex_direct_report_rows"
+    date_expr = "date" if use_staging else "toDate(day)"
+    placement_expr = "placement" if use_staging else "trim(BOTH ' ' FROM ifNull(placement, ''))"
     client.command(f"DROP TABLE IF EXISTS {stage} SYNC")
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
     client.command(
@@ -204,16 +252,16 @@ def build_dim_placement_feed(client) -> int:
         ORDER BY placement_feed_key
         AS
         SELECT
-            lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
-            trim(BOTH ' ' FROM ifNull(placement, '')) AS placement,
-            trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_key,
-            trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_url_key,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull({placement_expr}, ''))) AS placement_feed_key,
+            trim(BOTH ' ' FROM ifNull({placement_expr}, '')) AS placement,
+            trim(BOTH ' ' FROM ifNull({placement_expr}, '')) AS feed_key,
+            trim(BOTH ' ' FROM ifNull({placement_expr}, '')) AS feed_url_key,
             ad_network_type,
             ad_network_type AS AdNetworkType,
             tuple(count(), lengthUTF8(placement)) AS sort_weight
-        FROM ad_analytics.fact_direct_feed_funnel
-        WHERE 0
-        GROUP BY placement_feed_key, placement, ad_network_type
+            FROM {source_table}
+            WHERE 0
+            GROUP BY placement_feed_key, placement, ad_network_type
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
@@ -223,17 +271,17 @@ def build_dim_placement_feed(client) -> int:
             f"""
             INSERT INTO {stage}
             SELECT
-                lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
-                trim(BOTH ' ' FROM ifNull(placement, '')) AS placement,
-                trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_key,
-                trim(BOTH ' ' FROM ifNull(placement, '')) AS feed_url_key,
+                lowerUTF8(trim(BOTH ' ' FROM ifNull({placement_expr}, ''))) AS placement_feed_key,
+                trim(BOTH ' ' FROM ifNull({placement_expr}, '')) AS placement,
+                trim(BOTH ' ' FROM ifNull({placement_expr}, '')) AS feed_key,
+                trim(BOTH ' ' FROM ifNull({placement_expr}, '')) AS feed_url_key,
                 ad_network_type,
                 ad_network_type AS AdNetworkType,
                 tuple(count(), lengthUTF8(placement)) AS sort_weight
-            FROM ad_analytics.fact_direct_feed_funnel
-            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
-              AND notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))))
-            GROUP BY placement_feed_key, placement, ad_network_type
+                FROM {source_table}
+                WHERE {date_expr} >= toDate('{lo}') AND {date_expr} < toDate('{hi}')
+                  AND notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull({placement_expr}, ''))))
+                GROUP BY placement_feed_key, placement, ad_network_type
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
@@ -266,67 +314,36 @@ def build_dim_placement_feed(client) -> int:
 def _feed_funnel_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            date,
-            lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
-            CAST(NULL, 'Nullable(Int64)') AS feed_id,
-            CAST(NULL, 'Nullable(String)') AS feed_name,
-            CAST(NULL, 'Nullable(String)') AS feed_url,
-            placement AS feed_key,
-            placement AS feed_url_key,
-            campaign_id,
-            campaign_name,
-            ad_group_id AS adgroup_id,
-            ad_group_name AS adgroup_name,
-            domain,
-            account_login AS login_key,
-            cost AS total_cost,
-            clicks,
-            impressions,
-            all_forms AS kol_vo_zayavok,
-            crm_order_created AS korr,
-            toDecimal64(0, 6) AS nekorr,
-            toDecimal64(0, 6) AS kval,
-            toDecimal64(0, 6) AS priezd,
-            crm_order_paid AS prodazhi,
-            toDecimal64(0, 6) AS dobro,
-            toDecimal64(0, 6) AS dohod_do_kredita,
-            toDecimal64(0, 6) AS filtr,
-            all_forms AS attributed_leads,
-            toDecimal64(0, 6) AS ne_otvechaet,
-            toDecimal64(0, 6) AS nedozvon,
-            toDecimal64(0, 6) AS priedet,
-            all_forms AS goal_all_forms,
-            crm_order_created AS goal_crm_order_created,
-            crm_order_paid AS goal_crm_order_paid,
-            toDecimal64(0, 6) AS goal_crm_order_canceled,
-            toDecimal64(0, 6) AS goal_crm_spam_order,
-            concat(toString(date), '|', ifNull(domain, ''), '|', ifNull(placement, '')) AS dk2,
+            f.date,
+            f.placement_feed_key AS placement_feed_key,
+            f.campaign_id,
+            f.ad_group_id AS adgroup_id,
+            f.domain AS domain,
+            toFloat64(f.cost) AS total_cost,
+            toFloat64(f.clicks) AS clicks,
+            toFloat64(f.impressions) AS impressions,
+            toInt64(round(f.all_forms)) AS kol_vo_zayavok,
+            toInt64(round(f.crm_order_created)) AS korr,
+            toInt64(0) AS nekorr,
+            toInt64(0) AS kval,
+            toInt64(0) AS priezd,
+            toInt64(round(f.crm_order_paid)) AS prodazhi,
+            toInt64(0) AS dobro,
+            toInt64(0) AS dohod_do_kredita,
+            toInt64(0) AS filtr,
+            toInt64(round(f.all_forms)) AS attributed_leads,
+            toInt64(0) AS ne_otvechaet,
+            toInt64(0) AS nedozvon,
+            toInt64(0) AS priedet,
+            toFloat64(f.all_forms) AS goal_all_forms,
+            toFloat64(f.crm_order_created) AS goal_crm_order_created,
+            toFloat64(f.crm_order_paid) AS goal_crm_order_paid,
+            toFloat64(0) AS goal_crm_order_canceled,
+            toFloat64(0) AS goal_crm_spam_order,
             toUInt8(0) AS is_tp67,
-            gs.directologist AS `специалист`,
-            gs.site_type AS `тип_сайта`,
-            gs.region AS `регион`,
-            gs.salon AS `салон`,
-            gs.city AS `город`,
-            gs.template AS `шаблон`,
-            CAST(NULL, 'Nullable(String)') AS `направление`,
-            concat(ifNull(account_login, ''), '|', ifNull(domain, '')) AS `аккаунт|сайт`,
-            CAST(NULL, 'Nullable(String)') AS `канал`,
-            CAST(NULL, 'Nullable(String)') AS `ниша`,
-            CAST(NULL, 'Nullable(String)') AS `статус_кампании`,
-            CAST(NULL, 'Nullable(String)') AS `тип_оплаты`,
-            concat(toString(campaign_id), ' | ', ifNull(campaign_name, '')) AS `номер кампании | название кампании`,
-            concat(toString(ad_group_id), ' | ', ifNull(ad_group_name, '')) AS `номер группы | название группы`,
-            CAST(NULL, 'Nullable(String)') AS tp,
-            CAST(NULL, 'Nullable(String)') AS campaign_code,
-            CAST(NULL, 'Nullable(String)') AS `тип_заявки`,
-            CAST(NULL, 'Nullable(String)') AS `Название crm`,
-            CAST(NULL, 'Nullable(String)') AS `статус`,
             'direct_feed_funnel' AS `источник`,
-            domain AS `домен`,
-            ad_network_type AS AdNetworkType,
             now() AS generated_at
         FROM ad_analytics.fact_direct_feed_funnel f
-        LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(f.account_login)
         {where_sql}
     """
 
@@ -339,13 +356,13 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
         CREATE TABLE {shadow}
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(date)
-        ORDER BY (date, campaign_id, adgroup_id, placement_feed_key)
+        ORDER BY (date, campaign_id, adgroup_id, placement_feed_key, ifNull(domain, ''))
         AS
         {_feed_funnel_pbi_sql("WHERE 0")}
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    ranges = day_ranges(DATE_FROM)
+    ranges = range_batches(DATE_FROM, days=1)
     for idx, (lo, hi) in enumerate(ranges, start=1):
         client.command(
             f"""
@@ -359,105 +376,244 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
     return count_rows(client, "ad_analytics.pbi_import_fact_direct_feed_funnel")
 
 
+def _region_spend_pbi_sql(where_sql: str = "") -> str:
+    return f"""
+        SELECT
+            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), ifNull(f.ad_network_type, ''), ifNull(f.id_location, 0))) AS row_hash,
+            f.date,
+            f.campaign_id,
+            dc.CampaignName AS campaign_name,
+            f.ad_group_id,
+            dag.AdGroupName AS ad_group_name,
+            f.ad_network_type,
+            f.id_location,
+            f.location,
+            f.`Область`,
+            f.GeoRegionType,
+            toInt64(ifNull(round(f.distance_km), 0)) AS distance_km,
+            f.distance_km_agreg,
+            toFloat64(f.cost) AS cost,
+            toFloat64(f.clicks) AS clicks,
+            toFloat64(f.impressions) AS impressions,
+            toInt64(round(f.all_forms)) AS `Все формы`,
+            toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`,
+            toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
+            toInt64(round(f.crm_spam_order)) AS `CRM: Спам заказ`,
+            toInt64(round(f.crm_order_canceled)) AS `CRM: Заказ отменен`,
+            f.account_login AS `логин`,
+            ds.domain AS domain,
+            ds.`специалист` AS `директолог`,
+            ds.`салон`,
+            ds.`город`,
+            ds.`регион`,
+            ds.`тип_сайта`,
+            ds.`шаблон`,
+            ds.`статус`,
+            ds.`направление` AS `направление`,
+            ds.`проджект`,
+            ds.project_manager AS project_manager,
+            ds.`id_салона` AS client_id,
+            dc.campaign_code AS campaign_code,
+            dc.tp AS tp,
+            dc.cpc_cpa AS cpc_cpa,
+            dc.site_quiz AS site_quiz,
+            now() AS updated_at
+        FROM ad_analytics.fact_region_spend f
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
+        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
+        {where_sql}
+    """
+
+
+def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
+    return f"""
+        SELECT
+            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), ifNull(f.ad_network_type, ''), ifNull(f.ad_format, ''))) AS row_hash,
+            f.date,
+            f.campaign_id,
+            dc.CampaignName AS campaign_name,
+            f.ad_group_id,
+            dag.AdGroupName AS ad_group_name,
+            f.ad_network_type,
+            f.ad_format,
+            toFloat64(f.cost) AS cost,
+            toFloat64(f.clicks) AS clicks,
+            toFloat64(f.impressions) AS impressions,
+            toInt64(0) AS `Все формы`,
+            toInt64(0) AS `CRM: Заказ создан`,
+            toInt64(0) AS `CRM: Заказ оплачен`,
+            toInt64(0) AS `CRM: Спам заказ`,
+            toInt64(0) AS `CRM: Заказ отменен`,
+            f.account_login AS `логин`,
+            ds.domain AS domain,
+            ds.`специалист` AS `директолог`,
+            ds.`салон`,
+            ds.`город`,
+            ds.`регион`,
+            ds.`тип_сайта`,
+            ds.`шаблон`,
+            ds.`статус`,
+            ds.`направление` AS `направление`,
+            ds.`проджект`,
+            ds.project_manager AS project_manager,
+            ds.`id_салона` AS client_id,
+            dc.campaign_code AS campaign_code,
+            dc.tp AS tp,
+            dc.cpc_cpa AS cpc_cpa,
+            dc.site_quiz AS site_quiz,
+            dag.adgroup_code AS adgroup_code,
+            dag.`марки авто` AS adgroup_brand,
+            now() AS updated_at
+        FROM ad_analytics.fact_adformat_spend f
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
+        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
+        {where_sql}
+    """
+
+
+def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
+    return f"""
+        SELECT
+            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), ifNull(f.ad_network_type, ''), ifNull(f.criterion_id, 0), ifNull(dcr.criterion, ''))) AS row_hash,
+            f.date,
+            f.campaign_id,
+            dc.CampaignName AS campaign_name,
+            f.ad_group_id,
+            dag.AdGroupName AS ad_group_name,
+            f.ad_network_type,
+            f.criterion_id,
+            ifNull(dcr.criterion, '') AS criterion,
+            dcr.criterion_raw,
+            ifNull(dcr.criterion_type, '') AS criterion_type,
+            toFloat64(f.cost) AS cost,
+            toFloat64(f.clicks) AS clicks,
+            toFloat64(f.impressions) AS impressions,
+            toInt64(0) AS `Все формы`,
+            toInt64(0) AS `CRM: Заказ создан`,
+            toInt64(0) AS `CRM: Заказ оплачен`,
+            toInt64(0) AS `CRM: Спам заказ`,
+            toInt64(0) AS `CRM: Заказ отменен`,
+            toInt64(0) AS kol_vo_zayavok,
+            toInt64(0) AS korr,
+            toInt64(0) AS nekorr,
+            toInt64(0) AS kval,
+            toInt64(0) AS priezd,
+            toInt64(0) AS prodazhi,
+            f.account_login AS `логин`,
+            ds.domain AS domain,
+            ds.domain AS `домен`,
+            ds.`специалист`,
+            ds.`специалист` AS `директолог`,
+            ds.`салон`,
+            ds.`город`,
+            ds.`регион`,
+            ds.`тип_сайта`,
+            ds.`шаблон`,
+            ds.`статус`,
+            ds.`направление`,
+            ds.`проджект`,
+            ds.project_manager AS project_manager,
+            ds.`id_салона` AS client_id,
+            dc.campaign_code AS campaign_code,
+            dc.tp AS tp,
+            dc.cpc_cpa AS cpc_cpa,
+            dc.site_quiz AS site_quiz,
+            dc.`номер кампании | название кампании`,
+            CAST(NULL, 'Nullable(String)') AS `шаблон_марка`,
+            now() AS updated_at
+        FROM ad_analytics.fact_criterion_spend f
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
+        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
+        LEFT JOIN ad_analytics.dim_criterion dcr ON dcr.criterion_key = f.criterion_key
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
+        {where_sql}
+    """
+
+
+def _region_zayavki_pbi_sql() -> str:
+    return """
+        SELECT
+            row_hash,
+            created_date,
+            campaign_id,
+            campaign_name,
+            id_location,
+            location,
+            `Область`,
+            GeoRegionType,
+            distance_km,
+            distance_km_agreg,
+            CAST(`салон`, 'Nullable(String)') AS `салон`,
+            domain_id,
+            kol_vo_zayavok,
+            korr,
+            kval,
+            priezd,
+            prodazhi,
+            nekorr,
+            ne_otvechaet,
+            filtr,
+            nedozvon,
+            priedet,
+            dohod_do_kredita,
+            dobro,
+            updated_at
+        FROM ad_analytics.fact_region_zayavki
+    """
+
+
+def _criterion_zayavki_pbi_sql() -> str:
+    return """
+        SELECT
+            row_hash,
+            created_date,
+            campaign_id,
+            campaign_name,
+            criterion,
+            CAST(criterion_type, 'Nullable(String)') AS criterion_type,
+            criterion_raw,
+            CAST(`салон`, 'Nullable(String)') AS `салон`,
+            domain_id,
+            CAST(`шаблон`, 'Nullable(String)') AS `шаблон`,
+            CAST(`шаблон_марка`, 'Nullable(String)') AS `шаблон_марка`,
+            kol_vo_zayavok,
+            korr,
+            kval,
+            priezd,
+            prodazhi,
+            nekorr,
+            ne_otvechaet,
+            filtr,
+            nedozvon,
+            priedet,
+            dohod_do_kredita,
+            dobro,
+            updated_at
+        FROM ad_analytics.fact_criterion_zayavki
+    """
+
+
 def build_pbi_import_region_spend(client) -> int:
-    shadow = "ad_analytics.pbi_import_region_spend_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(
-        f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(date)
-        ORDER BY (date, campaign_id, ifNull(ad_group_id, 0), ifNull(id_location, 0))
-        AS
-        SELECT *
-        FROM ad_analytics.fact_region_spend
-        WHERE 0
-        """,
-        settings=SAFE_QUERY_SETTINGS,
-    )
-    ranges = day_ranges(DATE_FROM)
-    for idx, (lo, hi) in enumerate(ranges, start=1):
-        client.command(
-            f"""
-            INSERT INTO {shadow}
-            SELECT *
-            FROM ad_analytics.fact_region_spend
-            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-        log.info("  pbi_import_region_spend daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
-    swap_shadow(client, "ad_analytics.pbi_import_region_spend", shadow)
+    _replace_view(client, "pbi_import_region_spend", _region_spend_pbi_sql())
     return count_rows(client, "ad_analytics.pbi_import_region_spend")
 
 
 def build_arf_fact(client) -> int:
-    shadow = "ad_analytics.arf_fact_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(
-        f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(date)
-        ORDER BY (date, campaign_id, adgroup_id, placement_feed_key)
-        AS
-        SELECT *
-        FROM ad_analytics.pbi_import_fact_direct_feed_funnel
-        WHERE 0
-        """,
-        settings=SAFE_QUERY_SETTINGS,
-    )
-    ranges = day_ranges(DATE_FROM)
-    for idx, (lo, hi) in enumerate(ranges, start=1):
-        client.command(
-            f"""
-            INSERT INTO {shadow}
-            SELECT *
-            FROM ad_analytics.pbi_import_fact_direct_feed_funnel
-            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-        log.info("  arf_fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
-    swap_shadow(client, "ad_analytics.arf_fact", shadow)
+    _replace_view(client, "arf_fact", "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel")
     return count_rows(client, "ad_analytics.arf_fact")
 
 
 def build_arc_fact(client) -> int:
-    shadow = "ad_analytics.arc_fact_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(
-        f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(date)
-        ORDER BY (date, campaign_id, ad_group_id, ifNull(criterion_id, 0), criterion)
-        AS
-        SELECT *
-        FROM ad_analytics.fact_criterion_spend
-        WHERE 0
-        """,
-        settings=SAFE_QUERY_SETTINGS,
-    )
-    ranges = day_ranges(DATE_FROM)
-    for idx, (lo, hi) in enumerate(ranges, start=1):
-        client.command(
-            f"""
-            INSERT INTO {shadow}
-            SELECT *
-            FROM ad_analytics.fact_criterion_spend
-            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-        log.info("  arc_fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
-    swap_shadow(client, "ad_analytics.arc_fact", shadow)
+    _replace_view(client, "arc_fact", _criterion_spend_pbi_sql())
     return count_rows(client, "ad_analytics.arc_fact")
 
 
 def _dim_criterion_sql() -> str:
-    return """
+    return f"""
         SELECT
+            criterion_key,
             argMax(criterion, sort_weight) AS criterion,
             argMax(criterion_type, sort_weight) AS criterion_type,
             argMax(criterion_raw, sort_weight) AS criterion_raw
@@ -472,14 +628,27 @@ def _dim_criterion_sql() -> str:
             FROM
             (
                 SELECT
-                    lowerUTF8(trim(BOTH ' ' FROM criterion)) AS criterion_key,
-                    trim(BOTH ' ' FROM criterion) AS criterion,
-                    anyLast(criterion_type) AS criterion_type,
+                    cityHash64(lowerUTF8(trim(BOTH ' ' FROM criterion_norm))) AS criterion_key,
+                    trim(BOTH ' ' FROM criterion_norm) AS criterion,
+                    anyLast(multiIf(
+                        positionCaseInsensitive(criterion_norm, 'autotargeting') > 0, 'autotargeting',
+                        positionCaseInsensitive(criterion_norm, 'ретаргетинг') > 0, 'retargeting',
+                        positionCaseInsensitive(criterion_norm, 'интерес') > 0 OR positionCaseInsensitive(criterion_norm, 'привычк') > 0, 'interests',
+                        'keyword'
+                    )) AS criterion_type,
                     anyLast(criterion_raw) AS criterion_raw,
                     count() AS rows,
                     2 AS source_priority
-                FROM ad_analytics.fact_criterion_spend
-                WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM criterion)))
+                FROM
+                (
+                    SELECT
+                        {CRITERION_CLEAN} AS criterion_norm,
+                        criterion AS criterion_raw
+                    FROM raw_data.yandex_direct_report_rows
+                    WHERE toDate(day) >= toDate('{DATE_FROM}')
+                      AND campaign_id != 0
+                )
+                WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM criterion_norm)))
                 GROUP BY criterion_key, criterion
             )
             UNION ALL
@@ -492,7 +661,7 @@ def _dim_criterion_sql() -> str:
             FROM
             (
                 SELECT
-                    lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, ''))) AS criterion_key,
+                    cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(criterion, '')))) AS criterion_key,
                     trim(BOTH ' ' FROM ifNull(criterion, '')) AS criterion,
                     anyLast(criterion_type) AS criterion_type,
                     anyLast(criterion_raw) AS criterion_raw,
@@ -514,7 +683,7 @@ def build_dim_criterion(client) -> int:
         f"""
         CREATE TABLE {shadow}
         ENGINE = MergeTree
-        ORDER BY criterion
+        ORDER BY criterion_key
         AS
         {_dim_criterion_sql()}
         """,
@@ -527,53 +696,32 @@ def build_dim_criterion(client) -> int:
 def _arp_fact_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            date, domain AS `домен`, account_login AS `логин`, ad_network_type, placement,
-            lowerUTF8(trim(BOTH ' ' FROM ifNull(placement, ''))) AS placement_feed_key,
-            placement AS placement_key, cost, all_forms AS `Все формы`,
-            crm_order_created AS `CRM: Заказ создан`, crm_order_paid AS `CRM: Заказ оплачен`,
-            toDecimal64(0, 6) AS `CRM: Спам заказ`, toDecimal64(0, 6) AS `CRM: Заказ отменен`,
-            CAST(NULL, 'Nullable(String)') AS tp,
-            gs.directologist AS `Специалист`, gs.salon AS `салон`, gs.site_type AS `тип_сайта`,
+            f.date, f.domain AS `домен`, f.account_login AS `логин`, pf.ad_network_type, pf.placement,
+            f.placement_feed_key AS placement_feed_key,
+            pf.placement AS placement_key, toFloat64(f.cost) AS cost, toInt64(round(f.all_forms)) AS `Все формы`,
+            toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`, toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
+            toInt64(0) AS `CRM: Спам заказ`, toInt64(0) AS `CRM: Заказ отменен`,
+            dc.tp,
+            ds.`специалист` AS `Специалист`, ds.`салон`, ds.`тип_сайта`,
             now() AS updated_at,
-            toDecimal64(0, 6) AS kol_vo_zayavok, toDecimal64(0, 6) AS korr, toDecimal64(0, 6) AS kval,
-            toDecimal64(0, 6) AS priezd, toDecimal64(0, 6) AS prodazhi, toDecimal64(0, 6) AS nekorr,
-            toDecimal64(0, 6) AS priedet,
-            concat(toString(campaign_id), '|', ifNull(campaign_name, '')) AS `номер кампании|название кампании`,
-            campaign_id AS CampaignId, ad_group_id AS AdGroupId, clicks,
-            toDecimal64(0, 6) AS ne_otvechaet, toDecimal64(0, 6) AS nedozvon, toDecimal64(0, 6) AS filtr,
+            toInt64(0) AS kol_vo_zayavok, toInt64(0) AS korr, toInt64(0) AS kval,
+            toInt64(0) AS priezd, toInt64(0) AS prodazhi, toInt64(0) AS nekorr,
+            toInt64(0) AS priedet,
+            concat(toString(f.campaign_id), '|', ifNull(dc.CampaignName, '')) AS `номер кампании|название кампании`,
+            f.campaign_id AS CampaignId, f.ad_group_id AS AdGroupId, toInt64(round(f.clicks)) AS clicks,
+            toInt64(0) AS ne_otvechaet, toInt64(0) AS nedozvon, toInt64(0) AS filtr,
             toInt64(0) AS dohod_do_kredita, toInt64(0) AS dobro,
-            date AS Date, domain, CAST(NULL, 'Nullable(String)') AS `тип_заявки`
+            f.date AS Date, f.domain AS domain, CAST(NULL, 'Nullable(String)') AS `тип_заявки`
         FROM ad_analytics.fact_direct_feed_funnel f
-        LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(f.account_login)
+        LEFT JOIN ad_analytics.Dim_PlacementFeed pf ON pf.placement_feed_key = f.placement_feed_key
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
         {where_sql}
     """
 
 
 def build_arp_fact(client) -> int:
-    shadow = "ad_analytics.arp_fact_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(
-        f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(date)
-        ORDER BY (date, ifNull(domain, ''), ifNull(placement, ''))
-        AS
-        {_arp_fact_sql("WHERE 0")}
-        """,
-        settings=SAFE_QUERY_SETTINGS,
-    )
-    ranges = day_ranges(DATE_FROM)
-    for idx, (lo, hi) in enumerate(ranges, start=1):
-        client.command(
-            f"""
-            INSERT INTO {shadow}
-            {_arp_fact_sql(f"WHERE f.date >= toDate('{lo}') AND f.date < toDate('{hi}')")}
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-        log.info("  arp_fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
-    swap_shadow(client, "ad_analytics.arp_fact", shadow)
+    _replace_view(client, "arp_fact", _arp_fact_sql())
     return count_rows(client, "ad_analytics.arp_fact")
 
 
@@ -688,6 +836,57 @@ def create_bi_views(client) -> dict[str, int]:
         view_name = f"bi_{table}"
         if table == "fact_direct_feed_funnel":
             select_sql = "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel"
+        elif table == "Dim_Date":
+            select_sql = """
+                SELECT
+                    `Date`,
+                    `День недели`,
+                    week_start,
+                    toInt64(year) AS year,
+                    toInt64(month) AS month,
+                    toInt64(month_key) AS month_key,
+                    year_month,
+                    toInt64(day) AS day
+                FROM ad_analytics.Dim_Date
+            """
+        elif table == "Dim_Campaign":
+            select_sql = """
+                SELECT
+                    CampaignId,
+                    CampaignName,
+                    account_login,
+                    campaign_code,
+                    tp,
+                    cpc_cpa,
+                    site_quiz,
+                    campaign_status AS `статус_кампании`,
+                    CAST(NULL, 'Nullable(String)') AS `специалист`,
+                    CAST(NULL, 'Nullable(String)') AS manager_login,
+                    campaign_status,
+                    payment_model,
+                    payment_model AS `тип_оплаты`,
+                    `номер кампании | название кампании`
+                FROM ad_analytics.Dim_Campaign
+            """
+        elif table == "Dim_AdGroup":
+            select_sql = """
+                SELECT
+                    AdGroupId,
+                    AdGroupName,
+                    adgroup_code,
+                    `номер группы | название группы`,
+                    ag_part1,
+                    ag_part2,
+                    ag_part3,
+                    ag_part4,
+                    ag_part5,
+                    ag_part6,
+                    ag_part7,
+                    ag_part1 AS ag_part1_name,
+                    CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
+                    CAST(NULL, 'Nullable(Int64)') AS parent_CampaignId
+                FROM ad_analytics.Dim_AdGroup
+            """
         elif table == "Dim_Site":
             select_sql = """
                 SELECT
@@ -698,6 +897,130 @@ def create_bi_views(client) -> dict[str, int]:
             """
         elif table == "fact_region_spend":
             select_sql = "SELECT * FROM ad_analytics.pbi_import_region_spend"
+        elif table == "fact_adformat_spend":
+            select_sql = _adformat_spend_pbi_sql()
+        elif table == "fact_criterion_spend":
+            select_sql = _criterion_spend_pbi_sql()
+        elif table == "fact_region_zayavki":
+            select_sql = _region_zayavki_pbi_sql()
+        elif table == "fact_criterion_zayavki":
+            select_sql = _criterion_zayavki_pbi_sql()
+        elif table == "dim_criterion":
+            select_sql = """
+                SELECT criterion, criterion_type, criterion_raw
+                FROM ad_analytics.dim_criterion
+            """
+        elif table == "check_utm_fuck_direct":
+            select_sql = """
+                SELECT
+                    id,
+                    login,
+                    CampaignId,
+                    CampaignName,
+                    group_id,
+                    group_name,
+                    tracking_params,
+                    `домен`,
+                    toFloat64(cost) AS cost,
+                    `специалист`,
+                    date,
+                    utm_source_type
+                FROM ad_analytics.check_utm_fuck_direct
+            """
+        elif table == "fact_ml_korrektirovki":
+            select_sql = """
+                SELECT
+                    * REPLACE(
+                        toFloat64(total_cost) AS total_cost,
+                        toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
+                        toFloat64(korr) AS korr,
+                        toFloat64(kval) AS kval,
+                        toFloat64(priezd) AS priezd,
+                        toFloat64(prodazhi) AS prodazhi,
+                        toFloat64(Clicks) AS Clicks,
+                        toFloat64(Impressions) AS Impressions
+                    )
+                FROM ad_analytics.fact_ml_korrektirovki
+            """
+        elif table == "big_analytics_full_arrival":
+            select_sql = """
+                SELECT
+                    * REPLACE(
+                        toFloat64(Impressions) AS Impressions,
+                        toFloat64(Clicks) AS Clicks,
+                        toFloat64(total_cost) AS total_cost,
+                        toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
+                        toFloat64(korr) AS korr,
+                        toFloat64(kval) AS kval,
+                        toFloat64(priezd) AS priezd,
+                        toFloat64(prodazhi) AS prodazhi,
+                        toFloat64(nekorr) AS nekorr,
+                        toFloat64(ne_otvechaet) AS ne_otvechaet,
+                        toFloat64(filtr) AS filtr,
+                        toFloat64(nedozvon) AS nedozvon,
+                        toFloat64(priedet) AS priedet
+                    ),
+                    ag_part1 AS ag_part1_name
+                FROM ad_analytics.big_analytics_full_arrival
+            """
+        elif table == "yandex_direct_history":
+            select_sql = """
+                SELECT
+                    toInt64(cityHash64(toString(ifNull(datetime, toDateTime(0))), ifNull(login, ''), ifNull(toString(campaign_id), ''), ifNull(new_value, '')) % 9223372036854775807) AS id,
+                    login AS ulogin,
+                    datetime,
+                    CAST(NULL, 'Nullable(String)') AS user_login,
+                    CAST(NULL, 'Nullable(Int64)') AS user_uid,
+                    change_source,
+                    event_type,
+                    CAST(NULL, 'Nullable(String)') AS category,
+                    campaign_id,
+                    campaign_name,
+                    CAST(NULL, 'Nullable(Int64)') AS ad_group_id,
+                    CAST(NULL, 'Nullable(String)') AS ad_group_name,
+                    old_value,
+                    new_value,
+                    CAST(NULL, 'Nullable(String)') AS raw_event,
+                    `директолог`,
+                    domain,
+                    salon,
+                    updated_at AS loaded_at
+                FROM ad_analytics.yandex_direct_history
+            """
+        elif table == "yandex_direct_minus_snapshot":
+            select_sql = """
+                SELECT
+                    * REPLACE(toInt64(id % 9223372036854775807) AS id)
+                FROM ad_analytics.yandex_direct_minus_snapshot
+            """
+        elif table == "yandex_direct_cookie_analytics_website_pages":
+            select_sql = """
+                SELECT
+                    id,
+                    login_key,
+                    domain,
+                    toInt64(ifNull(round(clicks), 0)) AS clicks,
+                    toInt64(ifNull(round(goal_all_forms), 0)) AS goal_all_forms,
+                    toInt64(ifNull(round(goal_crm_order_created), 0)) AS goal_crm_order_created,
+                    toInt64(ifNull(round(goal_crm_order_paid), 0)) AS goal_crm_order_paid,
+                    final_url,
+                    directologist,
+                    template,
+                    salon,
+                    city,
+                    region,
+                    site_type,
+                    loaded_at,
+                    page_type,
+                    banner_href,
+                    date_from,
+                    date_to,
+                    toFloat64(sum) AS sum,
+                    toInt64OrZero(ifNull(agoalnum, '')) AS agoalnum,
+                    toFloat64(aconv) AS aconv,
+                    toFloat64(agoalcost) AS agoalcost
+                FROM ad_analytics.yandex_direct_cookie_analytics_website_pages
+            """
         else:
             select_sql = f"SELECT * FROM ad_analytics.{q(table)}"
         _replace_view(client, view_name, select_sql)
@@ -718,8 +1041,8 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         "pbi_import_region_spend": build_pbi_import_region_spend(client),
         "arp_fact": build_arp_fact(client),
         "arf_fact": build_arf_fact(client),
-        "arc_fact": build_arc_fact(client),
         "dim_criterion": build_dim_criterion(client),
+        "arc_fact": build_arc_fact(client),
     }
     rows.update(create_light_aliases(client))
     rows.update(create_bi_views(client))
