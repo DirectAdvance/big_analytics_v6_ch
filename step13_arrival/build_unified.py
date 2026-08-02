@@ -16,7 +16,10 @@ logger = logging.getLogger("pipeline.build_unified")
 
 
 def _unified_select(source: str, label: str, base_cols: list[str]) -> str:
-    select_cols = ", ".join(q(col) for col in base_cols)
+    select_cols = ", ".join(
+        "ifNull(`Название crm`, '') AS `Название crm`" if col == "Название crm" else q(col)
+        for col in base_cols
+    )
     return f"SELECT {select_cols}, '{label}' AS `атрибуция` FROM ad_analytics.{source}"
 
 

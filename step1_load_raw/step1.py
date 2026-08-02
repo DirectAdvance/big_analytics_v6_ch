@@ -1,8 +1,9 @@
 """Step 1 for v6_ch: build RAW tables in ClickHouse from raw_data.
 
 This replaces the v5 Postgres path (`local_*` -> UNLOGGED raw_*). The v6 raw
-tables are fully rebuilt in `ad_analytics` from the existing `raw_data` schema.
-No CRM data is imported here.
+tables are rebuilt in `ad_analytics` from the existing `raw_data` schema. Direct
+and CRM sources can be overridden by PG-backed local copies when raw_data is
+known to be behind or lossy for historical periods.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, EXCLUDED_DOMAIN_IDS, RAW_TARGET_TABLES
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow, table_exists
 
 logger = logging.getLogger("pipeline.step1")
 
@@ -80,7 +81,7 @@ def _total_cost_expr() -> str:
     return f"multiIf({', '.join(branches)})"
 
 
-def _raw_yandex_sql(raw_date_filter: str = "") -> str:
+def _raw_yandex_sql(raw_date_filter: str = "", source: str = "raw_data.yandex_direct_report_rows") -> str:
     table = RAW_TARGET_TABLES["raw_yandex"]
     total_cost_expr = _total_cost_expr()
     return f"""
@@ -116,7 +117,7 @@ WITH parsed_src AS
         ), '') AS campaign_match,
         match(ifNull(campaign_name, ''), '(?i)tp[67]_') AS tp67_check,
         toStartOfWeek(toDate(day), 1) AS week_start
-    FROM raw_data.yandex_direct_report_rows
+    FROM {source}
     WHERE toDate(day) >= toDate('{DATE_FROM}')
       AND campaign_id != 0
       {raw_date_filter}
@@ -157,6 +158,16 @@ SELECT
     )) AS key3
 FROM parsed_src
 """
+
+
+def _direct_source_table(client) -> str:
+    override = "ad_analytics.local_yandex_pg"
+    if table_exists(client, "ad_analytics", "local_yandex_pg"):
+        rows = count_rows(client, override)
+        if rows > 0:
+            logger.info("  raw Direct source override: %s (%d rows)", override, rows)
+            return override
+    return "raw_data.yandex_direct_report_rows"
 
 
 def _raw_leads_select_sql(source: str = "raw_data.leads_all") -> str:
@@ -218,7 +229,17 @@ WHERE l.deal_type != 'Звонок'
 """
 
 
-def _raw_leads_sql(source_filter: str = "") -> str:
+def _leads_source_table(client) -> str:
+    override = "ad_analytics.local_leads_all_pg"
+    if table_exists(client, "ad_analytics", "local_leads_all_pg"):
+        rows = count_rows(client, override)
+        if rows > 0:
+            logger.info("  raw CRM source override: %s (%d rows)", override, rows)
+            return override
+    return "raw_data.leads_all"
+
+
+def _raw_leads_sql(source_filter: str = "", source: str = "raw_data.leads_all") -> str:
     table = RAW_TARGET_TABLES["raw_leads"]
     return f"""
 CREATE TABLE {table}
@@ -226,13 +247,13 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMM(ifNull(created_date, toDate('{DATE_FROM}')))
 ORDER BY (ifNull(created_date, toDate('{DATE_FROM}')), ifNull(domain_id, 0), key3)
 AS
-SELECT * FROM ({_raw_leads_select_sql()})
+SELECT * FROM ({_raw_leads_select_sql(source)})
 WHERE 1 = 1
   {source_filter}
 """
 
 
-def _raw_calls_sql(source_filter: str = "") -> str:
+def _raw_calls_sql(source_filter: str = "", source: str = "raw_data.leads_all") -> str:
     table = RAW_TARGET_TABLES["raw_calls"]
     return f"""
 CREATE TABLE {table}
@@ -253,7 +274,7 @@ SELECT
     l.utm_source,
     l.utm_medium,
     l.utm_campaign
-FROM raw_data.leads_all AS l
+FROM {source} AS l
 LEFT JOIN raw_data.domains AS d ON d.id = l.domain_id
 WHERE l.deal_type = 'Звонок'
   AND l.domain_id IS NOT NULL
@@ -321,15 +342,22 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
 
     details_parts: list[str] = []
     total = 0
+    direct_source = _direct_source_table(client)
+    leads_source = _leads_source_table(client)
 
     t_table = time.perf_counter()
     yandex_ranges = day_ranges(DATE_FROM)
     yandex_batches = [
-        _select_from_create(_raw_yandex_sql(f"AND toDate(day) >= toDate('{lo}') AND toDate(day) < toDate('{hi}')"))
+        _select_from_create(
+            _raw_yandex_sql(
+                f"AND toDate(day) >= toDate('{lo}') AND toDate(day) < toDate('{hi}')",
+                source=direct_source,
+            )
+        )
         for lo, hi in yandex_ranges
     ]
     logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_yandex"], len(yandex_batches))
-    rows = _rebuild_batched(client, "raw_yandex", _raw_yandex_sql("AND 0"), yandex_batches)
+    rows = _rebuild_batched(client, "raw_yandex", _raw_yandex_sql("AND 0", source=direct_source), yandex_batches)
     total += rows
     details_parts.append(f"raw_yandex={rows:,}")
     logger.info("  raw_yandex: %d строк за %.1f сек", rows, time.perf_counter() - t_table)
@@ -337,22 +365,32 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     lead_ranges = day_ranges(DATE_FROM)
     t_table = time.perf_counter()
     lead_batches = [
-        _select_from_create(_raw_leads_sql(f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"))
+        _select_from_create(
+            _raw_leads_sql(
+                f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')",
+                source=leads_source,
+            )
+        )
         for lo, hi in lead_ranges
     ]
     logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_leads"], len(lead_batches))
-    rows = _rebuild_batched(client, "raw_leads", _raw_leads_sql("AND 0"), lead_batches)
+    rows = _rebuild_batched(client, "raw_leads", _raw_leads_sql("AND 0", source=leads_source), lead_batches)
     total += rows
     details_parts.append(f"raw_leads={rows:,}")
     logger.info("  raw_leads: %d строк за %.1f сек", rows, time.perf_counter() - t_table)
 
     t_table = time.perf_counter()
     call_batches = [
-        _select_from_create(_raw_calls_sql(f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"))
+        _select_from_create(
+            _raw_calls_sql(
+                f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')",
+                source=leads_source,
+            )
+        )
         for lo, hi in lead_ranges
     ]
     logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_calls"], len(call_batches))
-    rows = _rebuild_batched(client, "raw_calls", _raw_calls_sql("AND 0"), call_batches)
+    rows = _rebuild_batched(client, "raw_calls", _raw_calls_sql("AND 0", source=leads_source), call_batches)
     total += rows
     details_parts.append(f"raw_calls={rows:,}")
     logger.info("  raw_calls: %d строк за %.1f сек", rows, time.perf_counter() - t_table)

@@ -82,14 +82,17 @@ PBI_EMPTY_ALLOWED = {
     "bi_yandex_direct_return_commission_report",
 }
 
-FULL_PHYSICAL_TABLES = [
+PBI_COMPAT_OBJECTS = [
     "pbi_import_big_analytics_full",
     "pbi_import_fact_direct_feed_funnel",
     "pbi_import_region_spend",
-    "pixel_score",
     "arp_fact",
     "arf_fact",
     "arc_fact",
+]
+
+FULL_PHYSICAL_TABLES = [
+    "pixel_score",
     "dim_criterion",
     "Dim_AdFormat",
     "Dim_AdNetworkType",
@@ -142,6 +145,16 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
             failures.append(f"empty_pbi_view:{view}")
 
     if not no_star:
+        for table in PBI_COMPAT_OBJECTS:
+            engine = _engine(client, table)
+            if engine is None:
+                failures.append(f"missing_compat:{table}")
+                continue
+            rows = count_rows(client, f"ad_analytics.`{table}`")
+            log.info("%s=%d engine=%s", table, rows, engine)
+            if rows == 0:
+                failures.append(f"empty_compat:{table}")
+
         for table in FULL_PHYSICAL_TABLES:
             engine = _engine(client, table)
             if engine is None:
