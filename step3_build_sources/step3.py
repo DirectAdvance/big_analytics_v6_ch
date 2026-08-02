@@ -660,8 +660,7 @@ AND lowerUTF8(trim(ifNull(domain, ''))) NOT IN (
 
 
 def _build_pixel_sql(lead_date_filter: str = "") -> str:
-    filt = "ifNull(utm_source, '') LIKE 'victory_%'"
-    return _build_lead_source_sql("big_analytics_pixel", filt, "пиксель", "пиксель", "Victory", lead_date_filter)
+    raise RuntimeError("big_analytics_pixel is built by step5_build_pixel, not by step3")
 
 
 def _build_crop_sql_batched(lead_date_filter: str = "") -> str:
@@ -769,7 +768,6 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
 
     lead_builders = [
         ("big_analytics_seo", _build_seo_sql),
-        ("big_analytics_pixel", _build_pixel_sql),
         ("big_analytics_crop_targeting", _build_crop_sql_batched),
     ]
     for table, builder in lead_builders:
