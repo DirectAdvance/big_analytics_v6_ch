@@ -13,6 +13,33 @@
 - Verified after rebuild: `fact_big_analytics=5,395,699`, `105.35 MiB`; golden Kuderko
   `25,422,797.96`, `sales=55`; `verify_big_analytics.py` PASS and covers all 39 `bi_*` views.
 
+## 2026-08-03 wide cleanup result
+
+- `big_analytics_full`, `big_analytics_full_arrival`, `big_analytics_pixel_score`,
+  `big_analytics_unified` are now compatibility `View` objects backed by
+  `fact_big_analytics` + `Dim_*` joins.
+- `big_analytics_sources` is no longer kept as a durable table after the star build. It remains
+  only an upstream staging object when earlier pipeline steps are rerun.
+- Current post-cleanup counts: `big_analytics_full=5,263,651`,
+  `big_analytics_full_arrival=132,048`, `big_analytics_pixel_score=459,849`,
+  `big_analytics_unified=5,395,699`, `fact_big_analytics=5,395,699`.
+- Final verifier enforces this shape: wide compatibility objects must exist as `View`, and
+  `big_analytics_sources` is not required.
+
+## 2026-08-03 raw/Postgres count check
+
+- Direct read-only counts against Victory Postgres `ad_analytics` were checked after the CH
+  cleanup. They are not a strict pass/fail gate for the star cleanup because current
+  `raw_data` is not a simple 1:1 live mirror for every table.
+- Observed counts: `domains` PG `5,164` vs CH `4,864`; `leads_all` PG `1,780,537`
+  vs CH `1,931,835`; `campaigns` PG `21,586` vs CH `direct_campaigns=33,077`;
+  `metrika_goals` PG `1,067` vs CH `metrika_yandex_goals=28,914`;
+  `yandex_direct_manager_reports` PG `24,309,710` vs CH
+  `yandex_direct_report_rows=24,513,866`.
+- `raw_data.migration_checkpoints` exists and has reconciled historical checkpoints for
+  `domains`, `leads_all`, `metrika_yandex_goals`, but some entries are stale/partial for current
+  live counts, for example Direct report checkpoint is `0/0` while CH raw has `24,513,866` rows.
+
 | PBI table | CH object | engine | rows | disk | cols | attr cols | key/index note | recommendation |
 |---|---|---|---:|---:|---:|---:|---|---|
 | `big_analytics_full` | `big_analytics_full` | MergeTree | 5,263,438 | 307.6 MB | 73 | 11 | partition=toYYYYMM(ifNull(Date, toDate('2026-01-01'))); sort=ifNull(Date, toDate('2026-01-01')), ifNull(domain, ''), ifNull(_source_table, '') | star candidate: move text attrs to Dim_* |

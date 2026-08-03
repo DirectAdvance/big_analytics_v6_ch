@@ -49,13 +49,14 @@ STEPS = [
     (145, "star_refactor.build_star", "build_star"),
     (1451, "star_refactor.build_star_extensions", "build_star_extensions"),
     (146, "star_refactor.build_pbi_compat", "build_pbi_compat"),
+    (148, "star_refactor.cleanup_wide_intermediates", "cleanup_wide_intermediates"),
     (14, "step14_minus_snapshot.step14", "step14"),
     (8, "step8_stats.step8", "step8"),
     (900, "data_check.verify_big_analytics", "verify"),
 ]
 
 MAINTENANCE_STEPS = {2, 7}
-HEAVY_PBI_STEPS = {141, 142, 143, 1431, 1432, 144, 145, 1451, 146}
+HEAVY_PBI_STEPS = {141, 142, 143, 1431, 1432, 144, 145, 1451, 146, 148}
 PARALLEL_BACKGROUND_STEPS = {14}
 STEP14_START_AT = {13, 131, 141, 142, 143, 1431, 1432, 144, 145, 1451, 146, 14, 8, 900}
 

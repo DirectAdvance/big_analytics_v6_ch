@@ -22,7 +22,6 @@ REQUIRED_TABLES = [
     "raw_yandex",
     "raw_leads",
     "raw_calls",
-    "big_analytics_sources",
     "big_analytics_full",
     "big_analytics_pixel_score",
     "big_analytics_full_arrival",
@@ -106,6 +105,13 @@ FULL_PHYSICAL_TABLES = [
     "Dim_AdNetworkType",
     "Dim_Device",
     "Dim_Source",
+]
+
+WIDE_COMPAT_VIEWS = [
+    "big_analytics_full",
+    "big_analytics_pixel_score",
+    "big_analytics_full_arrival",
+    "big_analytics_unified",
 ]
 
 GOLDEN_COST = Decimal("25422774.00")
@@ -194,6 +200,18 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
             log.info("%s=%d engine=%s", table, rows, engine)
             if rows == 0:
                 failures.append(f"empty_physical:{table}")
+
+        for table in WIDE_COMPAT_VIEWS:
+            engine = _engine(client, table)
+            if engine is None:
+                failures.append(f"missing_wide_compat:{table}")
+                continue
+            rows = count_rows(client, f"ad_analytics.`{table}`")
+            log.info("%s=%d engine=%s", table, rows, engine)
+            if engine != "View":
+                failures.append(f"wide_compat_not_view:{table}:{engine}")
+            if rows == 0:
+                failures.append(f"empty_wide_compat:{table}")
 
         golden_cols = {"специалист", "атрибуция", "_source_table", "total_cost", "prodazhi"}
         if not _has_columns(client, "fact_big_analytics", golden_cols):
