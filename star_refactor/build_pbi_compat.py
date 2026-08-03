@@ -24,11 +24,18 @@ def _site_key_expr(alias: str = "f") -> str:
 
 PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
+    "Dim_AdNetworkType",
     "Dim_Campaign",
     "Dim_Date",
+    "Dim_Device",
     "Dim_Location",
+    "Dim_ManagerLogin",
     "Dim_PlacementFeed",
     "Dim_Site",
+    "Dim_Source",
+    "Dim_VkAdGroup",
+    "Dim_VkAdPlan",
+    "Dim_VkBanner",
     "arc_fact",
     "arf_fact",
     "arp_fact",
@@ -70,12 +77,10 @@ def _pbi_full_sql(where_sql: str = "") -> str:
         SELECT
             f.`Date` AS `Date`,
             f.`CampaignId` AS `CampaignId`,
-            f.`AdNetworkType`,
-            f.`Device`,
+            f.ad_network_type_key,
+            f.device_key,
+            f.source_key,
             toFloat64(f.total_cost) AS total_cost,
-            dc.campaign_code,
-            dc.tp,
-            dc.cpc_cpa,
             toFloat64(f.kol_vo_zayavok) AS `Обращения`,
             toFloat64(f.korr) AS korr,
             toFloat64(f.kval) AS kval,
@@ -85,18 +90,16 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             toInt64(round(f.ne_otvechaet)) AS ne_otvechaet,
             toInt64(round(f.filtr)) AS filtr,
             toInt64(round(f.nedozvon)) AS nedozvon,
-            f.`RlAdjustmentId`,
-            f.RlAdjustmentId_total,
+            f.`RlAdjustmentId` AS `RlAdjustmentId`,
+            da.RlAdjustmentId_total,
             f.fid,
             -- PBI v00 historically treats the Clicks field as the v5 "Clicks" column,
             -- which contains Yandex impressions. Keep this compatibility alias here
             -- while the CH fact keeps physical Clicks/Impressions semantics.
             toFloat64(f.`Impressions`) AS `Clicks`,
-            f.`источник`,
             f.`План заявки`,
             f.`План приезда`,
             concat(ifNull(f.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`,
-            f.`поставщик`,
             f.domain AS `домен`,
             toInt64(round(f.priedet)) AS priedet,
             f.dohod_do_kredita,
@@ -104,50 +107,30 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             f.`атрибуция`,
             f.`AdGroupId` AS `AdGroupId`,
             multiIf(
-                f.`источник` = 'Пиксель_атрибуц', 'Пиксель_атрибуц',
-                lowerUTF8(ifNull(f.`источник`, '')) = 'пиксель', 'Пиксель',
-                ds.`направление`
+                f.source_key = 'пиксель_атрибуц', 'Пиксель_атрибуц',
+                f.source_key = 'пиксель', 'Пиксель',
+                f.`направление`
             ) AS `направление`,
-            dc.site_quiz,
-            dag.`марки авто`,
-            ds.`специалист`,
-            ds.`тип_сайта`,
-            ds.`статус`,
-            ds.status,
-            ds.`салон`,
-            ds.`шаблон`,
-            ds.`id_салона`,
-            ds.`город`,
-            ds.`регион`,
-            ds.`проджект`,
-            ds.project_manager,
-            ds.`менеджер`,
-            ds.`Название crm`,
+            f.`специалист`,
+            f.`тип_сайта`,
+            f.`статус`,
+            f.`статус` AS status,
+            f.`салон`,
+            f.`шаблон`,
+            f.`id_салона`,
+            f.`город`,
+            f.`регион`,
+            f.`проджект`,
+            f.`проджект` AS project_manager,
+            f.`менеджер`,
+            f.`Название crm`,
             f.`тип_заявки`,
-            f.manager_login,
-            dc.`CampaignName`,
-            dag.`AdGroupName`,
-            f.account_login AS account_login,
-            dag.adgroup_code,
-            dag.ag_part1,
-            dag.ag_part2,
-            dag.ag_part3,
-            dag.ag_part4,
-            dag.ag_part5,
-            dag.ag_part6,
-            dag.ag_part7,
-            dc.campaign_status,
-            dc.payment_model,
-            f.`неверный_кодер_new`,
-            dd.week_start,
-            dd.`День недели`,
-            dag.`номер группы | название группы`,
-            dc.`номер кампании | название кампании`
+            dm.manager_login,
+            f.account_login AS account_login
         FROM ad_analytics.fact_big_analytics f
-        LEFT JOIN ad_analytics.Dim_Date dd ON dd.`Date` = f.`Date`
-        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.`CampaignId` = f.`CampaignId`
-        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.`AdGroupId` = f.`AdGroupId`
+        LEFT JOIN ad_analytics.Dim_Adjustment da ON da.RlAdjustmentId = f.`RlAdjustmentId`
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
+        LEFT JOIN ad_analytics.Dim_ManagerLogin dm ON dm.manager_login_key = f.manager_login_key
         {where_sql}
     """
 
@@ -379,19 +362,19 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
 def _region_spend_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), ifNull(f.ad_network_type, ''), ifNull(f.id_location, 0))) AS row_hash,
+            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.id_location, 0))) AS row_hash,
             f.date,
             f.campaign_id,
             dc.CampaignName AS campaign_name,
             f.ad_group_id,
             dag.AdGroupName AS ad_group_name,
-            f.ad_network_type,
+            f.ad_network_type_key,
             f.id_location,
-            f.location,
-            f.`Область`,
-            f.GeoRegionType,
-            toInt64(ifNull(round(f.distance_km), 0)) AS distance_km,
-            f.distance_km_agreg,
+            dl.location,
+            dl.`Область`,
+            dl.GeoRegionType,
+            CAST(NULL, 'Nullable(Int64)') AS distance_km,
+            dl.distance_km_agreg,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -421,6 +404,7 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
         FROM ad_analytics.fact_region_spend f
         LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
         LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
+        LEFT JOIN ad_analytics.Dim_Location dl ON dl.id_location = f.id_location
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
     """
@@ -429,13 +413,13 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
 def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), ifNull(f.ad_network_type, ''), ifNull(f.ad_format, ''))) AS row_hash,
+            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.ad_format, ''))) AS row_hash,
             f.date,
             f.campaign_id,
             dc.CampaignName AS campaign_name,
             f.ad_group_id,
             dag.AdGroupName AS ad_group_name,
-            f.ad_network_type,
+            f.ad_network_type_key,
             f.ad_format,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
@@ -476,13 +460,13 @@ def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
 def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), ifNull(f.ad_network_type, ''), ifNull(f.criterion_id, 0), ifNull(dcr.criterion, ''))) AS row_hash,
+            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.criterion_id, 0), ifNull(dcr.criterion, ''))) AS row_hash,
             f.date,
             f.campaign_id,
             dc.CampaignName AS campaign_name,
             f.ad_group_id,
             dag.AdGroupName AS ad_group_name,
-            f.ad_network_type,
+            f.ad_network_type_key,
             f.criterion_id,
             ifNull(dcr.criterion, '') AS criterion,
             dcr.criterion_raw,
@@ -535,32 +519,33 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
 def _region_zayavki_pbi_sql() -> str:
     return """
         SELECT
-            row_hash,
-            created_date,
-            campaign_id,
-            campaign_name,
-            id_location,
-            location,
-            `Область`,
-            GeoRegionType,
-            distance_km,
-            distance_km_agreg,
-            CAST(`салон`, 'Nullable(String)') AS `салон`,
-            domain_id,
-            kol_vo_zayavok,
-            korr,
-            kval,
-            priezd,
-            prodazhi,
-            nekorr,
-            ne_otvechaet,
-            filtr,
-            nedozvon,
-            priedet,
-            dohod_do_kredita,
-            dobro,
-            updated_at
-        FROM ad_analytics.fact_region_zayavki
+            f.row_hash,
+            f.created_date,
+            f.campaign_id,
+            f.campaign_name,
+            f.id_location,
+            dl.location,
+            dl.`Область`,
+            dl.GeoRegionType,
+            CAST(NULL, 'Nullable(Int32)') AS distance_km,
+            dl.distance_km_agreg,
+            CAST(f.`салон`, 'Nullable(String)') AS `салон`,
+            f.domain_id,
+            f.kol_vo_zayavok,
+            f.korr,
+            f.kval,
+            f.priezd,
+            f.prodazhi,
+            f.nekorr,
+            f.ne_otvechaet,
+            f.filtr,
+            f.nedozvon,
+            f.priedet,
+            f.dohod_do_kredita,
+            f.dobro,
+            f.updated_at
+        FROM ad_analytics.fact_region_zayavki f
+        LEFT JOIN ad_analytics.Dim_Location dl ON dl.id_location = f.id_location
     """
 
 
@@ -849,6 +834,30 @@ def create_bi_views(client) -> dict[str, int]:
                     toInt64(day) AS day
                 FROM ad_analytics.Dim_Date
             """
+        elif table == "Dim_AdNetworkType":
+            select_sql = """
+                SELECT
+                    ad_network_type_key,
+                    ad_network_type,
+                    AdNetworkType
+                FROM ad_analytics.Dim_AdNetworkType
+            """
+        elif table == "Dim_Device":
+            select_sql = """
+                SELECT
+                    device_key,
+                    Device
+                FROM ad_analytics.Dim_Device
+            """
+        elif table == "Dim_Source":
+            select_sql = """
+                SELECT
+                    source_key,
+                    `источник`,
+                    `поставщик`,
+                    _source_table
+                FROM ad_analytics.Dim_Source
+            """
         elif table == "Dim_Campaign":
             select_sql = """
                 SELECT
@@ -883,8 +892,8 @@ def create_bi_views(client) -> dict[str, int]:
                     ag_part6,
                     ag_part7,
                     ag_part1 AS ag_part1_name,
-                    CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
-                    CAST(NULL, 'Nullable(Int64)') AS parent_CampaignId
+                    `неверный_кодер_new`,
+                    parent_CampaignId
                 FROM ad_analytics.Dim_AdGroup
             """
         elif table == "Dim_Site":
@@ -903,6 +912,36 @@ def create_bi_views(client) -> dict[str, int]:
             select_sql = _criterion_spend_pbi_sql()
         elif table == "fact_region_zayavki":
             select_sql = _region_zayavki_pbi_sql()
+        elif table == "fact_vk_ads":
+            select_sql = """
+                SELECT
+                    f.date,
+                    f.account_id,
+                    f.`салон`,
+                    f.ad_plan_id,
+                    dplan.ad_plan_name,
+                    f.ad_group_id,
+                    dgroup.ad_group_name,
+                    f.banner_id,
+                    dbanner.banner_name,
+                    f.`атрибуция`,
+                    f.shows,
+                    f.clicks,
+                    f.spent,
+                    f.`заявки`,
+                    f.`заявки_корр`,
+                    f.`записи`,
+                    f.`квал`,
+                    f.`визиты`,
+                    f.`продажи`,
+                    f.`регион`,
+                    f.`тип_сайта`,
+                    f.`специалист`
+                FROM ad_analytics.fact_vk_ads f
+                LEFT JOIN ad_analytics.Dim_VkAdPlan dplan ON dplan.ad_plan_id = f.ad_plan_id
+                LEFT JOIN ad_analytics.Dim_VkAdGroup dgroup ON dgroup.ad_group_id = f.ad_group_id
+                LEFT JOIN ad_analytics.Dim_VkBanner dbanner ON dbanner.banner_id = f.banner_id
+            """
         elif table == "fact_criterion_zayavki":
             select_sql = _criterion_zayavki_pbi_sql()
         elif table == "dim_criterion":

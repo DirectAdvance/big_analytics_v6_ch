@@ -17,6 +17,42 @@ from step3_build_sources.step3 import _metric_expr
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("build_star")
 
+FACT_BIG_DIMENSION_COLUMNS = {
+    "key3",
+    "День недели",
+    "week_start",
+    "CampaignName",
+    "AdGroupName",
+    "RlAdjustmentId_total",
+    "campaign_code",
+    "tp",
+    "cpc_cpa",
+    "site_quiz",
+    "adgroup_code",
+    "ag_part1",
+    "ag_part2",
+    "ag_part3",
+    "ag_part4",
+    "ag_part5",
+    "ag_part6",
+    "ag_part7",
+    "марки авто",
+    "номер кампании | название кампании",
+    "номер группы | название группы",
+    "аккаунт|сайт",
+    "campaign_status",
+    "payment_model",
+    "key_pixel_score",
+    "неверный_кодер_new",
+    "status",
+    "project_manager",
+    "manager_login",
+    "AdNetworkType",
+    "Device",
+    "источник",
+    "поставщик",
+}
+
 
 def _create_fact_empty(client, target: str, select_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS {target} SYNC")
@@ -35,12 +71,31 @@ def _create_fact_empty(client, target: str, select_sql: str) -> None:
 
 
 def build_fact(client) -> int:
-    cols = column_names(client, "ad_analytics", "big_analytics_unified")
+    source_cols = column_names(client, "ad_analytics", "big_analytics_unified")
+    cols = [
+        col
+        for col in source_cols
+        if col not in FACT_BIG_DIMENSION_COLUMNS
+    ]
     alias_exprs = []
-    if "status" not in cols:
-        alias_exprs.append("`статус` AS status")
-    if "project_manager" not in cols:
-        alias_exprs.append("`проджект` AS project_manager")
+    if "AdNetworkType" in source_cols:
+        alias_exprs.append(
+            "lowerUTF8(trim(BOTH ' ' FROM ifNull(`AdNetworkType`, ''))) AS ad_network_type_key"
+        )
+    if "Device" in source_cols:
+        alias_exprs.append(
+            "lowerUTF8(trim(BOTH ' ' FROM ifNull(`Device`, ''))) AS device_key"
+        )
+    if "источник" in source_cols:
+        alias_exprs.append(
+            "lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))) AS source_key"
+        )
+    if "manager_login" in source_cols:
+        alias_exprs.append(
+            "if(notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))), "
+            "cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))), toUInt64(0)) "
+            "AS manager_login_key"
+        )
     target_cols = cols + [expr.rsplit(" AS ", 1)[1] for expr in alias_exprs]
     select_sql = ", ".join([q(col) for col in cols] + alias_exprs)
     cols_sql = ", ".join(q(col) for col in target_cols)
@@ -84,9 +139,10 @@ def build_dims(client) -> dict[str, int]:
         "Dim_Site": """
             CREATE TABLE ad_analytics.Dim_Site_new
             ENGINE = MergeTree
-            ORDER BY (ifNull(domain, ''), ifNull(`салон`, ''))
+            ORDER BY site_key
             AS
             SELECT
+                site_key,
                 domain,
                 salon AS `салон`,
                 city AS `город`,
@@ -101,26 +157,67 @@ def build_dims(client) -> dict[str, int]:
                 project AS project_manager,
                 salon_id AS `id_салона`,
                 manager AS `менеджер`,
-                crm_name AS `Название crm`
+                CAST(ifNull(crm_name, ''), 'String') AS `Название crm`
             FROM
             (
                 SELECT
-                    domain,
-                    anyLast(`салон`) AS salon,
-                    anyLast(`город`) AS city,
-                    anyLast(`регион`) AS region,
-                    anyLast(`тип_сайта`) AS site_type,
-                    anyLast(`шаблон`) AS template,
-                    anyLast(`направление`) AS direction,
-                    anyLast(`статус`) AS site_status,
-                    anyLast(`специалист`) AS specialist,
-                    anyLast(`проджект`) AS project,
-                    anyLast(`id_салона`) AS salon_id,
-                    anyLast(`менеджер`) AS manager,
-                    anyLast(`Название crm`) AS crm_name
-                FROM ad_analytics.big_analytics_unified
-                WHERE ifNull(domain, '') != ''
-                GROUP BY domain
+                    site_key,
+                    argMax(domain, sort_weight) AS domain,
+                    argMax(salon, sort_weight) AS salon,
+                    argMax(city, sort_weight) AS city,
+                    argMax(region, sort_weight) AS region,
+                    argMax(site_type, sort_weight) AS site_type,
+                    argMax(template, sort_weight) AS template,
+                    argMax(direction, sort_weight) AS direction,
+                    argMax(site_status, sort_weight) AS site_status,
+                    argMax(specialist, sort_weight) AS specialist,
+                    argMax(project, sort_weight) AS project,
+                    argMax(salon_id, sort_weight) AS salon_id,
+                    argMax(manager, sort_weight) AS manager,
+                    argMax(crm_name, sort_weight) AS crm_name
+                FROM
+                (
+                    SELECT
+                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
+                        domain,
+                        `салон` AS salon,
+                        `город` AS city,
+                        `регион` AS region,
+                        `тип_сайта` AS site_type,
+                        `шаблон` AS template,
+                        ifNull(`направление`, '') AS direction,
+                        `статус` AS site_status,
+                        `специалист` AS specialist,
+                        `проджект` AS project,
+                        `id_салона` AS salon_id,
+                        `менеджер` AS manager,
+                        ifNull(`Название crm`, '') AS crm_name,
+                        tuple(toUInt8(2), notEmpty(ifNull(`салон`, '')), lengthUTF8(ifNull(domain, ''))) AS sort_weight
+                    FROM ad_analytics.big_analytics_unified
+                    WHERE ifNull(domain, '') != ''
+
+                    UNION ALL
+
+                    SELECT
+                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
+                        domain,
+                        salon,
+                        city,
+                        region,
+                        site_type,
+                        template,
+                        ifNull(direction, '') AS direction,
+                        status AS site_status,
+                        directologist AS specialist,
+                        project_manager AS project,
+                        client_id AS salon_id,
+                        sales_manager AS manager,
+                        ifNull(crm, '') AS crm_name,
+                        tuple(toUInt8(1), notEmpty(ifNull(salon, '')), lengthUTF8(ifNull(domain, ''))) AS sort_weight
+                    FROM raw_data.gsheet_sites
+                    WHERE ifNull(domain, '') != ''
+                )
+                GROUP BY site_key
             )
         """,
         "Dim_Campaign": """
@@ -152,6 +249,7 @@ def build_dims(client) -> dict[str, int]:
                 `AdGroupId`,
                 anyLast(`AdGroupName`) AS `AdGroupName`,
                 anyLast(adgroup_code) AS adgroup_code,
+                anyLast(`марки авто`) AS `марки авто`,
                 anyLast(ag_part1) AS ag_part1,
                 anyLast(ag_part2) AS ag_part2,
                 anyLast(ag_part3) AS ag_part3,
@@ -159,10 +257,24 @@ def build_dims(client) -> dict[str, int]:
                 anyLast(ag_part5) AS ag_part5,
                 anyLast(ag_part6) AS ag_part6,
                 anyLast(ag_part7) AS ag_part7,
-                anyLast(`номер группы | название группы`) AS `номер группы | название группы`
+                anyLast(`номер группы | название группы`) AS `номер группы | название группы`,
+                anyLast(`неверный_кодер_new`) AS `неверный_кодер_new`,
+                anyLast(`CampaignId`) AS parent_CampaignId
             FROM ad_analytics.big_analytics_unified
             WHERE `AdGroupId` IS NOT NULL
             GROUP BY `AdGroupId`
+        """,
+        "Dim_Adjustment": """
+            CREATE TABLE ad_analytics.Dim_Adjustment_new
+            ENGINE = MergeTree
+            ORDER BY RlAdjustmentId
+            AS
+            SELECT
+                `RlAdjustmentId`,
+                anyLast(`RlAdjustmentId_total`) AS `RlAdjustmentId_total`
+            FROM ad_analytics.big_analytics_unified
+            WHERE `RlAdjustmentId` IS NOT NULL
+            GROUP BY `RlAdjustmentId`
         """,
         "Dim_Location": """
             CREATE TABLE ad_analytics.Dim_Location_new
@@ -171,34 +283,44 @@ def build_dims(client) -> dict[str, int]:
             AS
             WITH locations AS
             (
-                SELECT
-                    assumeNotNull(id_location) AS id_location,
-                    location,
-                    `Область`,
-                    GeoRegionType,
-                    distance_km_agreg,
-                    1 AS priority
+                SELECT assumeNotNull(id_location) AS id_location
                 FROM ad_analytics.fact_region_spend
                 WHERE id_location IS NOT NULL
-                UNION ALL
-                SELECT
-                    assumeNotNull(id_location) AS id_location,
-                    location,
-                    `Область`,
-                    GeoRegionType,
-                    distance_km_agreg,
-                    2 AS priority
+
+                UNION DISTINCT
+
+                SELECT assumeNotNull(id_location) AS id_location
                 FROM ad_analytics.fact_region_zayavki
                 WHERE id_location IS NOT NULL
             )
             SELECT
                 id_location,
-                ifNull(argMin(location, if(ifNull(location, '') = '', 99, priority)), '') AS location,
-                ifNull(argMin(`Область`, if(ifNull(`Область`, '') = '', 99, priority)), '') AS `Область`,
-                CAST(argMin(GeoRegionType, if(ifNull(GeoRegionType, '') = '', 99, priority)), 'LowCardinality(Nullable(String))') AS GeoRegionType,
-                argMin(distance_km_agreg, if(distance_km_agreg IS NULL, 99, priority)) AS distance_km_agreg
+                '' AS location,
+                '' AS `Область`,
+                CAST(NULL, 'LowCardinality(Nullable(String))') AS GeoRegionType,
+                CAST(NULL, 'Nullable(Int32)') AS distance_km_agreg
             FROM locations
             GROUP BY id_location
+        """,
+        "Dim_ManagerLogin": """
+            CREATE TABLE ad_analytics.Dim_ManagerLogin_new
+            ENGINE = MergeTree
+            ORDER BY manager_login_key
+            AS
+            SELECT
+                manager_login_key,
+                anyLast(manager_login) AS manager_login
+            FROM
+            (
+                SELECT
+                    if(notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))),
+                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))),
+                        toUInt64(0)
+                    ) AS manager_login_key,
+                    ifNull(manager_login, '') AS manager_login
+                FROM ad_analytics.big_analytics_unified
+            )
+            GROUP BY manager_login_key
         """,
     }
     rows: dict[str, int] = {}
@@ -281,7 +403,7 @@ def _ml_korrektirovki_sql(where_sql: str) -> str:
             k.modifier_name AS ml_audience_name,
             k.bid_percent,
             lower(extract(ifNull(k.modifier_name, ''), '_ml_all_(\\\\d+p(?:_[a-z0-9]+)?)')) AS ml_tier
-        FROM ad_analytics.fact_big_analytics f
+        FROM ad_analytics.big_analytics_unified f
         INNER JOIN ml_korr k ON f.`RlAdjustmentId` = k.audience_id
         {where_sql}
     """
@@ -389,10 +511,7 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
                 banner_id,
                 anyLast(account_id) AS account_id,
                 anyLast(ad_plan_id) AS ad_plan_id,
-                anyLast(ad_plan_name) AS ad_plan_name,
-                anyLast(ad_group_id) AS ad_group_id,
-                anyLast(ad_group_name) AS ad_group_name,
-                anyLast(banner_name) AS banner_name
+                anyLast(ad_group_id) AS ad_group_id
             FROM raw_data.vk_ads_stats_day
             WHERE banner_id IS NOT NULL
             GROUP BY banner_id
@@ -413,11 +532,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(s.account_id, 'Nullable(Int64)') AS account_id,
             CAST(NULL, 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(s.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
-            s.ad_plan_name,
             CAST(s.ad_group_id, 'Nullable(Int64)') AS ad_group_id,
-            s.ad_group_name,
             CAST(s.banner_id, 'Nullable(Int64)') AS banner_id,
-            s.banner_name,
             'По дате заявки' AS `атрибуция`,
             toInt64(ifNull(s.shows, 0)) AS shows,
             toInt64(ifNull(s.clicks, 0)) AS clicks,
@@ -443,11 +559,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(bd.account_id, 'Nullable(Int64)') AS account_id,
             CAST(za.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(bd.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
-            bd.ad_plan_name,
             CAST(ifNull(za.ad_group_id, bd.ad_group_id), 'Nullable(Int64)') AS ad_group_id,
-            bd.ad_group_name,
             CAST(za.banner_id, 'Nullable(Int64)') AS banner_id,
-            bd.banner_name,
             'По дате заявки' AS `атрибуция`,
             toInt64(0) AS shows,
             toInt64(0) AS clicks,
@@ -472,11 +585,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(bd.account_id, 'Nullable(Int64)') AS account_id,
             CAST(va.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(bd.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
-            bd.ad_plan_name,
             CAST(ifNull(va.ad_group_id, bd.ad_group_id), 'Nullable(Int64)') AS ad_group_id,
-            bd.ad_group_name,
             CAST(va.banner_id, 'Nullable(Int64)') AS banner_id,
-            bd.banner_name,
             'По дате визита' AS `атрибуция`,
             toInt64(0) AS shows,
             toInt64(0) AS clicks,
@@ -536,6 +646,59 @@ def build_vk_ads_fact(client) -> int:
     return rows
 
 
+def build_vk_dims(client) -> dict[str, int]:
+    ddl = {
+        "Dim_VkAdPlan": """
+            CREATE TABLE ad_analytics.Dim_VkAdPlan_new
+            ENGINE = MergeTree
+            ORDER BY ifNull(ad_plan_id, 0)
+            AS
+            SELECT
+                CAST(ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
+                anyLast(ad_plan_name) AS ad_plan_name,
+                CAST(anyLast(account_id), 'Nullable(Int64)') AS account_id
+            FROM raw_data.vk_ads_stats_day
+            WHERE ad_plan_id IS NOT NULL
+            GROUP BY ad_plan_id
+        """,
+        "Dim_VkAdGroup": """
+            CREATE TABLE ad_analytics.Dim_VkAdGroup_new
+            ENGINE = MergeTree
+            ORDER BY ifNull(ad_group_id, 0)
+            AS
+            SELECT
+                CAST(ad_group_id, 'Nullable(Int64)') AS ad_group_id,
+                anyLast(ad_group_name) AS ad_group_name,
+                CAST(anyLast(ad_plan_id), 'Nullable(Int64)') AS ad_plan_id
+            FROM raw_data.vk_ads_stats_day
+            WHERE ad_group_id IS NOT NULL
+            GROUP BY ad_group_id
+        """,
+        "Dim_VkBanner": """
+            CREATE TABLE ad_analytics.Dim_VkBanner_new
+            ENGINE = MergeTree
+            ORDER BY ifNull(banner_id, 0)
+            AS
+            SELECT
+                CAST(banner_id, 'Nullable(Int64)') AS banner_id,
+                anyLast(banner_name) AS banner_name,
+                CAST(anyLast(ad_group_id), 'Nullable(Int64)') AS ad_group_id
+            FROM raw_data.vk_ads_stats_day
+            WHERE banner_id IS NOT NULL
+            GROUP BY banner_id
+        """,
+    }
+    rows: dict[str, int] = {}
+    for table, sql in ddl.items():
+        shadow = f"ad_analytics.{table}_new"
+        client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+        client.command(sql, settings=SAFE_QUERY_SETTINGS)
+        swap_shadow(client, f"ad_analytics.{table}", shadow)
+        rows[table] = count_rows(client, f"ad_analytics.{table}")
+        log.info("  %s=%d", table, rows[table])
+    return rows
+
+
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     log.info("build_star v6_ch: ClickHouse star tables")
     client = get_client()
@@ -545,11 +708,13 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     fact_rows = build_fact(client)
     dim_rows = build_dims(client)
     vk_rows = build_vk_ads_fact(client)
+    vk_dim_rows = build_vk_dims(client)
     ml_rows = build_ml_korrektirovki_fact(client)
     parts = [
         f"fact_big_analytics={fact_rows:,}",
         *[f"{k}={v:,}" for k, v in dim_rows.items()],
         f"fact_vk_ads={vk_rows:,}",
+        *[f"{k}={v:,}" for k, v in vk_dim_rows.items()],
         f"fact_ml_korrektirovki={ml_rows:,}",
     ]
     details = ", ".join(parts)

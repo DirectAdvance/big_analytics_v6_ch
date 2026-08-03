@@ -73,40 +73,62 @@ def build_dim_adnetwork(client) -> int:
         FROM
         (
             SELECT
-                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
-                ad_network_type,
-                ad_network_type AS AdNetworkType
-            FROM ad_analytics.fact_region_spend
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_region_spend.ad_network_type, ''))))
-
-            UNION ALL
-
-            SELECT
-                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
-                ad_network_type,
-                ad_network_type AS AdNetworkType
-            FROM ad_analytics.fact_adformat_spend
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_adformat_spend.ad_network_type, ''))))
-
-            UNION ALL
-
-            SELECT
-                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
-                ad_network_type,
-                ad_network_type AS AdNetworkType
-            FROM ad_analytics.fact_criterion_spend
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_criterion_spend.ad_network_type, ''))))
-
-            UNION ALL
-
-            SELECT
                 lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))) AS ad_network_type_key,
                 AdNetworkType AS ad_network_type,
                 AdNetworkType
-            FROM ad_analytics.fact_big_analytics
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_big_analytics.AdNetworkType, ''))))
+            FROM ad_analytics.big_analytics_unified
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))))
+
+            UNION ALL
+
+            SELECT
+                ad_network_type_key,
+                upperUTF8(ad_network_type_key) AS ad_network_type,
+                upperUTF8(ad_network_type_key) AS AdNetworkType
+            FROM ad_analytics.fact_region_spend
+            WHERE notEmpty(ad_network_type_key)
+
+            UNION ALL
+
+            SELECT
+                ad_network_type_key,
+                upperUTF8(ad_network_type_key) AS ad_network_type,
+                upperUTF8(ad_network_type_key) AS AdNetworkType
+            FROM ad_analytics.fact_adformat_spend
+            WHERE notEmpty(ad_network_type_key)
+
+            UNION ALL
+
+            SELECT
+                ad_network_type_key,
+                upperUTF8(ad_network_type_key) AS ad_network_type,
+                upperUTF8(ad_network_type_key) AS AdNetworkType
+            FROM ad_analytics.fact_criterion_spend
+            WHERE notEmpty(ad_network_type_key)
         )
         GROUP BY ad_network_type_key
+        """,
+    )
+
+
+def build_dim_device(client) -> int:
+    return _replace_table(
+        client,
+        "Dim_Device",
+        "ENGINE = MergeTree ORDER BY device_key",
+        """
+        SELECT
+            device_key,
+            anyLast(Device) AS Device
+        FROM
+        (
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(Device, ''))) AS device_key,
+                Device
+            FROM ad_analytics.big_analytics_unified
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(Device, ''))))
+        )
+        GROUP BY device_key
         """,
     )
 
@@ -129,8 +151,8 @@ def build_dim_source(client) -> int:
                 `источник`,
                 `поставщик`,
                 _source_table
-            FROM ad_analytics.fact_big_analytics
-            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_analytics.fact_big_analytics.`источник`, ''))))
+            FROM ad_analytics.big_analytics_unified
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))))
         )
         GROUP BY source_key
         """,
@@ -144,6 +166,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     rows = {
         "Dim_AdFormat": build_dim_adformat(client),
         "Dim_AdNetworkType": build_dim_adnetwork(client),
+        "Dim_Device": build_dim_device(client),
         "Dim_Source": build_dim_source(client),
     }
     details = ", ".join(f"{key}={value:,}" for key, value in rows.items())

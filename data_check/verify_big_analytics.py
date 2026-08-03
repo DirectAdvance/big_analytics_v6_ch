@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -37,11 +38,18 @@ REQUIRED_TABLES = [
 
 PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
+    "Dim_AdNetworkType",
     "Dim_Campaign",
     "Dim_Date",
+    "Dim_Device",
     "Dim_Location",
+    "Dim_ManagerLogin",
     "Dim_PlacementFeed",
     "Dim_Site",
+    "Dim_Source",
+    "Dim_VkAdGroup",
+    "Dim_VkAdPlan",
+    "Dim_VkBanner",
     "arc_fact",
     "arf_fact",
     "arp_fact",
@@ -96,8 +104,15 @@ FULL_PHYSICAL_TABLES = [
     "dim_criterion",
     "Dim_AdFormat",
     "Dim_AdNetworkType",
+    "Dim_Device",
     "Dim_Source",
 ]
+
+GOLDEN_COST = Decimal("25422774.00")
+GOLDEN_COST_TOL = Decimal("100.00")
+GOLDEN_SALES_FLOOR = 54
+GOLDEN_SPECIALIST = "Кудерко Семен"
+GOLDEN_SOURCES = ("direct", "tp8", "tp9", "tp10", "seo", "calls", "direct_unmatched", "direct_zero")
 
 
 def _scalar(client, sql: str):
@@ -114,6 +129,19 @@ def _engine(client, table: str) -> str | None:
         parameters={"table": table},
     ).result_rows
     return rows[0][0] if rows else None
+
+
+def _has_columns(client, table: str, columns: set[str]) -> bool:
+    rows = client.query(
+        """
+        SELECT name
+        FROM system.columns
+        WHERE database='ad_analytics' AND table={table:String}
+        """,
+        parameters={"table": table},
+    ).result_rows
+    existing = {row[0] for row in rows}
+    return columns.issubset(existing)
 
 
 def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # noqa: ARG001
@@ -166,6 +194,38 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
             log.info("%s=%d engine=%s", table, rows, engine)
             if rows == 0:
                 failures.append(f"empty_physical:{table}")
+
+        golden_cols = {"специалист", "атрибуция", "_source_table", "total_cost", "prodazhi"}
+        if not _has_columns(client, "fact_big_analytics", golden_cols):
+            failures.append("golden_missing_fact_columns")
+        else:
+            source_sql = ", ".join(f"'{source}'" for source in GOLDEN_SOURCES)
+            rashod, prodazhi = client.query(
+                f"""
+                SELECT
+                    round(sum(total_cost), 2) AS rashod,
+                    round(sum(prodazhi)) AS prodazhi
+                FROM ad_analytics.fact_big_analytics
+                WHERE `специалист` = {{specialist:String}}
+                  AND `атрибуция` = 'По дате заявки'
+                  AND `_source_table` IN ({source_sql})
+                """,
+                parameters={"specialist": GOLDEN_SPECIALIST},
+            ).result_rows[0]
+            rashod = Decimal(str(rashod or "0"))
+            prodazhi = int(prodazhi or 0)
+            cost_delta = rashod - GOLDEN_COST
+            log.info(
+                "golden_kuderko cost=%s delta=%+s sales=%d floor=%d",
+                rashod,
+                cost_delta,
+                prodazhi,
+                GOLDEN_SALES_FLOOR,
+            )
+            if abs(cost_delta) > GOLDEN_COST_TOL:
+                failures.append(f"golden_cost_delta={cost_delta}")
+            if prodazhi < GOLDEN_SALES_FLOOR:
+                failures.append(f"golden_sales={prodazhi}")
 
     checks = {
         "raw_yandex_cost_zero": "SELECT if(sum(total_cost) = 0, 1, 0) FROM ad_analytics.raw_yandex",
