@@ -40,6 +40,15 @@
   `domains`, `leads_all`, `metrika_yandex_goals`, but some entries are stale/partial for current
   live counts, for example Direct report checkpoint is `0/0` while CH raw has `24,513,866` rows.
 
+## 2026-08-04 dimension naming cleanup
+
+- Criterion dimension now follows the same convention as the other dimensions:
+  physical `Dim_Criterion` (`MergeTree`, `92,145` rows).
+- Legacy `dim_criterion` remains as a compatibility `View` over `Dim_Criterion` so existing PBI
+  model references and old SQL keep working during transition.
+- Both BI-facing views are present and covered by verifier: `bi_Dim_Criterion=92,145` and
+  `bi_dim_criterion=92,145`.
+
 | PBI table | CH object | engine | rows | disk | cols | attr cols | key/index note | recommendation |
 |---|---|---|---:|---:|---:|---:|---|---|
 | `big_analytics_full` | `big_analytics_full` | MergeTree | 5,263,438 | 307.6 MB | 73 | 11 | partition=toYYYYMM(ifNull(Date, toDate('2026-01-01'))); sort=ifNull(Date, toDate('2026-01-01')), ifNull(domain, ''), ifNull(_source_table, '') | star candidate: move text attrs to Dim_* |
@@ -60,7 +69,8 @@
 | `fact_adformat_spend` | `fact_adformat_spend` | MergeTree | 2,919,893 | 49.1 MB | 10 | 0 | partition=toYYYYMM(date); sort=date, campaign_id, ad_group_id, ad_network_type_key, ifNull(ad_format, '') | OK/low priority |
 | `fact_criterion_spend` | `fact_criterion_spend` | MergeTree | 4,710,663 | 97.0 MB | 11 | 0 | partition=toYYYYMM(date); sort=date, campaign_id, ad_group_id, ad_network_type_key, ifNull(criterion_id, 0), criterion_key | OK/low priority |
 | `fact_criterion_zayavki` | `fact_criterion_zayavki` | MergeTree | 128,479 | 7.9 MB | 24 | 5 | partition=toYYYYMM(created_date); sort=created_date, ifNull(campaign_id, 0), ifNull(criterion, '') | dim candidate: repeated descriptive columns |
-| `dim_criterion` | `dim_criterion` | MergeTree | 92,145 | 4.9 MB | 4 | 2 | partition=-; sort=criterion_key | OK/low priority |
+| `Dim_Criterion` | `Dim_Criterion` | MergeTree | 92,145 | 4.9 MB | 4 | 2 | partition=-; sort=criterion_key | OK/low priority |
+| `dim_criterion` | `dim_criterion` | View | view | view | 4 | 2 | compatibility view over `Dim_Criterion` | legacy PBI/sql alias |
 | `analytics_report_criterion` | `arc_fact` | View | view | view | 47 | 12 | view source=? | review: complex view may recalc on refresh |
 | `fact_region_spend` | `fact_region_spend` | MergeTree | 13,248,638 | 170.6 MB | 20 | 4 | partition=toYYYYMM(date); sort=date, campaign_id, ifNull(ad_group_id, 0), ad_network_type_key, ifNull(id_location, 0) | OK/low priority |
 | `fact_region_zayavki` | `fact_region_zayavki` | MergeTree | 175,232 | 8.6 MB | 25 | 6 | partition=toYYYYMM(created_date); sort=created_date, ifNull(campaign_id, 0), ifNull(id_location, 0) | dim candidate: repeated descriptive columns |

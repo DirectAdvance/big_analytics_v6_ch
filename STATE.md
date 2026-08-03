@@ -1,6 +1,13 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-07-31 (Codex: v6_ch CH-only parity + batch safety audit). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-04 (Codex: v6_ch star-backed wide views + dimension naming cleanup). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-08-04 00:21 +05: star-backed wide cleanup + Dim_Criterion naming (Codex):**
+- `local_telega_in_orders` переведена в `View` поверх `raw_data.telega_in_orders` + overrides; shadow отсутствует, raw/local `7104/7104`.
+- `big_analytics_full`, `big_analytics_full_arrival`, `big_analytics_pixel_score`, `big_analytics_unified` теперь compatibility `View` поверх `fact_big_analytics + Dim_*`; `big_analytics_sources` после step148 не хранится durable.
+- Нейминг справочников выровнен: физическая `Dim_Criterion` (`MergeTree`, `92,145`), legacy `dim_criterion` оставлена как `View`; `bi_Dim_Criterion` и `bi_dim_criterion` обе покрыты verifier.
+- Проверено: `pipeline.py --only-step 146` OK, `data_check/verify_big_analytics.py` PASS; golden Кудерко `25,422,797.96`, sales `55`, `fact_unified_count_mismatch=0`.
+- Связанные коммиты на момент handoff: `23de255`, `9896151`, `3dd45fa`; naming cleanup оформляется отдельным commit.
 
 **2026-07-31 17:59 +05: CH-only sources + batch safety audit (Codex):**
 - `step0_sync_local/step0.py` больше не копирует PostgreSQL/v5 facts/local tables. Step0 стал read-only preflight по ClickHouse sources:

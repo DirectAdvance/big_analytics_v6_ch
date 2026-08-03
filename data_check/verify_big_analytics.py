@@ -32,6 +32,7 @@ REQUIRED_TABLES = [
     "arp_fact",
     "arc_fact",
     "arf_fact",
+    "Dim_Criterion",
     "dim_criterion",
 ]
 
@@ -39,6 +40,7 @@ PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
     "Dim_AdNetworkType",
     "Dim_Campaign",
+    "Dim_Criterion",
     "Dim_Date",
     "Dim_Device",
     "Dim_Location",
@@ -100,11 +102,15 @@ PBI_COMPAT_OBJECTS = [
 
 FULL_PHYSICAL_TABLES = [
     "pixel_score",
-    "dim_criterion",
+    "Dim_Criterion",
     "Dim_AdFormat",
     "Dim_AdNetworkType",
     "Dim_Device",
     "Dim_Source",
+]
+
+COMPAT_VIEWS = [
+    "dim_criterion",
 ]
 
 WIDE_COMPAT_VIEWS = [
@@ -200,6 +206,18 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
             log.info("%s=%d engine=%s", table, rows, engine)
             if rows == 0:
                 failures.append(f"empty_physical:{table}")
+
+        for table in COMPAT_VIEWS:
+            engine = _engine(client, table)
+            if engine is None:
+                failures.append(f"missing_compat_view:{table}")
+                continue
+            rows = count_rows(client, f"ad_analytics.`{table}`")
+            log.info("%s=%d engine=%s", table, rows, engine)
+            if engine != "View":
+                failures.append(f"compat_not_view:{table}:{engine}")
+            if rows == 0:
+                failures.append(f"empty_compat_view:{table}")
 
         for table in WIDE_COMPAT_VIEWS:
             engine = _engine(client, table)

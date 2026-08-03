@@ -26,6 +26,7 @@ PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
     "Dim_AdNetworkType",
     "Dim_Campaign",
+    "Dim_Criterion",
     "Dim_Date",
     "Dim_Device",
     "Dim_Location",
@@ -510,7 +511,7 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
         FROM ad_analytics.fact_criterion_spend f
         LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
         LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
-        LEFT JOIN ad_analytics.dim_criterion dcr ON dcr.criterion_key = f.criterion_key
+        LEFT JOIN ad_analytics.Dim_Criterion dcr ON dcr.criterion_key = f.criterion_key
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
     """
@@ -662,7 +663,7 @@ def _dim_criterion_sql() -> str:
 
 
 def build_dim_criterion(client) -> int:
-    shadow = "ad_analytics.dim_criterion_new"
+    shadow = "ad_analytics.Dim_Criterion_new"
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
     client.command(
         f"""
@@ -674,8 +675,9 @@ def build_dim_criterion(client) -> int:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    swap_shadow(client, "ad_analytics.dim_criterion", shadow)
-    return count_rows(client, "ad_analytics.dim_criterion")
+    swap_shadow(client, "ad_analytics.Dim_Criterion", shadow)
+    _replace_view(client, "dim_criterion", "SELECT * FROM ad_analytics.Dim_Criterion")
+    return count_rows(client, "ad_analytics.Dim_Criterion")
 
 
 def _arp_fact_sql(where_sql: str = "") -> str:
@@ -944,10 +946,10 @@ def create_bi_views(client) -> dict[str, int]:
             """
         elif table == "fact_criterion_zayavki":
             select_sql = _criterion_zayavki_pbi_sql()
-        elif table == "dim_criterion":
+        elif table in {"Dim_Criterion", "dim_criterion"}:
             select_sql = """
                 SELECT criterion, criterion_type, criterion_raw
-                FROM ad_analytics.dim_criterion
+                FROM ad_analytics.Dim_Criterion
             """
         elif table == "check_utm_fuck_direct":
             select_sql = """
@@ -1080,7 +1082,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         "pbi_import_region_spend": build_pbi_import_region_spend(client),
         "arp_fact": build_arp_fact(client),
         "arf_fact": build_arf_fact(client),
-        "dim_criterion": build_dim_criterion(client),
+        "Dim_Criterion": build_dim_criterion(client),
         "arc_fact": build_arc_fact(client),
     }
     rows.update(create_light_aliases(client))
