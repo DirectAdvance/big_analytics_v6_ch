@@ -17,11 +17,14 @@
 
 ## Что строится
 
-- `ad_analytics.local_telega_in_orders`
+- `ad_analytics.local_telega_in_orders` — view над `raw_data.telega_in_orders` + ручные field/price overrides.
 - `ad_analytics.local_telega_in_orders_errors`
 - `ad_analytics.crop_targeting_api_telegain_lead`
 - `ad_analytics.big_analytics_cost_overlays`
 - обновлённый `ad_analytics.big_analytics_full` с overlay-расходами для `crop_targeting` и `vk_ads`
+
+`local_telega_in_orders` не держим физически: сырьё уже есть в `raw_data.telega_in_orders`, а отличия
+хранятся отдельно в `telega_in_order_field_overrides` и `telega_in_order_price_overrides`.
 
 ## Батчинг
 

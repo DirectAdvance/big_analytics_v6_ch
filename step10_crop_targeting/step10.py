@@ -170,14 +170,10 @@ def _ensure_telega_price_overrides(client) -> int:
 
 def _rebuild_local_telega_orders(client) -> int:
     _require(client, "raw_data", "telega_in_orders")
-    shadow = "ad_analytics.local_telega_in_orders_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
-    client.command(
+    replace_view(
+        client,
+        "ad_analytics.local_telega_in_orders",
         f"""
-        CREATE TABLE {shadow}
-        ENGINE = MergeTree
-        ORDER BY (id, ifNull(order_id, 0))
-        AS
         WITH
         field_override AS
         (
@@ -231,9 +227,7 @@ def _rebuild_local_telega_orders(client) -> int:
         LEFT JOIN field_override f ON f.id = toInt64(ifNull(r.id, 0))
         LEFT JOIN price_override p ON p.id = toInt64(ifNull(r.id, 0))
         """,
-        settings=JOIN_QUERY_SETTINGS,
     )
-    swap_shadow(client, "ad_analytics.local_telega_in_orders", shadow)
     return count_rows(client, "ad_analytics.local_telega_in_orders")
 
 
