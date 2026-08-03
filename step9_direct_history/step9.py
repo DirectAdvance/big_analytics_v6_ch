@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows, swap_shadow
+from config.ch_utils import count_rows, replace_view
 
 logger = logging.getLogger("pipeline.step9")
 
@@ -24,13 +24,21 @@ def run(conn=None, run_id: str | None = None, history_thread=None) -> dict:  # n
     logger.info("Шаг 9 v6_ch: yandex_direct_history из raw_data.direct_campaigns")
     client = get_client()
     t0 = time.perf_counter()
-    client.command("DROP TABLE IF EXISTS ad_analytics.yandex_direct_history_new SYNC")
-    client.command(
+    replace_view(
+        client,
+        "ad_analytics.yandex_direct_history",
         """
-        CREATE TABLE ad_analytics.yandex_direct_history_new
-        ENGINE = ReplacingMergeTree(updated_at)
-        ORDER BY (login, campaign_id, event_type)
-        AS
+        WITH gs AS
+        (
+            SELECT
+                lower(ifNull(login_key, '')) AS login_key,
+                anyLast(directologist) AS directologist,
+                anyLast(domain) AS domain,
+                anyLast(salon) AS salon
+            FROM raw_data.gsheet_sites
+            WHERE ifNull(login_key, '') != ''
+            GROUP BY login_key
+        )
         SELECT
             parseDateTimeBestEffortOrNull(nullIf(synced_at, '')) AS datetime,
             account_login AS login,
@@ -45,10 +53,9 @@ def run(conn=None, run_id: str | None = None, history_thread=None) -> dict:  # n
             gs.salon AS salon,
             now() AS updated_at
         FROM raw_data.direct_campaigns dc
-        LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(dc.account_login)
-        """
+        LEFT JOIN gs ON gs.login_key = lower(dc.account_login)
+        """,
     )
-    swap_shadow(client, "ad_analytics.yandex_direct_history", "ad_analytics.yandex_direct_history_new")
     rows = count_rows(client, "ad_analytics.yandex_direct_history")
     logger.info("Шаг 9 v6_ch завершён за %.1f сек: rows=%d", time.perf_counter() - t0, rows)
     return {"rows": rows, "details": f"yandex_direct_history={rows:,}"}

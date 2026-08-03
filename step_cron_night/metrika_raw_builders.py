@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, range_batches, swap_shadow, table_exists
 
 log = logging.getLogger("pipeline.metrika_raw_builders")
 
@@ -31,14 +31,10 @@ def build_metrika_yandex(client=None) -> int:
     for table in ("gsheet_sites", "metrika_yandex_counters", "metrika_yandex_goals"):
         _require(client, "raw_data", table)
 
-    shadow = "ad_analytics.metrika_yandex_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command("DROP TABLE IF EXISTS ad_analytics.metrika_yandex SYNC")
     client.command(
         """
-        CREATE TABLE ad_analytics.metrika_yandex_new
-        ENGINE = MergeTree
-        ORDER BY ifNull(domain, '')
-        AS
+        CREATE VIEW ad_analytics.metrika_yandex AS
         WITH
         goals AS
         (
@@ -48,7 +44,8 @@ def build_metrika_yandex(client=None) -> int:
                 anyLastIf(goal_id, name = 'CRM: Заказ создан') AS crm_order_created,
                 anyLastIf(goal_id, name = 'CRM: Заказ оплачен') AS crm_order_paid,
                 anyLastIf(goal_id, name = 'CRM: Спам заказ') AS crm_spam_order,
-                anyLastIf(goal_id, name = 'CRM: Заказ отменен') AS crm_order_canceled
+                anyLastIf(goal_id, name = 'CRM: Заказ отменен') AS crm_order_canceled,
+                max(synced_at) AS goals_synced_at
             FROM raw_data.metrika_yandex_goals
             GROUP BY counter_id
         ),
@@ -59,7 +56,8 @@ def build_metrika_yandex(client=None) -> int:
                 domain_key,
                 anyLast(name) AS counter_name,
                 anyLast(site) AS site,
-                anyLast(status) AS counter_status
+                anyLast(status) AS counter_status,
+                max(synced_at) AS counters_synced_at
             FROM
             (
                 SELECT *, lowerUTF8(trim(ifNull(domain, ''))) AS domain_key
@@ -99,7 +97,17 @@ def build_metrika_yandex(client=None) -> int:
             coalesce(s.counter_id_from_site, c.counter_id) IS NOT NULL AS grant_done_lots04,
             coalesce(s.counter_id_from_site, c.counter_id) IS NOT NULL AS grant_done_skuderko1,
             s.status,
-            now() AS updated_at
+            CAST(
+                if(
+                    g.goals_synced_at IS NULL AND c.counters_synced_at IS NULL,
+                    toDateTime64(now(), 6, 'UTC'),
+                    greatest(
+                        ifNull(g.goals_synced_at, toDateTime64(0, 6, 'UTC')),
+                        ifNull(c.counters_synced_at, toDateTime64(0, 6, 'UTC'))
+                    )
+                ),
+                'DateTime'
+            ) AS updated_at
         FROM sites s
         LEFT JOIN counters c
             ON c.counter_id = s.counter_id_from_site OR (s.counter_id_from_site IS NULL AND c.domain_key = s.domain_key)
@@ -107,7 +115,6 @@ def build_metrika_yandex(client=None) -> int:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    swap_shadow(client, "ad_analytics.metrika_yandex", shadow)
     return count_rows(client, "ad_analytics.metrika_yandex")
 
 
@@ -279,10 +286,17 @@ def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | N
         """
     )
 
-    chunks = day_ranges(date_from=date_from, date_to=date_to)
+    batch_days = int(os.getenv("CHECK_UTM_BATCH_DAYS", "7"))
+    chunks = range_batches(date_from=date_from, date_to=date_to, days=batch_days)
     if not chunks:
         raise ValueError(f"empty check_utm date range: date_from={date_from!r}, date_to={date_to!r}")
-    log.info("check_utm chunked build: %d daily chunks, range=[%s, %s)", len(chunks), chunks[0][0], chunks[-1][1])
+    log.info(
+        "check_utm chunked build: %d chunks × %d days, range=[%s, %s)",
+        len(chunks),
+        batch_days,
+        chunks[0][0],
+        chunks[-1][1],
+    )
     for start, end in chunks:
         log.info("check_utm chunk %s -> %s", start, end)
         client.command(
@@ -382,6 +396,7 @@ def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | N
         )
     swap_shadow(client, "ad_analytics.check_utm", check_shadow)
     swap_shadow(client, "ad_analytics.check_utm_fuck_direct", fuck_shadow)
+    client.command(f"DROP TABLE IF EXISTS {check_shadow} SYNC")
     client.command(f"DROP TABLE IF EXISTS {dim_shadow} SYNC")
     return count_rows(client, "ad_analytics.check_utm"), count_rows(client, "ad_analytics.check_utm_fuck_direct")
 

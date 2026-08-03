@@ -24,6 +24,47 @@ logger = logging.getLogger("pipeline.step3")
 SOURCE_STORE = "big_analytics_sources"
 LEADS_DEDUPED_STAGE = "_step3_leads_deduped"
 DIRECT_SOURCE_TYPES = ("direct", "tp8", "tp9", "tp10")
+STEP3_QUERY_SETTINGS = {
+    **SAFE_QUERY_SETTINGS,
+    "max_execution_time": 180,
+    "max_memory_usage": 1_500_000_000,
+}
+
+
+def _is_transient_clickhouse_error(exc: Exception) -> bool:
+    message = str(exc)
+    return any(
+        marker in message
+        for marker in (
+            "EOF occurred in violation of protocol",
+            "Connection reset by peer",
+            "Max retries exceeded",
+            "SESSION_IS_LOCKED",
+            "Read timed out",
+            "RemoteDisconnected",
+        )
+    )
+
+
+def _command_with_retry(client, sql: str, *, label: str, settings=None, attempts: int = 3):
+    for attempt in range(1, attempts + 1):
+        try:
+            client.command(sql, settings=settings)
+            return client
+        except Exception as exc:
+            if attempt == attempts or not _is_transient_clickhouse_error(exc):
+                raise
+            logger.warning(
+                "    %s failed (%d/%d): %s; reconnecting",
+                label,
+                attempt,
+                attempts,
+                exc,
+            )
+            time.sleep(attempt * 2)
+            client = get_client()
+    return client
+
 
 def _weekday_expr(date_expr: str) -> str:
     return (
@@ -275,10 +316,11 @@ leads_deduped AS
 """
 
 
-def _rebuild_leads_deduped_stage(client) -> int:
+def _rebuild_leads_deduped_stage(client):
     target = f"ad_analytics.{LEADS_DEDUPED_STAGE}"
-    client.command(f"DROP TABLE IF EXISTS {target} SYNC")
-    client.command(
+    client = _command_with_retry(client, f"DROP TABLE IF EXISTS {target} SYNC", label=f"{LEADS_DEDUPED_STAGE} drop")
+    client = _command_with_retry(
+        client,
         f"""
         CREATE TABLE {target}
         ENGINE = MergeTree
@@ -290,9 +332,11 @@ def _rebuild_leads_deduped_stage(client) -> int:
         SELECT *
         FROM leads_deduped
         WHERE ifNull(created_date, toDate('1970-01-01')) >= toDate('2026-01-01')
-        """
+        """,
+        label=f"{LEADS_DEDUPED_STAGE} create",
+        settings=STEP3_QUERY_SETTINGS,
     )
-    return count_rows(client, target)
+    return client, count_rows(client, target)
 
 
 def _ag_parts_expr(prefix: str = "") -> str:
@@ -312,6 +356,18 @@ def _gs_pick_expr(field: str) -> str:
     return (
         f"if(la.domain_key != '' AND la.domain_key != lower(trim(ifNull(gs.domain, ''))), "
         f"coalesce(gs_dir.{field}, gs.{field}), coalesce(gs.{field}, gs_dir.{field}))"
+    )
+
+
+def _direct_specialist_expr() -> str:
+    return _domain_specialist_expr("gs")
+
+
+def _domain_specialist_expr(alias: str) -> str:
+    return (
+        f"if({alias}.match_priority IN (1, 2), "
+        f"nullIf(trim(ifNull({alias}.directologist, '')), ''), "
+        "CAST(NULL, 'Nullable(String)'))"
     )
 
 
@@ -373,17 +429,18 @@ gs_best AS
             gs.client_id,
             gs.sales_manager,
             gs.login_key,
+            multiIf(
+                ifNull(gs.login_key, '') = '', 99,
+                ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2,
+                (ifNull(trim(gs.launch_date), '') = '' OR ud.date_val >= toDate(parseDateTimeBestEffortOrNull(gs.launch_date)))
+                    AND (ifNull(trim(gs.block_date), '') = '' OR ud.date_val < toDate(parseDateTimeBestEffortOrNull(gs.block_date))),
+                1,
+                3
+            ) AS match_priority,
             row_number() OVER (
                 PARTITION BY ud.login_key, ud.date_val
                 ORDER BY
-                    multiIf(
-                        ifNull(gs.login_key, '') = '', 99,
-                        ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2,
-                        (ifNull(trim(gs.launch_date), '') = '' OR ud.date_val >= toDate(parseDateTimeBestEffortOrNull(gs.launch_date)))
-                            AND (ifNull(trim(gs.block_date), '') = '' OR ud.date_val < toDate(parseDateTimeBestEffortOrNull(gs.block_date))),
-                        1,
-                        3
-                    ) ASC,
+                    match_priority ASC,
                     ifNull(toDate(parseDateTimeBestEffortOrNull(gs.launch_date)), toDate('1900-01-01')) DESC,
                     ifNull(gs.domain, '') ASC
             ) AS rn
@@ -474,7 +531,7 @@ SELECT
     ifNull(la.dohod_do_kredita, 0) AS dohod_do_kredita,
     ifNull(la.dobro, 0) AS dobro,
     {_gs_pick_expr("status")} AS `статус`,
-    {_gs_pick_expr("directologist")} AS `специалист`,
+    {_direct_specialist_expr()} AS `специалист`,
     {_gs_pick_expr("site_type")} AS `тип_сайта`,
     {_gs_pick_expr("template")} AS `шаблон`,
     {_gs_pick_expr("salon")} AS `салон`,
@@ -535,6 +592,53 @@ lead_scored AS
     FROM ad_analytics.{LEADS_DEDUPED_STAGE} l
     WHERE {source_filter}
       {lead_date_filter}
+),
+gs_domain_best AS
+(
+    SELECT *
+    FROM
+    (
+        SELECT
+            ld.domain_key AS domain_key,
+            ld.date_val AS match_date,
+            gs.domain,
+            gs.status,
+            gs.directologist,
+            gs.site_type,
+            gs.template,
+            gs.salon,
+            gs.city,
+            gs.region,
+            gs.direction,
+            gs.project_manager,
+            gs.client_id,
+            gs.sales_manager,
+            gs.login_key,
+            multiIf(
+                ifNull(gs.domain, '') = '', 99,
+                ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2,
+                (ifNull(trim(gs.launch_date), '') = '' OR ld.date_val >= toDate(parseDateTimeBestEffortOrNull(gs.launch_date)))
+                    AND (ifNull(trim(gs.block_date), '') = '' OR ld.date_val < toDate(parseDateTimeBestEffortOrNull(gs.block_date))),
+                1,
+                3
+            ) AS match_priority,
+            row_number() OVER (
+                PARTITION BY ld.domain_key, ld.date_val
+                ORDER BY
+                    match_priority ASC,
+                    ifNull(toDate(parseDateTimeBestEffortOrNull(gs.launch_date)), toDate('1900-01-01')) DESC,
+                    ifNull(gs.domain, '') ASC
+            ) AS rn
+        FROM
+        (
+            SELECT DISTINCT domain_key, created_date AS date_val
+            FROM lead_scored
+            WHERE domain_key != ''
+        ) ld
+        LEFT JOIN raw_data.gsheet_sites gs
+          ON lower(trim(ifNull(gs.domain, ''))) = ld.domain_key
+    )
+    WHERE rn = 1
 )
 SELECT
     l.key3 AS key3,
@@ -583,7 +687,7 @@ SELECT
     l.dohod_do_kredita,
     l.dobro,
     gs.status AS `статус`,
-    gs.directologist AS `специалист`,
+    {_domain_specialist_expr("gs")} AS `специалист`,
     gs.site_type AS `тип_сайта`,
     gs.template AS `шаблон`,
     coalesce(nullIf(l.salon, ''), gs.salon) AS `салон`,
@@ -610,7 +714,7 @@ SELECT
     CAST(NULL, 'Nullable(String)') AS campaign_status,
     CAST(NULL, 'Nullable(String)') AS payment_model
 FROM lead_scored l
-LEFT JOIN gs_domain gs ON gs.domain_key = l.domain_key
+LEFT JOIN gs_domain_best gs ON gs.domain_key = l.domain_key AND gs.match_date = l.created_date
 LEFT JOIN crm_by_domain crm ON crm.domain_key = l.domain_key
 WHERE ifNull(l.created_date, toDate('1970-01-01')) >= toDate('2026-01-01')
 """
@@ -684,17 +788,27 @@ def _swap_shadow(client, table: str) -> None:
     swap_shadow(client, f"ad_analytics.{table}", f"ad_analytics.{table}_new")
 
 
-def _rebuild_batched(client, table: str, empty_create_sql: str, batch_select_sqls: list[str]) -> int:
+def _rebuild_batched(client, table: str, empty_create_sql: str, batch_select_sqls: list[str]):
     target = f"ad_analytics.{table}"
     shadow = f"ad_analytics.{table}_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(empty_create_sql.replace(target, shadow, 1), settings=SAFE_QUERY_SETTINGS)
+    client = _command_with_retry(client, f"DROP TABLE IF EXISTS {shadow} SYNC", label=f"{table} shadow drop")
+    client = _command_with_retry(
+        client,
+        empty_create_sql.replace(target, shadow, 1),
+        label=f"{table} shadow create",
+        settings=STEP3_QUERY_SETTINGS,
+    )
     for idx, select_sql in enumerate(batch_select_sqls, start=1):
         t0 = time.perf_counter()
-        client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
+        client = _command_with_retry(
+            client,
+            f"INSERT INTO {shadow}\n{select_sql}",
+            label=f"{table} batch {idx}/{len(batch_select_sqls)}",
+            settings=STEP3_QUERY_SETTINGS,
+        )
         logger.info("    batch %s %d/%d inserted за %.1f сек", table, idx, len(batch_select_sqls), time.perf_counter() - t0)
     _swap_shadow(client, table)
-    return int(client.query(f"SELECT count() FROM {target}", settings=SAFE_QUERY_SETTINGS).result_rows[0][0])
+    return client, int(client.query(f"SELECT count() FROM {target}", settings=STEP3_QUERY_SETTINGS).result_rows[0][0])
 
 
 def _source_types_sql(source_types: tuple[str, ...]) -> str:
@@ -740,7 +854,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     shadow = f"ad_analytics.{SOURCE_STORE}_new"
 
     t_stage = time.perf_counter()
-    leads_rows = _rebuild_leads_deduped_stage(client)
+    client, leads_rows = _rebuild_leads_deduped_stage(client)
     parts.append(f"{LEADS_DEDUPED_STAGE}={leads_rows:,}")
     logger.info("  rebuilt ad_analytics.%s: %s rows за %.1f сек", LEADS_DEDUPED_STAGE, f"{leads_rows:,}", time.perf_counter() - t_stage)
 
@@ -750,11 +864,21 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         for lo, hi in direct_ranges
     ]
     logger.info("  rebuild ad_analytics.%s (%d direct daily batches)", SOURCE_STORE, len(direct_batches))
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(_build_direct_sql(f"{SOURCE_STORE}_new", "AND 0"), settings=SAFE_QUERY_SETTINGS)
+    client = _command_with_retry(client, f"DROP TABLE IF EXISTS {shadow} SYNC", label=f"{SOURCE_STORE} shadow drop")
+    client = _command_with_retry(
+        client,
+        _build_direct_sql(f"{SOURCE_STORE}_new", "AND 0"),
+        label=f"{SOURCE_STORE} shadow create",
+        settings=STEP3_QUERY_SETTINGS,
+    )
     for idx, select_sql in enumerate(direct_batches, start=1):
         t_batch = time.perf_counter()
-        client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
+        client = _command_with_retry(
+            client,
+            f"INSERT INTO {shadow}\n{select_sql}",
+            label=f"{SOURCE_STORE} batch {idx}/{len(direct_batches)}",
+            settings=STEP3_QUERY_SETTINGS,
+        )
         logger.info(
             "    batch %s %d/%d inserted за %.1f сек",
             SOURCE_STORE,
@@ -779,7 +903,12 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         logger.info("  append %s into ad_analytics.%s (%d daily batches)", table, SOURCE_STORE, len(batch_selects))
         for idx, select_sql in enumerate(batch_selects, start=1):
             t_batch = time.perf_counter()
-            client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
+            client = _command_with_retry(
+                client,
+                f"INSERT INTO {shadow}\n{select_sql}",
+                label=f"{table} batch {idx}/{len(batch_selects)}",
+                settings=STEP3_QUERY_SETTINGS,
+            )
             logger.info(
                 "    batch %s %d/%d inserted за %.1f сек",
                 table,
@@ -798,6 +927,9 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     parts.append(f"big_analytics_reviews={rows:,}")
     parts.append(f"{SOURCE_STORE}={source_rows:,}")
     total = source_rows + rows
+
+    client.command(f"DROP TABLE IF EXISTS ad_analytics.{LEADS_DEDUPED_STAGE} SYNC")
+    logger.info("  cleaned ad_analytics.%s staging", LEADS_DEDUPED_STAGE)
 
     details = ", ".join(parts)
     logger.info("Шаг 3 v6_ch завершён за %.1f сек: %s", time.perf_counter() - t0, details)

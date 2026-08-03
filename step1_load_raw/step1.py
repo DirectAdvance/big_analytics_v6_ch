@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, EXCLUDED_DOMAIN_IDS, RAW_TARGET_TABLES
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
 
 logger = logging.getLogger("pipeline.step1")
 
@@ -47,6 +47,26 @@ def _excluded_domain_list() -> str:
 def _drop_and_create(client, table: str, create_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS {table} SYNC")
     client.command(create_sql, settings=SAFE_QUERY_SETTINGS)
+
+
+def _command_with_retry(client, sql: str, *, label: str, settings=None, attempts: int = 3):
+    for attempt in range(1, attempts + 1):
+        try:
+            client.command(sql, settings=settings)
+            return client
+        except Exception as exc:
+            if attempt == attempts:
+                raise
+            logger.warning(
+                "    %s failed (%d/%d): %s; reconnecting",
+                label,
+                attempt,
+                attempts,
+                exc,
+            )
+            time.sleep(attempt * 2)
+            client = get_client()
+    return client
 
 
 def _total_cost_expr() -> str:
@@ -161,13 +181,19 @@ FROM parsed_src
 
 
 def _direct_source_table(client) -> str:
-    override = "ad_analytics.local_yandex_pg"
-    if table_exists(client, "ad_analytics", "local_yandex_pg"):
-        rows = count_rows(client, override)
+    primary = "raw_data.yandex_direct_report_rows"
+    if table_exists(client, "raw_data", "yandex_direct_report_rows"):
+        rows = count_rows(client, primary)
         if rows > 0:
-            logger.info("  raw Direct source override: %s (%d rows)", override, rows)
-            return override
-    return "raw_data.yandex_direct_report_rows"
+            logger.info("  raw Direct source: %s (%d rows)", primary, rows)
+            return primary
+    fallback = "ad_analytics.local_yandex_pg"
+    if table_exists(client, "ad_analytics", "local_yandex_pg"):
+        rows = count_rows(client, fallback)
+        if rows > 0:
+            logger.warning("  raw Direct source fallback: %s (%d rows)", fallback, rows)
+            return fallback
+    return primary
 
 
 def _raw_leads_select_sql(source: str = "raw_data.leads_all") -> str:
@@ -230,13 +256,19 @@ WHERE l.deal_type != 'Звонок'
 
 
 def _leads_source_table(client) -> str:
-    override = "ad_analytics.local_leads_all_pg"
-    if table_exists(client, "ad_analytics", "local_leads_all_pg"):
-        rows = count_rows(client, override)
+    primary = "raw_data.leads_all"
+    if table_exists(client, "raw_data", "leads_all"):
+        rows = count_rows(client, primary)
         if rows > 0:
-            logger.info("  raw CRM source override: %s (%d rows)", override, rows)
-            return override
-    return "raw_data.leads_all"
+            logger.info("  raw CRM source: %s (%d rows)", primary, rows)
+            return primary
+    fallback = "ad_analytics.local_leads_all_pg"
+    if table_exists(client, "ad_analytics", "local_leads_all_pg"):
+        rows = count_rows(client, fallback)
+        if rows > 0:
+            logger.warning("  raw CRM source fallback: %s (%d rows)", fallback, rows)
+            return fallback
+    return primary
 
 
 def _raw_leads_sql(source_filter: str = "", source: str = "raw_data.leads_all") -> str:
@@ -282,13 +314,8 @@ WHERE l.deal_type = 'Звонок'
 """
 
 
-def _raw_domains_sql() -> str:
-    table = RAW_TARGET_TABLES["raw_domains"]
-    return f"""
-CREATE TABLE {table}
-ENGINE = MergeTree
-ORDER BY id
-AS
+def _raw_domains_select_sql() -> str:
+    return """
 SELECT
     id,
     domain AS name,
@@ -300,6 +327,11 @@ SELECT
     created_at
 FROM raw_data.domains
 """
+
+
+def _replace_raw_domains_view(client) -> int:
+    replace_view(client, RAW_TARGET_TABLES["raw_domains"], _raw_domains_select_sql())
+    return count_rows(client, RAW_TARGET_TABLES["raw_domains"])
 
 
 def _raw_perform_leads_sql() -> str:
@@ -323,16 +355,26 @@ def _select_from_create(create_sql: str) -> str:
     return create_sql.split(marker, 1)[1].strip()
 
 
-def _rebuild_batched(client, logical_name: str, empty_sql: str, batch_selects: list[str]) -> int:
+def _rebuild_batched(client, logical_name: str, empty_sql: str, batch_selects: list[str]):
     table = RAW_TARGET_TABLES[logical_name]
     shadow = f"{table}_new"
-    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-    client.command(empty_sql.replace(table, shadow, 1), settings=SAFE_QUERY_SETTINGS)
+    client = _command_with_retry(client, f"DROP TABLE IF EXISTS {shadow} SYNC", label=f"{logical_name} shadow drop")
+    client = _command_with_retry(
+        client,
+        empty_sql.replace(table, shadow, 1),
+        label=f"{logical_name} shadow create",
+        settings=SAFE_QUERY_SETTINGS,
+    )
     for idx, select_sql in enumerate(batch_selects, start=1):
-        client.command(f"INSERT INTO {shadow}\n{select_sql}", settings=SAFE_QUERY_SETTINGS)
+        client = _command_with_retry(
+            client,
+            f"INSERT INTO {shadow}\n{select_sql}",
+            label=f"{logical_name} daily batch {idx}/{len(batch_selects)}",
+            settings=SAFE_QUERY_SETTINGS,
+        )
         logger.info("    %s daily batch %d/%d inserted", logical_name, idx, len(batch_selects))
     swap_shadow(client, table, shadow)
-    return count_rows(client, table)
+    return client, count_rows(client, table)
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
@@ -357,7 +399,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         for lo, hi in yandex_ranges
     ]
     logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_yandex"], len(yandex_batches))
-    rows = _rebuild_batched(client, "raw_yandex", _raw_yandex_sql("AND 0", source=direct_source), yandex_batches)
+    client, rows = _rebuild_batched(client, "raw_yandex", _raw_yandex_sql("AND 0", source=direct_source), yandex_batches)
     total += rows
     details_parts.append(f"raw_yandex={rows:,}")
     logger.info("  raw_yandex: %d строк за %.1f сек", rows, time.perf_counter() - t_table)
@@ -374,7 +416,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         for lo, hi in lead_ranges
     ]
     logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_leads"], len(lead_batches))
-    rows = _rebuild_batched(client, "raw_leads", _raw_leads_sql("AND 0", source=leads_source), lead_batches)
+    client, rows = _rebuild_batched(client, "raw_leads", _raw_leads_sql("AND 0", source=leads_source), lead_batches)
     total += rows
     details_parts.append(f"raw_leads={rows:,}")
     logger.info("  raw_leads: %d строк за %.1f сек", rows, time.perf_counter() - t_table)
@@ -390,13 +432,19 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         for lo, hi in lead_ranges
     ]
     logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_calls"], len(call_batches))
-    rows = _rebuild_batched(client, "raw_calls", _raw_calls_sql("AND 0", source=leads_source), call_batches)
+    client, rows = _rebuild_batched(client, "raw_calls", _raw_calls_sql("AND 0", source=leads_source), call_batches)
     total += rows
     details_parts.append(f"raw_calls={rows:,}")
     logger.info("  raw_calls: %d строк за %.1f сек", rows, time.perf_counter() - t_table)
 
+    t_table = time.perf_counter()
+    logger.info("  replace %s as VIEW", RAW_TARGET_TABLES["raw_domains"])
+    rows = _replace_raw_domains_view(client)
+    total += rows
+    details_parts.append(f"raw_domains={rows:,}")
+    logger.info("  raw_domains view: %d строк за %.1f сек", rows, time.perf_counter() - t_table)
+
     for logical_name, sql in [
-        ("raw_domains", _raw_domains_sql()),
         ("raw_perform_leads", _raw_perform_leads_sql()),
     ]:
         table = RAW_TARGET_TABLES[logical_name]
