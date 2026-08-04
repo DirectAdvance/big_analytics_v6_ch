@@ -1,6 +1,12 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-08-04 (Codex: PBIP spend facts thin star remap). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-04 (Codex: PBIP zayavki + big_full site thinning). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- Из активной SemanticModel удалена неиспользуемая `big_analytics_full_arrival` вместе с её `LocalDateTable_8d809...`/`LocalDateTable_65645...`; `bi_big_analytics_full_arrival` удалена из ClickHouse, а `build_pbi_compat.py` больше её не создаёт.
+- `fact_region_zayavki` сужена `25 -> 18` колонок, `fact_criterion_zayavki` `24 -> 17`: оставлены ключи связей (`campaign_id`, даты, `id_location`/`distance_km_agreg`, `criterion`) и метрики; описательные campaign/location/criterion/site поля вынесены в `Dim_*`.
+- `big_analytics_full` в PBI-слое сужена: site-дубли `специалист/салон/город/регион/тип_сайта/шаблон/статус/проджект/менеджер/Название crm/...` переведены в `Dim_Site`, в факте оставлен `домен` как ключ связи. `bi_pbi_big_analytics_full` теперь `5,395,734` строк и `32` импортируемые колонки.
+- Проверено: `build_pbi_compat.py` OK (`210.6s` полный после zayavki/arrival, targeted rebuild big_full OK); active PBIP stale refs = 0; `5,214` JSON parse OK; `8,604` visual refs -> TMDL без missing refs; M-source views `28/28` существуют.
 
 **2026-08-04 +05: PBIP spend facts thin star remap (Codex):**
 - `fact_region_spend`, `fact_adformat_spend`, `fact_criterion_spend` в PBI-слое сужены: campaign/site/adgroup/criterion атрибуты вынесены в `Dim_Campaign`/`Dim_AdGroup`/`Dim_Site`/`dim_criterion`, в facts оставлены ключи, метрики, даты и технический `domain`.

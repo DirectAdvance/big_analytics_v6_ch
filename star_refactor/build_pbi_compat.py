@@ -41,7 +41,6 @@ PBI_SOURCE_OBJECTS = [
     "arf_fact",
     "arp_fact",
     "pbi_big_analytics_full",
-    "big_analytics_full_arrival",
     "check_utm_fuck_direct",
     "dim_criterion",
     "yandex_direct_history",
@@ -62,6 +61,10 @@ PBI_SOURCE_OBJECTS = [
     "yandex_direct_return_commission_report",
 ]
 
+LEGACY_BI_VIEWS = [
+    "bi_big_analytics_full_arrival",
+]
+
 
 def _replace_view(client, name: str, select_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC")
@@ -71,6 +74,8 @@ def _replace_view(client, name: str, select_sql: str) -> None:
 def drop_bi_views(client) -> None:
     for table in PBI_SOURCE_OBJECTS:
         client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(f'bi_{table}')} SYNC")
+    for view_name in LEGACY_BI_VIEWS:
+        client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(view_name)} SYNC")
 
 
 def _pbi_full_sql(where_sql: str = "") -> str:
@@ -112,19 +117,6 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 f.source_key = 'пиксель', 'Пиксель',
                 f.`направление`
             ) AS `направление`,
-            f.`специалист` AS `специалист`,
-            f.`тип_сайта` AS `тип_сайта`,
-            f.`статус` AS `статус`,
-            f.`статус` AS status,
-            f.`салон` AS `салон`,
-            f.`шаблон` AS `шаблон`,
-            f.`id_салона` AS `id_салона`,
-            f.`город` AS `город`,
-            f.`регион` AS `регион`,
-            f.`проджект` AS `проджект`,
-            f.`проджект` AS project_manager,
-            f.`менеджер` AS `менеджер`,
-            f.`Название crm` AS `Название crm`,
             f.`тип_заявки`,
             dm.manager_login,
             f.account_login AS account_login
@@ -455,15 +447,8 @@ def _region_zayavki_pbi_sql() -> str:
             f.row_hash,
             f.created_date,
             f.campaign_id,
-            f.campaign_name,
             f.id_location,
-            dl.location,
-            dl.`Область`,
-            dl.GeoRegionType,
-            CAST(NULL, 'Nullable(Int32)') AS distance_km,
             dl.distance_km_agreg,
-            CAST(f.`салон`, 'Nullable(String)') AS `салон`,
-            f.domain_id,
             f.kol_vo_zayavok,
             f.korr,
             f.kval,
@@ -488,14 +473,7 @@ def _criterion_zayavki_pbi_sql() -> str:
             row_hash,
             created_date,
             campaign_id,
-            campaign_name,
             criterion,
-            CAST(criterion_type, 'Nullable(String)') AS criterion_type,
-            criterion_raw,
-            CAST(`салон`, 'Nullable(String)') AS `салон`,
-            domain_id,
-            CAST(`шаблон`, 'Nullable(String)') AS `шаблон`,
-            CAST(`шаблон_марка`, 'Nullable(String)') AS `шаблон_марка`,
             kol_vo_zayavok,
             korr,
             kval,
@@ -915,27 +893,6 @@ def create_bi_views(client) -> dict[str, int]:
                         toFloat64(Impressions) AS Impressions
                     )
                 FROM ad_analytics.fact_ml_korrektirovki
-            """
-        elif table == "big_analytics_full_arrival":
-            select_sql = """
-                SELECT
-                    * REPLACE(
-                        toFloat64(Impressions) AS Impressions,
-                        toFloat64(Clicks) AS Clicks,
-                        toFloat64(total_cost) AS total_cost,
-                        toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
-                        toFloat64(korr) AS korr,
-                        toFloat64(kval) AS kval,
-                        toFloat64(priezd) AS priezd,
-                        toFloat64(prodazhi) AS prodazhi,
-                        toFloat64(nekorr) AS nekorr,
-                        toFloat64(ne_otvechaet) AS ne_otvechaet,
-                        toFloat64(filtr) AS filtr,
-                        toFloat64(nedozvon) AS nedozvon,
-                        toFloat64(priedet) AS priedet
-                    ),
-                    ag_part1 AS ag_part1_name
-                FROM ad_analytics.big_analytics_full_arrival
             """
         elif table == "yandex_direct_history":
             select_sql = """
