@@ -882,16 +882,42 @@ def create_bi_views(client) -> dict[str, int]:
         elif table == "fact_ml_korrektirovki":
             select_sql = """
                 SELECT
-                    * REPLACE(
-                        toFloat64(total_cost) AS total_cost,
-                        toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
-                        toFloat64(korr) AS korr,
-                        toFloat64(kval) AS kval,
-                        toFloat64(priezd) AS priezd,
-                        toFloat64(prodazhi) AS prodazhi,
-                        toFloat64(Clicks) AS Clicks,
-                        toFloat64(Impressions) AS Impressions
-                    )
+                    CampaignId,
+                    AdGroupId,
+                    RlAdjustmentId,
+                    priezd_arrival_date,
+                    prodazhi_arrival_date,
+                    dohod_do_kredita,
+                    dobro,
+                    toFloat64(total_cost) AS total_cost,
+                    toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
+                    toFloat64(korr) AS korr,
+                    toFloat64(kval) AS kval,
+                    toFloat64(priezd) AS priezd,
+                    toFloat64(prodazhi) AS prodazhi,
+                    toFloat64(Clicks) AS Clicks,
+                    toFloat64(Impressions) AS Impressions,
+                    nekorr,
+                    ne_otvechaet,
+                    nedozvon,
+                    filtr,
+                    priedet,
+                    `План заявки`,
+                    `План приезда`,
+                    Date,
+                    domain,
+                    `атрибуция`,
+                    _source_table,
+                    `источник`,
+                    AdNetworkType,
+                    `аккаунт|сайт`,
+                    `поставщик`,
+                    Device,
+                    fid,
+                    `тип_заявки`,
+                    ml_audience_name,
+                    bid_percent,
+                    ml_tier
                 FROM ad_analytics.fact_ml_korrektirovki
             """
         elif table == "yandex_direct_history":
