@@ -1090,7 +1090,7 @@ def _fact_ml_korrektirovki_pbi_sql() -> str:
             domain,
             `атрибуция`,
             _source_table,
-            `источник`,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))) AS source_key,
             lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))) AS ad_network_type_key,
             `аккаунт|сайт`,
             `поставщик`,

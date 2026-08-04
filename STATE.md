@@ -3,6 +3,11 @@
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- `fact_ml_korrektirovki.источник` вынесен из факта в `Dim_Source`: в `bi_fact_ml_korrektirovki`
+  оставлен `source_key`, визуал переведён на `Dim_Source.источник`, добавлена связь
+  `fact_ml_korrektirovki.source_key -> Dim_Source.source_key`. Проверено: `10121/10121` строк,
+  суммы `total_cost/Clicks/Impressions/kol_vo_zayavok/korr/kval/priezd/prodazhi` сохранены,
+  coverage source_key unmatched `0`, stale PBIP refs на `fact_ml_korrektirovki.источник` = 0.
 - Из активной SemanticModel удалена неиспользуемая `big_analytics_full_arrival` вместе с её `LocalDateTable_8d809...`/`LocalDateTable_65645...`; `bi_big_analytics_full_arrival` удалена из ClickHouse, а `build_pbi_compat.py` больше её не создаёт.
 - `fact_region_zayavki` сужена `25 -> 18` колонок, `fact_criterion_zayavki` `24 -> 17`: оставлены ключи связей (`campaign_id`, даты, `id_location`/`distance_km_agreg`, `criterion`) и метрики; описательные campaign/location/criterion/site поля вынесены в `Dim_*`.
 - `big_analytics_full` в PBI-слое сужена: site-дубли `специалист/салон/город/регион/тип_сайта/шаблон/статус/проджект/менеджер/Название crm/...` переведены в `Dim_Site`, в факте оставлен `домен` как ключ связи. `bi_pbi_big_analytics_full` теперь `5,395,734` строк и `32` импортируемые колонки.
