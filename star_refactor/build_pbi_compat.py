@@ -118,8 +118,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 f.`направление`
             ) AS `направление`,
             f.`тип_заявки`,
-            toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key,
-            f.account_login AS account_login
+            toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key
         FROM ad_analytics.fact_big_analytics f
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
         {where_sql}

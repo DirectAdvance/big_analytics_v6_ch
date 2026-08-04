@@ -677,4 +677,6 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
   лишние `салон`/`CampaignName`/`направление` не грузятся в Power BI; rows/sums сохранены.
 - `big_analytics_full.RlAdjustmentId_total` вынесен из факта на `Dim_Adjustment.RlAdjustmentId_total`;
   единственный визуал перемаплен на dim, `bi_pbi_big_analytics_full` стал 31 колонка, rows/sums сохранены.
+- `big_analytics_full.account_login` убран из факта и визуалы/metadata переведены на
+  `Dim_Campaign.account_login`; `bi_pbi_big_analytics_full` стал 30 колонок, rows/sums сохранены.
 - Не проверено здесь: фактический refresh в Power BI Desktop, потому что Desktop недоступен из этой среды.
