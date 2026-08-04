@@ -3,6 +3,10 @@
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- Исправлена ошибка Power BI Desktop `content definition` на `linguisticMetadata`/context: после удаления
+  `row_hash` в `ru-RU.tmdl` остались повреждённые generated `*_has_row_hash` relationship blocks.
+  `linguisticMetadata` сброшен до минимального валидного JSON (`Entities={}`, `Relationships={}`).
+  Проверено: culture JSON parse OK, report JSON `2713/2713`, relationship endpoints `142/142`, M-sources `56/56`.
 - Технический `row_hash` удалён из PBI-фактов `fact_region_spend`, `fact_adformat_spend`,
   `fact_criterion_spend`, `fact_region_zayavki`, `fact_criterion_zayavki`: поле не использовалось
   в visuals/measures/relationships. Проверено: строки и суммы spend/leads metrics по всем 5 таблицам
