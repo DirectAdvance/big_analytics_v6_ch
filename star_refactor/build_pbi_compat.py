@@ -142,17 +142,14 @@ def _pixel_score_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
             toStartOfMonth(`Date`) AS month,
-            `салон`,
             domain,
             `источник`,
             `CampaignId`,
-            `CampaignName`,
             toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
             toFloat64(korr) AS korr,
             toFloat64(kval) AS kval,
             toFloat64(priezd) AS priezd,
             toFloat64(prodazhi) AS prodazhi,
-            `направление`,
             toFloat64(1) AS cpl_score,
             toFloat64(kol_vo_zayavok) AS `pixel_kol_vo_домена`,
             toFloat64(kol_vo_zayavok) AS `pixel_kol_vo_кампании`,
@@ -828,15 +825,12 @@ def create_bi_views(client) -> dict[str, int]:
         elif table == "fact_vk_ads":
             select_sql = """
                 SELECT
-                    f.date,
-                    f.account_id,
+                    f.date AS date,
+                    f.account_id AS account_id,
                     f.`салон`,
-                    f.ad_plan_id,
-                    dplan.ad_plan_name,
-                    f.ad_group_id,
-                    dgroup.ad_group_name,
-                    f.banner_id,
-                    dbanner.banner_name,
+                    f.ad_plan_id AS ad_plan_id,
+                    f.ad_group_id AS ad_group_id,
+                    f.banner_id AS banner_id,
                     f.`атрибуция`,
                     f.shows,
                     f.clicks,
@@ -851,9 +845,6 @@ def create_bi_views(client) -> dict[str, int]:
                     f.`тип_сайта`,
                     f.`специалист`
                 FROM ad_analytics.fact_vk_ads f
-                LEFT JOIN ad_analytics.Dim_VkAdPlan dplan ON dplan.ad_plan_id = f.ad_plan_id
-                LEFT JOIN ad_analytics.Dim_VkAdGroup dgroup ON dgroup.ad_group_id = f.ad_group_id
-                LEFT JOIN ad_analytics.Dim_VkBanner dbanner ON dbanner.banner_id = f.banner_id
             """
         elif table == "fact_criterion_zayavki":
             select_sql = _criterion_zayavki_pbi_sql()

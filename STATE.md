@@ -1,13 +1,15 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml fact thinning). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
 - Из активной SemanticModel удалена неиспользуемая `big_analytics_full_arrival` вместе с её `LocalDateTable_8d809...`/`LocalDateTable_65645...`; `bi_big_analytics_full_arrival` удалена из ClickHouse, а `build_pbi_compat.py` больше её не создаёт.
 - `fact_region_zayavki` сужена `25 -> 18` колонок, `fact_criterion_zayavki` `24 -> 17`: оставлены ключи связей (`campaign_id`, даты, `id_location`/`distance_km_agreg`, `criterion`) и метрики; описательные campaign/location/criterion/site поля вынесены в `Dim_*`.
 - `big_analytics_full` в PBI-слое сужена: site-дубли `специалист/салон/город/регион/тип_сайта/шаблон/статус/проджект/менеджер/Название crm/...` переведены в `Dim_Site`, в факте оставлен `домен` как ключ связи. `bi_pbi_big_analytics_full` теперь `5,395,734` строк и `32` импортируемые колонки.
 - `fact_ml_korrektirovki` сужена `54 -> 36` импортируемых колонок: campaign/site/adgroup дубли переведены в `Dim_Campaign`/`Dim_Site`/`Dim_AdGroup`; оставлены ключи, ML-поля, метрики и текстовые поля без ключей (`AdNetworkType`, `Device`, `источник`, `поставщик`).
-- Проверено: `build_pbi_compat.py` OK (`210.6s` полный после zayavki/arrival), `create_bi_views()` OK (`36` views, `arrival_exists=0`); active PBIP stale refs = 0; `5,214` JSON parse OK; `8,604` visual refs -> TMDL без missing refs; M-source views `28/28` существуют.
+- `pixel_score` сужена `39 -> 35` TMDL-колонок: `салон/направление/Название кампании/номер кампании | название кампании` переведены в `Dim_Site`/`Dim_Campaign`; добавлены связи `pixel_score.домен -> Dim_Site.domain` и `pixel_score.CampaignId -> Dim_Campaign.CampaignId` (unmatched `0/0`).
+- В активную SemanticModel добавлены `Dim_VkAdPlan`/`Dim_VkAdGroup`/`Dim_VkBanner`; `fact_vk_ads` сужена `22 -> 19`, имена кампании/группы/баннера переведены в VK dimensions, добавлены связи plan/group/banner (unmatched `0/0/0`). Site-поля VK оставлены в fact: `account_id` не 1:1 к салону (`3` account_id имеют несколько наборов атрибутов).
+- Проверено: `build_pbi_compat.py` OK (`210.6s` полный после zayavki/arrival), `create_bi_views()` OK (`36`, затем `31` active M-source views, `arrival_exists=0`); active PBIP stale refs = 0; `5,214` JSON parse OK; `8,604` visual refs -> TMDL без missing refs; M-source views `31/31` существуют.
 
 **2026-08-04 +05: PBIP spend facts thin star remap (Codex):**
 - `fact_region_spend`, `fact_adformat_spend`, `fact_criterion_spend` в PBI-слое сужены: campaign/site/adgroup/criterion атрибуты вынесены в `Dim_Campaign`/`Dim_AdGroup`/`Dim_Site`/`dim_criterion`, в facts оставлены ключи, метрики, даты и технический `domain`.
