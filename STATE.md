@@ -1,4 +1,4 @@
-# big_analytics_v5 — Состояние (handoff)
+# big_analytics_v6_ch — Состояние (handoff)
 
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
@@ -637,3 +637,11 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
   `Dim_Site` дала mismatch 1307/1800 строк по директологу/салону.
 - Проверено: rows 33203/33203, id-sum совпал, unmatched campaign 0/0, stale refs 0,
   JSON 5220/5220, report refs 8604 без missing column/measure, TMDL source vs CH missing `[]`.
+
+**2026-08-04: Power BI star thin — `fact_ml_korrektirovki` network/device вынесены:**
+- В `bi_fact_ml_korrektirovki` заменены `AdNetworkType` и `Device` на ключи
+  `ad_network_type_key`, `device_key`; добавлены связи на `Dim_AdNetworkType` и `Dim_Device`.
+- Визуал, который использовал `fact_ml_korrektirovki.AdNetworkType`, перемаплен на
+  `Dim_AdNetworkType.AdNetworkType`; refs на старые fact-поля отсутствуют.
+- Проверено: rows 10121/10121, суммы `total_cost`/`Clicks`/`Impressions` совпали с учетом Float64,
+  unmatched по новым связям 0/0, JSON 5220/5220, report refs 8604 без missing column/measure.
