@@ -675,4 +675,6 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
   (только Float64-представление в выводе).
 - Дополнительно облегчен `bi_pixel_score`: view теперь отдает 35 нужных PBI-колонок вместо 38,
   лишние `салон`/`CampaignName`/`направление` не грузятся в Power BI; rows/sums сохранены.
+- `big_analytics_full.RlAdjustmentId_total` вынесен из факта на `Dim_Adjustment.RlAdjustmentId_total`;
+  единственный визуал перемаплен на dim, `bi_pbi_big_analytics_full` стал 31 колонка, rows/sums сохранены.
 - Не проверено здесь: фактический refresh в Power BI Desktop, потому что Desktop недоступен из этой среды.

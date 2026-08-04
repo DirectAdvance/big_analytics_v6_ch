@@ -98,7 +98,6 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             toInt64(round(f.filtr)) AS filtr,
             toInt64(round(f.nedozvon)) AS nedozvon,
             f.`RlAdjustmentId` AS `RlAdjustmentId`,
-            da.RlAdjustmentId_total,
             f.fid,
             -- PBI v00 historically treats the Clicks field as the v5 "Clicks" column,
             -- which contains Yandex impressions. Keep this compatibility alias here
@@ -122,7 +121,6 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key,
             f.account_login AS account_login
         FROM ad_analytics.fact_big_analytics f
-        LEFT JOIN ad_analytics.Dim_Adjustment da ON da.RlAdjustmentId = f.`RlAdjustmentId`
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
         {where_sql}
     """
