@@ -3,6 +3,13 @@
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- Проверены Windows-логи Power BI Desktop через Parallels:
+  `C:\Users\semen\AppData\Local\Microsoft\Power BI Desktop\Traces\Performance`.
+  Свежих `Missing_References`/`Dim_Date undefined`/`ShowAsVariationsOnly`/`content definition` нет.
+  Найден и убран свежий `FoldingFailureException` на `check_utm_fuck_direct`: M-запрос больше не делает
+  `Table.AddColumn(... Text.PadStart ...)`, колонка `Месяц` стала calculated column
+  `FORMAT('check_utm_fuck_direct'[date], "YYYY-MM")`. Проверено: `Text.PadStart` refs = 0,
+  report JSON `2716/2716`, checked model refs `4498`, missing refs `0`, relationship endpoints `142/142`.
 - Исправлена ошибка Power BI Desktop `Missing_References (Dim_Date) undefined`: все report JSON ссылки
   на auto-date hierarchy (`PropertyVariationSource`/`Иерархия дат`) заменены на явные поля
   `Dim_Date.year_month`, `Dim_Date.Год`, `Dim_Date.Date`; для legacy-таблиц
