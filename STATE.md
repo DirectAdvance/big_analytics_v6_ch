@@ -3,6 +3,10 @@
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- Технический `row_hash` удалён из PBI-фактов `fact_region_spend`, `fact_adformat_spend`,
+  `fact_criterion_spend`, `fact_region_zayavki`, `fact_criterion_zayavki`: поле не использовалось
+  в visuals/measures/relationships. Проверено: строки и суммы spend/leads metrics по всем 5 таблицам
+  сохранены, `row_hash` stale refs в active PBIP/culture = 0, relationship endpoints OK.
 - `fact_ml_korrektirovki._source_table` и `fact_ml_korrektirovki.поставщик` удалены из PBI-факта:
   оба значения теперь берутся через `Dim_Source` по `source_key`. Проверено: `10121/10121` строк,
   суммы `total_cost/Clicks/Impressions/kol_vo_zayavok/korr/kval/priezd/prodazhi` сохранены,

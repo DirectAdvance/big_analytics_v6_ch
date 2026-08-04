@@ -356,7 +356,6 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
 def _region_spend_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.id_location, 0))) AS row_hash,
             f.date,
             f.campaign_id,
             f.ad_group_id,
@@ -384,7 +383,6 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
 def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.ad_format, ''))) AS row_hash,
             f.date,
             f.campaign_id,
             f.ad_group_id,
@@ -409,7 +407,6 @@ def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
 def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
-            toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.criterion_id, 0), ifNull(dcr.criterion, ''))) AS row_hash,
             f.date,
             f.campaign_id,
             f.ad_group_id,
@@ -442,7 +439,6 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
 def _region_zayavki_pbi_sql() -> str:
     return """
         SELECT
-            f.row_hash,
             f.created_date,
             f.campaign_id,
             f.id_location,
@@ -468,7 +464,6 @@ def _region_zayavki_pbi_sql() -> str:
 def _criterion_zayavki_pbi_sql() -> str:
     return """
         SELECT
-            row_hash,
             created_date,
             campaign_id,
             criterion,
