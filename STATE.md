@@ -628,3 +628,12 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
 - `manager_login` оставлен в факте: PBI-dim для manager-login сейчас не подключен к модели.
 - Проверено: таблица сейчас 0 строк, source/BI rows и суммы совпали, unmatched по новой связи 0/0,
   JSON 5220/5220, report refs 8604 без missing column/measure, TMDL source vs CH missing `[]`.
+
+**2026-08-04: Power BI star thin — `direct_history` облегчена по campaign-полям:**
+- Из `bi_yandex_direct_history` убраны `campaign_name`, `ad_group_id`, `ad_group_name`; добавлена связь
+  `direct_history.campaign_id -> Dim_Campaign.CampaignId`.
+- `bi_Dim_Campaign` расширен campaign keys из `yandex_direct_history`, чтобы связь истории не давала blank.
+- `директолог`, `salon`, `domain` оставлены в факте: `direct_history`-визуал их использует, а сверка с
+  `Dim_Site` дала mismatch 1307/1800 строк по директологу/салону.
+- Проверено: rows 33203/33203, id-sum совпал, unmatched campaign 0/0, stale refs 0,
+  JSON 5220/5220, report refs 8604 без missing column/measure, TMDL source vs CH missing `[]`.

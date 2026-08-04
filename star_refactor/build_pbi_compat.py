@@ -852,6 +852,16 @@ def create_bi_views(client) -> dict[str, int]:
                             `специалист` AS specialist
                         FROM ad_analytics.yandex_direct_minus_snapshot
                         WHERE campaign_id != 0
+                        UNION ALL
+                        SELECT
+                            campaign_id,
+                            campaign_name,
+                            login AS account_login,
+                            CAST(NULL, 'Nullable(String)') AS campaign_status,
+                            CAST(NULL, 'Nullable(String)') AS specialist
+                        FROM ad_analytics.yandex_direct_history
+                        WHERE campaign_id IS NOT NULL
+                          AND campaign_id != 0
                     )
                     GROUP BY CampaignId
                 )
@@ -1054,9 +1064,6 @@ def create_bi_views(client) -> dict[str, int]:
                     event_type,
                     CAST(NULL, 'Nullable(String)') AS category,
                     campaign_id,
-                    campaign_name,
-                    CAST(NULL, 'Nullable(Int64)') AS ad_group_id,
-                    CAST(NULL, 'Nullable(String)') AS ad_group_name,
                     old_value,
                     new_value,
                     CAST(NULL, 'Nullable(String)') AS raw_event,
