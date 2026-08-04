@@ -1133,7 +1133,7 @@ def _pixel_score_pbi_sql() -> str:
         SELECT
             month,
             domain,
-            `источник`,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))) AS source_key,
             CampaignId,
             kol_vo_zayavok,
             korr,

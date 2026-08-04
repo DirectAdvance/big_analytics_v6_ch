@@ -3,6 +3,10 @@
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- `pixel_score.источник` вынесен из PBI-факта в `Dim_Source`: `bi_pixel_score` теперь отдаёт
+  `source_key`, добавлена связь `pixel_score.source_key -> Dim_Source.source_key`, culture stale refs
+  `pixel_score.источник` очищены. Проверено: `459881/459881` строк, суммы `kol_vo_zayavok/korr/kval/
+  priezd/prodazhi/расход` сохранены, source coverage unmatched `0`, active PBIP relationship endpoints OK.
 - `fact_direct_feed_funnel.источник` убран из PBI-факта: `pbi_import_fact_direct_feed_funnel`/
   `bi_fact_direct_feed_funnel` теперь отдают `source_key='контекст'`, slicer переведён на
   `Dim_Source.источник`, добавлена связь `fact_direct_feed_funnel.source_key -> Dim_Source.source_key`.
