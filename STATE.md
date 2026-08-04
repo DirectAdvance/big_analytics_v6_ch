@@ -611,3 +611,12 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
 - Проверено: CH rows/sums совпали, unmatched по новым связям 0/0, stale refs 0, JSON 5220/5220,
   report refs 8604 без missing column/measure, TMDL source vs CH `bi_*` missing `[]`.
 - Не проверено здесь: фактический refresh в Power BI Desktop, потому что Desktop недоступен из этой среды.
+
+**2026-08-04: Power BI star thin — `check_utm_fuck_direct` облегчен:**
+- Из `bi_check_utm_fuck_direct` убраны текстовые дубли `CampaignName`, `group_name`, `специалист`;
+  `домен` оставлен в факте как ключ связи с `Dim_Site`.
+- PBIP admin/user: `специалист` в UTM-визуалах перемаплен на `Dim_Site.специалист`; добавлены связи
+  `CampaignId -> Dim_Campaign`, `group_id -> Dim_AdGroup`, `домен -> Dim_Site`, `date -> Dim_Date`.
+- Проверено: источник и BI-view по `check_utm_fuck_direct` = 0 строк / суммы `NULL` без расхождений,
+  unmatched по новым связям 0/0, stale refs 0, JSON 5220/5220, report refs 8604 без missing
+  column/measure, TMDL source vs CH `bi_*` missing `[]`.

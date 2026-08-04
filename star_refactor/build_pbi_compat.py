@@ -993,13 +993,10 @@ def create_bi_views(client) -> dict[str, int]:
                     id,
                     login,
                     CampaignId,
-                    CampaignName,
                     group_id,
-                    group_name,
                     tracking_params,
                     `домен`,
                     toFloat64(cost) AS cost,
-                    `специалист`,
                     date,
                     utm_source_type
                 FROM ad_analytics.check_utm_fuck_direct
