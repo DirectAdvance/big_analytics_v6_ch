@@ -3,6 +3,12 @@
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- `fact_direct_feed_funnel.источник` убран из PBI-факта: `pbi_import_fact_direct_feed_funnel`/
+  `bi_fact_direct_feed_funnel` теперь отдают `source_key='контекст'`, slicer переведён на
+  `Dim_Source.источник`, добавлена связь `fact_direct_feed_funnel.source_key -> Dim_Source.source_key`.
+  Проверено: `12573546/12573546` строк, суммы `cost/clicks/impressions/all_forms/crm_order_created/
+  crm_order_paid` сохранены, source coverage unmatched `0`, stale PBIP refs на
+  `fact_direct_feed_funnel.источник` = 0.
 - `fact_ml_korrektirovki.источник` вынесен из факта в `Dim_Source`: в `bi_fact_ml_korrektirovki`
   оставлен `source_key`, визуал переведён на `Dim_Source.источник`, добавлена связь
   `fact_ml_korrektirovki.source_key -> Dim_Source.source_key`. Проверено: `10121/10121` строк,

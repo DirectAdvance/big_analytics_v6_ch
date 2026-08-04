@@ -69,6 +69,7 @@ LEGACY_BI_VIEWS = [
 
 
 def _replace_view(client, name: str, select_sql: str) -> None:
+    client.command(f"DROP VIEW IF EXISTS ad_analytics.{q(name)} SYNC")
     client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC")
     client.command(f"CREATE VIEW ad_analytics.{q(name)} AS {select_sql}")
 
@@ -317,7 +318,7 @@ def _feed_funnel_pbi_sql(where_sql: str = "") -> str:
             toFloat64(0) AS goal_crm_order_canceled,
             toFloat64(0) AS goal_crm_spam_order,
             toUInt8(0) AS is_tp67,
-            'direct_feed_funnel' AS `источник`,
+            'контекст' AS source_key,
             now() AS generated_at
         FROM ad_analytics.fact_direct_feed_funnel f
         {where_sql}
