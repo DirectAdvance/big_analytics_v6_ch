@@ -679,4 +679,6 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
   единственный визуал перемаплен на dim, `bi_pbi_big_analytics_full` стал 31 колонка, rows/sums сохранены.
 - `big_analytics_full.account_login` убран из факта и визуалы/metadata переведены на
   `Dim_Campaign.account_login`; `bi_pbi_big_analytics_full` стал 30 колонок, rows/sums сохранены.
+- `fact_region_spend` очищен от гео-текстов `location`/`Область`/`GeoRegionType`; визуал переведен
+  на `Dim_Location.Область`, `bi_fact_region_spend` стал 18 колонок, rows/sums/coverage сохранены.
 - Не проверено здесь: фактический refresh в Power BI Desktop, потому что Desktop недоступен из этой среды.
