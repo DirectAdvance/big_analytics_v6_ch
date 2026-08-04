@@ -366,11 +366,9 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
             toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.id_location, 0))) AS row_hash,
             f.date,
             f.campaign_id,
-            dc.CampaignName AS campaign_name,
             f.ad_group_id,
-            dag.AdGroupName AS ad_group_name,
             f.ad_network_type_key,
-            f.id_location,
+            f.id_location AS id_location,
             dl.location,
             dl.`Область`,
             dl.GeoRegionType,
@@ -384,27 +382,9 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
             toInt64(round(f.crm_spam_order)) AS `CRM: Спам заказ`,
             toInt64(round(f.crm_order_canceled)) AS `CRM: Заказ отменен`,
-            f.account_login AS `логин`,
             ds.domain AS domain,
-            ds.`специалист` AS `директолог`,
-            ds.`салон`,
-            ds.`город`,
-            ds.`регион`,
-            ds.`тип_сайта`,
-            ds.`шаблон`,
-            ds.`статус`,
-            ds.`направление` AS `направление`,
-            ds.`проджект`,
-            ds.project_manager AS project_manager,
-            ds.`id_салона` AS client_id,
-            dc.campaign_code AS campaign_code,
-            dc.tp AS tp,
-            dc.cpc_cpa AS cpc_cpa,
-            dc.site_quiz AS site_quiz,
             now() AS updated_at
         FROM ad_analytics.fact_region_spend f
-        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
-        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
         LEFT JOIN ad_analytics.Dim_Location dl ON dl.id_location = f.id_location
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
@@ -417,9 +397,7 @@ def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
             toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.ad_format, ''))) AS row_hash,
             f.date,
             f.campaign_id,
-            dc.CampaignName AS campaign_name,
             f.ad_group_id,
-            dag.AdGroupName AS ad_group_name,
             f.ad_network_type_key,
             f.ad_format,
             toFloat64(f.cost) AS cost,
@@ -430,29 +408,9 @@ def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(0) AS `CRM: Заказ оплачен`,
             toInt64(0) AS `CRM: Спам заказ`,
             toInt64(0) AS `CRM: Заказ отменен`,
-            f.account_login AS `логин`,
             ds.domain AS domain,
-            ds.`специалист` AS `директолог`,
-            ds.`салон`,
-            ds.`город`,
-            ds.`регион`,
-            ds.`тип_сайта`,
-            ds.`шаблон`,
-            ds.`статус`,
-            ds.`направление` AS `направление`,
-            ds.`проджект`,
-            ds.project_manager AS project_manager,
-            ds.`id_салона` AS client_id,
-            dc.campaign_code AS campaign_code,
-            dc.tp AS tp,
-            dc.cpc_cpa AS cpc_cpa,
-            dc.site_quiz AS site_quiz,
-            dag.adgroup_code AS adgroup_code,
-            dag.`марки авто` AS adgroup_brand,
             now() AS updated_at
         FROM ad_analytics.fact_adformat_spend f
-        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
-        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
     """
@@ -464,14 +422,10 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
             toString(cityHash64(toString(f.date), f.campaign_id, ifNull(f.ad_group_id, 0), f.ad_network_type_key, ifNull(f.criterion_id, 0), ifNull(dcr.criterion, ''))) AS row_hash,
             f.date,
             f.campaign_id,
-            dc.CampaignName AS campaign_name,
             f.ad_group_id,
-            dag.AdGroupName AS ad_group_name,
             f.ad_network_type_key,
             f.criterion_id,
             ifNull(dcr.criterion, '') AS criterion,
-            dcr.criterion_raw,
-            ifNull(dcr.criterion_type, '') AS criterion_type,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -486,31 +440,9 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(0) AS kval,
             toInt64(0) AS priezd,
             toInt64(0) AS prodazhi,
-            f.account_login AS `логин`,
             ds.domain AS domain,
-            ds.domain AS `домен`,
-            ds.`специалист`,
-            ds.`специалист` AS `директолог`,
-            ds.`салон`,
-            ds.`город`,
-            ds.`регион`,
-            ds.`тип_сайта`,
-            ds.`шаблон`,
-            ds.`статус`,
-            ds.`направление`,
-            ds.`проджект`,
-            ds.project_manager AS project_manager,
-            ds.`id_салона` AS client_id,
-            dc.campaign_code AS campaign_code,
-            dc.tp AS tp,
-            dc.cpc_cpa AS cpc_cpa,
-            dc.site_quiz AS site_quiz,
-            dc.`номер кампании | название кампании`,
-            CAST(NULL, 'Nullable(String)') AS `шаблон_марка`,
             now() AS updated_at
         FROM ad_analytics.fact_criterion_spend f
-        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
-        LEFT JOIN ad_analytics.Dim_AdGroup dag ON dag.AdGroupId = f.ad_group_id
         LEFT JOIN ad_analytics.Dim_Criterion dcr ON dcr.criterion_key = f.criterion_key
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
@@ -886,6 +818,7 @@ def create_bi_views(client) -> dict[str, int]:
                     AdGroupName,
                     adgroup_code,
                     `номер группы | название группы`,
+                    `марки авто`,
                     ag_part1,
                     ag_part2,
                     ag_part3,
@@ -907,7 +840,7 @@ def create_bi_views(client) -> dict[str, int]:
                 FROM ad_analytics.Dim_Site
             """
         elif table == "fact_region_spend":
-            select_sql = "SELECT * FROM ad_analytics.pbi_import_region_spend"
+            select_sql = _region_spend_pbi_sql()
         elif table == "fact_adformat_spend":
             select_sql = _adformat_spend_pbi_sql()
         elif table == "fact_criterion_spend":

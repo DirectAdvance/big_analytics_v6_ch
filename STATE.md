@@ -1,6 +1,17 @@
 # big_analytics_v5 — Состояние (handoff)
 
-_Последнее обновление: 2026-08-04 (Codex: v6_ch star-backed wide views + dimension naming cleanup). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-04 (Codex: PBIP spend facts thin star remap). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-08-04 +05: PBIP spend facts thin star remap (Codex):**
+- `fact_region_spend`, `fact_adformat_spend`, `fact_criterion_spend` в PBI-слое сужены: campaign/site/adgroup/criterion атрибуты вынесены в `Dim_Campaign`/`Dim_AdGroup`/`Dim_Site`/`dim_criterion`, в facts оставлены ключи, метрики, даты и технический `domain`.
+- `analytics_report_criterion` удалена из активной SemanticModel; визуалы admin/user и меры `*_crit` перемаплены на `fact_criterion_spend` + `dim_criterion`/`Dim_Campaign`/`Dim_AdGroup`/`Dim_Site`. Удалены связанные orphan `LocalDateTable_2f...`/`LocalDateTable_7c...`, stale culture metadata и layout-node.
+- `star_refactor/build_pbi_compat.py` теперь пересобирает `bi_fact_region_spend` напрямую тонким SQL, а не широким `pbi_import_region_spend`; штатный `build_pbi_compat.py` OK за 171.2s.
+- Проверено: active PBIP `rg` stale refs = 0; 5,211 report JSON parse OK; 8,604 visual refs → TMDL без missing refs; ClickHouse rows/columns: `bi_fact_region_spend=13,248,638/21`, `bi_fact_adformat_spend=2,919,893/16`, `bi_fact_criterion_spend=4,710,663/23`.
+
+**2026-08-04 +05: PBIP refresh/model fix after star thinning (Codex):**
+- Исправлен активный `Большая аналитика_admin_ch` PBIP: удалён orphan `LocalDateTable_2355831a...` от старого `big_analytics_full[week_start]`; визуалы admin/user переведены с отсутствующих `big_analytics_full.tp/campaign_code/CampaignName/AdGroupName/ag_part*/...` на `Dim_Campaign`/`Dim_AdGroup`.
+- `bi_Dim_AdGroup` расширен колонкой `марки авто`; `star_refactor/build_pbi_compat.py` и `pbi_handoff/remap_field_refs.py` обновлены, чтобы rebuild не терял это поле.
+- Проверено: 5,211 report JSON parse OK; 8,722 visual field refs → TMDL без missing table/column/measure; ClickHouse M-sources из TMDL читаются, `PROBLEMS=0`; `bi_Dim_AdGroup=204,380` и 15 колонок.
 
 **2026-08-04 00:21 +05: star-backed wide cleanup + Dim_Criterion naming (Codex):**
 - `local_telega_in_orders` переведена в `View` поверх `raw_data.telega_in_orders` + overrides; shadow отсутствует, raw/local `7104/7104`.
@@ -8,6 +19,20 @@ _Последнее обновление: 2026-08-04 (Codex: v6_ch star-backed w
 - Нейминг справочников выровнен: физическая `Dim_Criterion` (`MergeTree`, `92,145`), legacy `dim_criterion` оставлена как `View`; `bi_Dim_Criterion` и `bi_dim_criterion` обе покрыты verifier.
 - Проверено: `pipeline.py --only-step 146` OK, `data_check/verify_big_analytics.py` PASS; golden Кудерко `25,422,797.96`, sales `55`, `fact_unified_count_mismatch=0`.
 - Связанные коммиты на момент handoff: `23de255`, `9896151`, `3dd45fa`; naming cleanup оформляется отдельным commit.
+
+**2026-08-01 13:12 +05: PBI feed/placement star thinning (Codex):**
+- Исходные PBIP `Большая аналитика_admin_ch`/`user_ch` оказались частично root-owned; без sudo-пароля не редактировались.
+  Созданы рабочие копии `Большая аналитика_admin_ch_star_20260801` и `Большая аналитика_user_ch_star_20260801`.
+- В копиях удалены из модели старые feed/placement дубли `analytics_report_feed` и `analytics_report_placement`
+  плюс их `LocalDateTable_*`; visual/page/filter refs в admin и user report переведены на
+  `fact_direct_feed_funnel` + `Dim_PlacementFeed`/`Dim_Campaign`/`Dim_AdGroup`/`Dim_Site`.
+- `star_refactor/build_pbi_compat.py` сузил `pbi_import_fact_direct_feed_funnel`/`bi_fact_direct_feed_funnel`:
+  было 59 колонок и ~604.95 MiB, стало 29 колонок, 3 string-колонки, 196.12 MiB при тех же 12,461,039 строках.
+  `bi_Dim_Campaign` расширен до 14 колонок, `bi_Dim_Site` до 15 колонок.
+- Проверено: `pipeline.py --only-step=146` OK за 172.60s; `data_check/verify_big_analytics.py` PASS;
+  старых `analytics_report_feed|analytics_report_placement` ссылок в новых PBIP-копиях нет; model refs/table files 56/56.
+- Не проверено визуально в Power BI Desktop: нужно открывать новую копию
+  `Большая аналитика_admin_ch_star_20260801/Большая аналитика_v00.pbip` и обновлять ее.
 
 **2026-07-31 17:59 +05: CH-only sources + batch safety audit (Codex):**
 - `step0_sync_local/step0.py` больше не копирует PostgreSQL/v5 facts/local tables. Step0 стал read-only preflight по ClickHouse sources:

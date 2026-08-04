@@ -27,16 +27,17 @@ from collections import Counter
 SITE = "Dim_Site"; CAMP = "Dim_Campaign"; AG = "Dim_AdGroup"; DATE = "Dim_Date"
 FIELD_MAP: dict[str, tuple[str, str | None]] = {}
 for f in ["салон","город","регион","тип_сайта","id_салона","направление","шаблон",
-          "site_quiz","проджект","менеджер","специалист","Название crm","марки авто"]:
+          "проджект","менеджер","специалист","Название crm"]:
     FIELD_MAP[f] = (SITE, None)
-FIELD_MAP["статус"] = (SITE, "статус_сайта")      # переименование в dim
+FIELD_MAP["статус"] = (SITE, None)
 FIELD_MAP["статус_сайта"] = (SITE, None)
 for f in ["CampaignName","номер кампании | название кампании","campaign_status",
-          "payment_model","account_login","статус_кампании"]:
+          "payment_model","account_login","статус_кампании","campaign_code",
+          "tp","cpc_cpa","site_quiz"]:
     FIELD_MAP[f] = (CAMP, None)
 for f in ["AdGroupName","adgroup_code","номер группы | название группы","ag_part1",
           "ag_part2","ag_part3","ag_part4","ag_part5","ag_part6","ag_part7",
-          "ag_part1_name","неверный_кодер_new"]:
+          "ag_part1_name","неверный_кодер_new","марки авто"]:
     FIELD_MAP[f] = (AG, None)
 for f in ["День недели","week_start"]:
     FIELD_MAP[f] = (DATE, None)
