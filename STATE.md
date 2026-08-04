@@ -595,3 +595,19 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
 **Что открыто (для director):**
 - Block 8 ре-baseline: порог [3000;3700] → надо сдвинуть вверх (факт 3706, направление роста)
 - DROP fact_criterion_spend_marka_kupit — отложен Семёном (KNOWN_ISSUES #22)
+
+---
+
+**2026-08-04: Power BI star thin — Direct-service tables (korrektirovki/minus) доведены:**
+- `bi_yandex_direct_korrektirovki` облегчен: из факта убраны `campaign_name`, `специалист`,
+  `campaign_status`; `status` оставлен в факте как не-conformed поле без безопасного dim-ключа.
+- `bi_yandex_direct_minus_snapshot` и `bi_v_yandex_direct_minus_delta` облегчены: `campaign_name` и
+  `специалист` перенесены на `Dim_Campaign`.
+- `bi_Dim_Campaign` расширен service campaign keys из корректировок/минусов, `bi_Dim_AdGroup`
+  расширен service adgroup keys из корректировок; ключи уникальны.
+- PBIP admin/user: визуалы перемаплены на `Dim_Campaign`, TMDL-колонки удалены, добавлены связи
+  `yandex_direct_korrektirovki.campaign_id -> Dim_Campaign.CampaignId` и
+  `yandex_direct_korrektirovki.ad_group_id -> Dim_AdGroup.AdGroupId`.
+- Проверено: CH rows/sums совпали, unmatched по новым связям 0/0, stale refs 0, JSON 5220/5220,
+  report refs 8604 без missing column/measure, TMDL source vs CH `bi_*` missing `[]`.
+- Не проверено здесь: фактический refresh в Power BI Desktop, потому что Desktop недоступен из этой среды.

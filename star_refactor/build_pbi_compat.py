@@ -724,6 +724,63 @@ def create_light_aliases(client) -> dict[str, int]:
     return out
 
 
+DIRECT_SERVICE_BI_SELECTS = {
+    "yandex_direct_korrektirovki": """
+        SELECT
+            id,
+            ulogin,
+            campaign_id,
+            ad_group_id,
+            level,
+            modifier_id,
+            enabled,
+            modifier_type,
+            modifier_name,
+            bid_percent,
+            korrektirovki_bid,
+            audience_id,
+            loaded_at,
+            status
+        FROM ad_analytics.yandex_direct_korrektirovki
+    """,
+    "yandex_direct_minus_snapshot": """
+        SELECT
+            toInt64(id % 9223372036854775807) AS id,
+            date,
+            login,
+            campaign_id,
+            campaign_state,
+            block,
+            minus_in_campaign,
+            minus_in_groups,
+            minus_in_sets,
+            minus_total,
+            has_minus,
+            check_ok,
+            loaded_at
+        FROM ad_analytics.yandex_direct_minus_snapshot
+    """,
+    "v_yandex_direct_minus_delta": """
+        SELECT
+            date,
+            login,
+            campaign_id,
+            minus_total,
+            minus_total_prev,
+            delta,
+            dynamics,
+            campaign_state,
+            block,
+            minus_in_campaign,
+            minus_in_groups,
+            minus_in_sets,
+            has_minus,
+            check_ok
+        FROM ad_analytics.v_yandex_direct_minus_delta
+    """,
+}
+
+
 def create_bi_views(client) -> dict[str, int]:
     out: dict[str, int] = {}
     for table in PBI_SOURCE_OBJECTS:
@@ -769,22 +826,71 @@ def create_bi_views(client) -> dict[str, int]:
             """
         elif table == "Dim_Campaign":
             select_sql = """
+                WITH service_campaigns AS (
+                    SELECT
+                        assumeNotNull(campaign_id) AS CampaignId,
+                        anyLastIf(campaign_name, campaign_name IS NOT NULL AND campaign_name != '') AS CampaignName,
+                        anyLastIf(account_login, account_login IS NOT NULL AND account_login != '') AS account_login,
+                        anyLastIf(campaign_status, campaign_status IS NOT NULL AND campaign_status != '') AS campaign_status,
+                        anyLastIf(specialist, specialist IS NOT NULL AND specialist != '') AS specialist
+                    FROM (
+                        SELECT
+                            campaign_id,
+                            campaign_name,
+                            ulogin AS account_login,
+                            campaign_status,
+                            `специалист` AS specialist
+                        FROM ad_analytics.yandex_direct_korrektirovki
+                        WHERE campaign_id IS NOT NULL
+                          AND campaign_id != 0
+                        UNION ALL
+                        SELECT
+                            campaign_id,
+                            campaign_name,
+                            login AS account_login,
+                            CAST(NULL, 'Nullable(String)') AS campaign_status,
+                            `специалист` AS specialist
+                        FROM ad_analytics.yandex_direct_minus_snapshot
+                        WHERE campaign_id != 0
+                    )
+                    GROUP BY CampaignId
+                )
                 SELECT
-                    CampaignId,
-                    CampaignName,
-                    account_login,
-                    campaign_code,
-                    tp,
-                    cpc_cpa,
-                    site_quiz,
-                    campaign_status AS `статус_кампании`,
-                    CAST(NULL, 'Nullable(String)') AS `специалист`,
+                    dc.CampaignId,
+                    dc.CampaignName,
+                    dc.account_login,
+                    dc.campaign_code,
+                    dc.tp,
+                    dc.cpc_cpa,
+                    dc.site_quiz,
+                    dc.campaign_status AS `статус_кампании`,
+                    ss.specialist AS `специалист`,
                     CAST(NULL, 'Nullable(String)') AS manager_login,
-                    campaign_status,
-                    payment_model,
-                    payment_model AS `тип_оплаты`,
-                    `номер кампании | название кампании`
-                FROM ad_analytics.Dim_Campaign
+                    dc.campaign_status,
+                    dc.payment_model,
+                    dc.payment_model AS `тип_оплаты`,
+                    dc.`номер кампании | название кампании`
+                FROM ad_analytics.Dim_Campaign dc
+                LEFT JOIN service_campaigns ss ON ss.CampaignId = dc.CampaignId
+                UNION ALL
+                SELECT
+                    ss.CampaignId,
+                    ss.CampaignName,
+                    ifNull(ss.account_login, '') AS account_login,
+                    CAST(NULL, 'Nullable(String)') AS campaign_code,
+                    '' AS tp,
+                    '' AS cpc_cpa,
+                    '' AS site_quiz,
+                    ss.campaign_status AS `статус_кампании`,
+                    ss.specialist AS `специалист`,
+                    CAST(NULL, 'Nullable(String)') AS manager_login,
+                    ss.campaign_status,
+                    CAST(NULL, 'Nullable(String)') AS payment_model,
+                    CAST(NULL, 'Nullable(String)') AS `тип_оплаты`,
+                    concat(toString(ss.CampaignId), ' | ', ifNull(ss.CampaignName, '')) AS `номер кампании | название кампании`
+                FROM service_campaigns ss
+                LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = ss.CampaignId
+                WHERE dc.CampaignId = 0
             """
         elif table == "Dim_AdGroup":
             select_sql = """
@@ -805,6 +911,34 @@ def create_bi_views(client) -> dict[str, int]:
                     `неверный_кодер_new`,
                     parent_CampaignId
                 FROM ad_analytics.Dim_AdGroup
+                UNION ALL
+                SELECT
+                    sg.AdGroupId,
+                    CAST(NULL, 'Nullable(String)') AS AdGroupName,
+                    CAST(NULL, 'Nullable(String)') AS adgroup_code,
+                    '' AS `номер группы | название группы`,
+                    '' AS `марки авто`,
+                    '' AS ag_part1,
+                    '' AS ag_part2,
+                    '' AS ag_part3,
+                    '' AS ag_part4,
+                    '' AS ag_part5,
+                    '' AS ag_part6,
+                    '' AS ag_part7,
+                    '' AS ag_part1_name,
+                    CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
+                    sg.parent_CampaignId
+                FROM (
+                    SELECT
+                        assumeNotNull(ad_group_id) AS AdGroupId,
+                        anyLast(ifNull(campaign_id, 0)) AS parent_CampaignId
+                    FROM ad_analytics.yandex_direct_korrektirovki
+                    WHERE ad_group_id IS NOT NULL
+                      AND ad_group_id != 0
+                    GROUP BY AdGroupId
+                ) sg
+                LEFT JOIN ad_analytics.Dim_AdGroup da ON da.AdGroupId = sg.AdGroupId
+                WHERE da.AdGroupId = 0
             """
         elif table == "Dim_Site":
             select_sql = """
@@ -935,12 +1069,8 @@ def create_bi_views(client) -> dict[str, int]:
                     updated_at AS loaded_at
                 FROM ad_analytics.yandex_direct_history
             """
-        elif table == "yandex_direct_minus_snapshot":
-            select_sql = """
-                SELECT
-                    * REPLACE(toInt64(id % 9223372036854775807) AS id)
-                FROM ad_analytics.yandex_direct_minus_snapshot
-            """
+        elif table in DIRECT_SERVICE_BI_SELECTS:
+            select_sql = DIRECT_SERVICE_BI_SELECTS[table]
         elif table == "yandex_direct_cookie_analytics_website_pages":
             select_sql = """
                 SELECT
