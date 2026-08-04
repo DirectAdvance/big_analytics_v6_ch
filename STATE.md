@@ -620,3 +620,11 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
 - Проверено: источник и BI-view по `check_utm_fuck_direct` = 0 строк / суммы `NULL` без расхождений,
   unmatched по новым связям 0/0, stale refs 0, JSON 5220/5220, report refs 8604 без missing
   column/measure, TMDL source vs CH `bi_*` missing `[]`.
+
+**2026-08-04: Power BI star thin — `yandex_direct_return_commission_report` ad network вынесен:**
+- В `bi_yandex_direct_return_commission_report` заменен текстовый `ad_network_type` на
+  `ad_network_type_key`; PBIP TMDL обновлен, добавлена связь
+  `yandex_direct_return_commission_report.ad_network_type_key -> Dim_AdNetworkType.ad_network_type_key`.
+- `manager_login` оставлен в факте: PBI-dim для manager-login сейчас не подключен к модели.
+- Проверено: таблица сейчас 0 строк, source/BI rows и суммы совпали, unmatched по новой связи 0/0,
+  JSON 5220/5220, report refs 8604 без missing column/measure, TMDL source vs CH missing `[]`.

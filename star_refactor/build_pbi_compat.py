@@ -1096,6 +1096,24 @@ def create_bi_views(client) -> dict[str, int]:
                     toFloat64(agoalcost) AS agoalcost
                 FROM ad_analytics.yandex_direct_cookie_analytics_website_pages
             """
+        elif table == "yandex_direct_return_commission_report":
+            select_sql = """
+                SELECT
+                    id,
+                    client_login,
+                    date,
+                    lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
+                    slot,
+                    campaign_type,
+                    ad_type,
+                    toFloat64(cost) AS cost,
+                    toFloat64(cost_with_vat) AS cost_with_vat,
+                    manager_login,
+                    user_login,
+                    toFloat64(rate) AS rate,
+                    toFloat64(commission) AS commission
+                FROM ad_analytics.yandex_direct_return_commission_report
+            """
         else:
             select_sql = f"SELECT * FROM ad_analytics.{q(table)}"
         _replace_view(client, view_name, select_sql)
