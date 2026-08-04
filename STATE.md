@@ -656,3 +656,21 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
 - Проверено: `bi_pbi_big_analytics_full` rows 5395734/5395734, суммы `total_cost`/`Обращения`
   совпали с учетом Float64, `Dim_ManagerLogin` 37/37 уникальных ключей, unmatched по новым связям 0/0,
   JSON 5220/5220, report refs 8604 без missing column/measure.
+
+**2026-08-04: Power BI star thin — local date и fact-to-fact связи убраны:**
+- Из PBIP admin_ch удалены 21 `LocalDateTable_*` + `DateTableTemplate_*`, выключен
+  `__PBI_TimeIntelligenceEnabled`; 10 битых local-date refs в `visual.expansionStates` удалены.
+- Добавлена `Dim_Adjustment` в генератор `bi_*` и PBIP; прямые двунаправленные связи
+  `yandex_direct_korrektirovki.audience_id -> big_analytics_full.RlAdjustmentId` и
+  `direct_history.domain -> big_analytics_full.домен` заменены на звезду:
+  `big_analytics_full/fact_ml/yandex_direct_korrektirovki -> Dim_Adjustment`,
+  `direct_history.domain -> Dim_Site.domain`.
+- Починен `build_pixel_score`: поля `салон`, `CampaignName`, `направление` теперь берутся из
+  `Dim_Site`/`Dim_Campaign`, чтобы rebuild не падал и структура `pixel_score` не худела.
+- Прогон `star_refactor/build_pbi_compat.py`: PASS за 228.4 сек; `bi_Dim_Adjustment=2433`,
+  `bi_pbi_big_analytics_full=5395734`, `bi_pixel_score=459881`, все `bi_*` пересозданы.
+- Проверено: JSON 5220/5220, TMDL refs 36/36, relationship endpoints 67/67, report refs 4394 без
+  missing, `LocalDateTable_`/old fact-to-fact ids refs 0, unmatched по новым связям 0/0.
+- `pixel_score` source vs rebuilt: rows 459881/459881, суммы заявок/воронки/расхода совпали
+  (только Float64-представление в выводе).
+- Не проверено здесь: фактический refresh в Power BI Desktop, потому что Desktop недоступен из этой среды.

@@ -25,6 +25,7 @@ def _site_key_expr(alias: str = "f") -> str:
 PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
     "Dim_AdNetworkType",
+    "Dim_Adjustment",
     "Dim_Campaign",
     "Dim_Criterion",
     "Dim_Date",
@@ -141,14 +142,17 @@ def _pixel_score_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
             toStartOfMonth(`Date`) AS month,
-            domain,
-            `источник`,
-            `CampaignId`,
+            ps.domain AS domain,
+            ds.`салон` AS `салон`,
+            ps.`источник`,
+            ps.`CampaignId` AS CampaignId,
+            dc.CampaignName AS CampaignName,
             toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
             toFloat64(korr) AS korr,
             toFloat64(kval) AS kval,
             toFloat64(priezd) AS priezd,
             toFloat64(prodazhi) AS prodazhi,
+            ds.`направление` AS `направление`,
             toFloat64(1) AS cpl_score,
             toFloat64(kol_vo_zayavok) AS `pixel_kol_vo_домена`,
             toFloat64(kol_vo_zayavok) AS `pixel_kol_vo_кампании`,
@@ -175,7 +179,9 @@ def _pixel_score_sql(where_sql: str = "") -> str:
             toFloat64(priezd) AS `attr_pixel_приезд_кампании`,
             toFloat64(prodazhi) AS `pixel_продажи_домена`,
             toFloat64(prodazhi) AS `attr_pixel_продажи_кампании`
-        FROM ad_analytics.big_analytics_pixel_score
+        FROM ad_analytics.big_analytics_pixel_score ps
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("ps")}
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = ps.CampaignId
         {where_sql}
     """
 
@@ -780,369 +786,427 @@ DIRECT_SERVICE_BI_SELECTS = {
 }
 
 
+def _dim_date_pbi_sql() -> str:
+    return """
+        SELECT
+            `Date`,
+            `День недели`,
+            week_start,
+            toInt64(year) AS year,
+            toInt64(month) AS month,
+            toInt64(month_key) AS month_key,
+            year_month,
+            toInt64(day) AS day
+        FROM ad_analytics.Dim_Date
+    """
+
+
+def _dim_ad_network_type_pbi_sql() -> str:
+    return """
+        SELECT
+            ad_network_type_key,
+            ad_network_type,
+            AdNetworkType
+        FROM ad_analytics.Dim_AdNetworkType
+    """
+
+
+def _dim_adjustment_pbi_sql() -> str:
+    return """
+        SELECT
+            RlAdjustmentId,
+            RlAdjustmentId_total
+        FROM ad_analytics.Dim_Adjustment
+    """
+
+
+def _dim_device_pbi_sql() -> str:
+    return """
+        SELECT
+            device_key,
+            Device
+        FROM ad_analytics.Dim_Device
+    """
+
+
+def _dim_manager_login_pbi_sql() -> str:
+    return """
+        SELECT
+            manager_login_key,
+            anyLast(manager_login) AS manager_login
+        FROM (
+            SELECT
+                toInt64(manager_login_key % 9223372036854775807) AS manager_login_key,
+                manager_login
+            FROM ad_analytics.Dim_ManagerLogin
+            UNION ALL
+            SELECT
+                toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
+                ifNull(manager_login, '') AS manager_login
+            FROM ad_analytics.yandex_direct_return_commission_report
+            WHERE manager_login IS NOT NULL
+              AND manager_login != ''
+        )
+        GROUP BY manager_login_key
+    """
+
+
+def _dim_source_pbi_sql() -> str:
+    return """
+        SELECT
+            source_key,
+            `источник`,
+            `поставщик`,
+            _source_table
+        FROM ad_analytics.Dim_Source
+    """
+
+
+def _dim_campaign_pbi_sql() -> str:
+    return """
+        WITH service_campaigns AS (
+            SELECT
+                assumeNotNull(campaign_id) AS CampaignId,
+                anyLastIf(campaign_name, campaign_name IS NOT NULL AND campaign_name != '') AS CampaignName,
+                anyLastIf(account_login, account_login IS NOT NULL AND account_login != '') AS account_login,
+                anyLastIf(campaign_status, campaign_status IS NOT NULL AND campaign_status != '') AS campaign_status,
+                anyLastIf(specialist, specialist IS NOT NULL AND specialist != '') AS specialist
+            FROM (
+                SELECT
+                    campaign_id,
+                    campaign_name,
+                    ulogin AS account_login,
+                    campaign_status,
+                    `специалист` AS specialist
+                FROM ad_analytics.yandex_direct_korrektirovki
+                WHERE campaign_id IS NOT NULL
+                  AND campaign_id != 0
+                UNION ALL
+                SELECT
+                    campaign_id,
+                    campaign_name,
+                    login AS account_login,
+                    CAST(NULL, 'Nullable(String)') AS campaign_status,
+                    `специалист` AS specialist
+                FROM ad_analytics.yandex_direct_minus_snapshot
+                WHERE campaign_id != 0
+                UNION ALL
+                SELECT
+                    campaign_id,
+                    campaign_name,
+                    login AS account_login,
+                    CAST(NULL, 'Nullable(String)') AS campaign_status,
+                    CAST(NULL, 'Nullable(String)') AS specialist
+                FROM ad_analytics.yandex_direct_history
+                WHERE campaign_id IS NOT NULL
+                  AND campaign_id != 0
+            )
+            GROUP BY CampaignId
+        )
+        SELECT
+            dc.CampaignId,
+            dc.CampaignName,
+            dc.account_login,
+            dc.campaign_code,
+            dc.tp,
+            dc.cpc_cpa,
+            dc.site_quiz,
+            dc.campaign_status AS `статус_кампании`,
+            ss.specialist AS `специалист`,
+            CAST(NULL, 'Nullable(String)') AS manager_login,
+            dc.campaign_status,
+            dc.payment_model,
+            dc.payment_model AS `тип_оплаты`,
+            dc.`номер кампании | название кампании`
+        FROM ad_analytics.Dim_Campaign dc
+        LEFT JOIN service_campaigns ss ON ss.CampaignId = dc.CampaignId
+        UNION ALL
+        SELECT
+            ss.CampaignId,
+            ss.CampaignName,
+            ifNull(ss.account_login, '') AS account_login,
+            CAST(NULL, 'Nullable(String)') AS campaign_code,
+            '' AS tp,
+            '' AS cpc_cpa,
+            '' AS site_quiz,
+            ss.campaign_status AS `статус_кампании`,
+            ss.specialist AS `специалист`,
+            CAST(NULL, 'Nullable(String)') AS manager_login,
+            ss.campaign_status,
+            CAST(NULL, 'Nullable(String)') AS payment_model,
+            CAST(NULL, 'Nullable(String)') AS `тип_оплаты`,
+            concat(toString(ss.CampaignId), ' | ', ifNull(ss.CampaignName, '')) AS `номер кампании | название кампании`
+        FROM service_campaigns ss
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = ss.CampaignId
+        WHERE dc.CampaignId = 0
+    """
+
+
+def _dim_adgroup_pbi_sql() -> str:
+    return """
+        SELECT
+            AdGroupId,
+            AdGroupName,
+            adgroup_code,
+            `номер группы | название группы`,
+            `марки авто`,
+            ag_part1,
+            ag_part2,
+            ag_part3,
+            ag_part4,
+            ag_part5,
+            ag_part6,
+            ag_part7,
+            ag_part1 AS ag_part1_name,
+            `неверный_кодер_new`,
+            parent_CampaignId
+        FROM ad_analytics.Dim_AdGroup
+        UNION ALL
+        SELECT
+            sg.AdGroupId,
+            CAST(NULL, 'Nullable(String)') AS AdGroupName,
+            CAST(NULL, 'Nullable(String)') AS adgroup_code,
+            '' AS `номер группы | название группы`,
+            '' AS `марки авто`,
+            '' AS ag_part1,
+            '' AS ag_part2,
+            '' AS ag_part3,
+            '' AS ag_part4,
+            '' AS ag_part5,
+            '' AS ag_part6,
+            '' AS ag_part7,
+            '' AS ag_part1_name,
+            CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
+            sg.parent_CampaignId
+        FROM (
+            SELECT
+                assumeNotNull(ad_group_id) AS AdGroupId,
+                anyLast(ifNull(campaign_id, 0)) AS parent_CampaignId
+            FROM ad_analytics.yandex_direct_korrektirovki
+            WHERE ad_group_id IS NOT NULL
+              AND ad_group_id != 0
+            GROUP BY AdGroupId
+        ) sg
+        LEFT JOIN ad_analytics.Dim_AdGroup da ON da.AdGroupId = sg.AdGroupId
+        WHERE da.AdGroupId = 0
+    """
+
+
+def _dim_site_pbi_sql() -> str:
+    return """
+        SELECT
+            domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`, `направление`,
+            `статус`, status, `специалист`, `проджект`, project_manager, `id_салона`,
+            `менеджер`, `Название crm`
+        FROM ad_analytics.Dim_Site
+    """
+
+
+def _vk_ads_pbi_sql() -> str:
+    return """
+        SELECT
+            f.date AS date,
+            f.account_id AS account_id,
+            f.`салон`,
+            f.ad_plan_id AS ad_plan_id,
+            f.ad_group_id AS ad_group_id,
+            f.banner_id AS banner_id,
+            f.`атрибуция`,
+            f.shows,
+            f.clicks,
+            f.spent,
+            f.`заявки`,
+            f.`заявки_корр`,
+            f.`записи`,
+            f.`квал`,
+            f.`визиты`,
+            f.`продажи`,
+            f.`регион`,
+            f.`тип_сайта`,
+            f.`специалист`
+        FROM ad_analytics.fact_vk_ads f
+    """
+
+
+def _dim_criterion_pbi_sql() -> str:
+    return """
+        SELECT criterion, criterion_type, criterion_raw
+        FROM ad_analytics.Dim_Criterion
+    """
+
+
+def _check_utm_direct_pbi_sql() -> str:
+    return """
+        SELECT
+            id,
+            login,
+            CampaignId,
+            group_id,
+            tracking_params,
+            `домен`,
+            toFloat64(cost) AS cost,
+            date,
+            utm_source_type
+        FROM ad_analytics.check_utm_fuck_direct
+    """
+
+
+def _fact_ml_korrektirovki_pbi_sql() -> str:
+    return """
+        SELECT
+            CampaignId,
+            AdGroupId,
+            RlAdjustmentId,
+            priezd_arrival_date,
+            prodazhi_arrival_date,
+            dohod_do_kredita,
+            dobro,
+            toFloat64(total_cost) AS total_cost,
+            toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
+            toFloat64(korr) AS korr,
+            toFloat64(kval) AS kval,
+            toFloat64(priezd) AS priezd,
+            toFloat64(prodazhi) AS prodazhi,
+            toFloat64(Clicks) AS Clicks,
+            toFloat64(Impressions) AS Impressions,
+            nekorr,
+            ne_otvechaet,
+            nedozvon,
+            filtr,
+            priedet,
+            `План заявки`,
+            `План приезда`,
+            Date,
+            domain,
+            `атрибуция`,
+            _source_table,
+            `источник`,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))) AS ad_network_type_key,
+            `аккаунт|сайт`,
+            `поставщик`,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(Device, ''))) AS device_key,
+            fid,
+            `тип_заявки`,
+            ml_audience_name,
+            bid_percent,
+            ml_tier
+        FROM ad_analytics.fact_ml_korrektirovki
+    """
+
+
+def _direct_history_pbi_sql() -> str:
+    return """
+        SELECT
+            toInt64(cityHash64(toString(ifNull(datetime, toDateTime(0))), ifNull(login, ''), ifNull(toString(campaign_id), ''), ifNull(new_value, '')) % 9223372036854775807) AS id,
+            login AS ulogin,
+            datetime,
+            CAST(NULL, 'Nullable(String)') AS user_login,
+            CAST(NULL, 'Nullable(Int64)') AS user_uid,
+            change_source,
+            event_type,
+            CAST(NULL, 'Nullable(String)') AS category,
+            campaign_id,
+            old_value,
+            new_value,
+            CAST(NULL, 'Nullable(String)') AS raw_event,
+            `директолог`,
+            domain,
+            salon,
+            updated_at AS loaded_at
+        FROM ad_analytics.yandex_direct_history
+    """
+
+
+def _cookie_pages_pbi_sql() -> str:
+    return """
+        SELECT
+            id,
+            login_key,
+            domain,
+            toInt64(ifNull(round(clicks), 0)) AS clicks,
+            toInt64(ifNull(round(goal_all_forms), 0)) AS goal_all_forms,
+            toInt64(ifNull(round(goal_crm_order_created), 0)) AS goal_crm_order_created,
+            toInt64(ifNull(round(goal_crm_order_paid), 0)) AS goal_crm_order_paid,
+            final_url,
+            directologist,
+            template,
+            salon,
+            city,
+            region,
+            site_type,
+            loaded_at,
+            page_type,
+            banner_href,
+            date_from,
+            date_to,
+            toFloat64(sum) AS sum,
+            toInt64OrZero(ifNull(agoalnum, '')) AS agoalnum,
+            toFloat64(aconv) AS aconv,
+            toFloat64(agoalcost) AS agoalcost
+        FROM ad_analytics.yandex_direct_cookie_analytics_website_pages
+    """
+
+
+def _return_commission_pbi_sql() -> str:
+    return """
+        SELECT
+            id,
+            client_login,
+            date,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
+            slot,
+            campaign_type,
+            ad_type,
+            toFloat64(cost) AS cost,
+            toFloat64(cost_with_vat) AS cost_with_vat,
+            toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
+            user_login,
+            toFloat64(rate) AS rate,
+            toFloat64(commission) AS commission
+        FROM ad_analytics.yandex_direct_return_commission_report
+    """
+
+
+PBI_VIEW_SQL_BUILDERS = {
+    "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
+    "Dim_Date": _dim_date_pbi_sql,
+    "Dim_AdNetworkType": _dim_ad_network_type_pbi_sql,
+    "Dim_Adjustment": _dim_adjustment_pbi_sql,
+    "Dim_Device": _dim_device_pbi_sql,
+    "Dim_ManagerLogin": _dim_manager_login_pbi_sql,
+    "Dim_Source": _dim_source_pbi_sql,
+    "Dim_Campaign": _dim_campaign_pbi_sql,
+    "Dim_AdGroup": _dim_adgroup_pbi_sql,
+    "Dim_Site": _dim_site_pbi_sql,
+    "fact_region_spend": _region_spend_pbi_sql,
+    "fact_adformat_spend": _adformat_spend_pbi_sql,
+    "fact_criterion_spend": _criterion_spend_pbi_sql,
+    "fact_region_zayavki": _region_zayavki_pbi_sql,
+    "fact_vk_ads": _vk_ads_pbi_sql,
+    "fact_criterion_zayavki": _criterion_zayavki_pbi_sql,
+    "Dim_Criterion": _dim_criterion_pbi_sql,
+    "dim_criterion": _dim_criterion_pbi_sql,
+    "check_utm_fuck_direct": _check_utm_direct_pbi_sql,
+    "fact_ml_korrektirovki": _fact_ml_korrektirovki_pbi_sql,
+    "yandex_direct_history": _direct_history_pbi_sql,
+    "yandex_direct_cookie_analytics_website_pages": _cookie_pages_pbi_sql,
+    "yandex_direct_return_commission_report": _return_commission_pbi_sql,
+}
+
+
+def _pbi_view_select_sql(table: str) -> str:
+    if table in DIRECT_SERVICE_BI_SELECTS:
+        return DIRECT_SERVICE_BI_SELECTS[table]
+    if builder := PBI_VIEW_SQL_BUILDERS.get(table):
+        return builder()
+    return f"SELECT * FROM ad_analytics.{q(table)}"
+
+
 def create_bi_views(client) -> dict[str, int]:
     out: dict[str, int] = {}
     for table in PBI_SOURCE_OBJECTS:
         view_name = f"bi_{table}"
-        if table == "fact_direct_feed_funnel":
-            select_sql = "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel"
-        elif table == "Dim_Date":
-            select_sql = """
-                SELECT
-                    `Date`,
-                    `День недели`,
-                    week_start,
-                    toInt64(year) AS year,
-                    toInt64(month) AS month,
-                    toInt64(month_key) AS month_key,
-                    year_month,
-                    toInt64(day) AS day
-                FROM ad_analytics.Dim_Date
-            """
-        elif table == "Dim_AdNetworkType":
-            select_sql = """
-                SELECT
-                    ad_network_type_key,
-                    ad_network_type,
-                    AdNetworkType
-                FROM ad_analytics.Dim_AdNetworkType
-            """
-        elif table == "Dim_Device":
-            select_sql = """
-                SELECT
-                    device_key,
-                    Device
-                FROM ad_analytics.Dim_Device
-            """
-        elif table == "Dim_ManagerLogin":
-            select_sql = """
-                SELECT
-                    manager_login_key,
-                    anyLast(manager_login) AS manager_login
-                FROM (
-                    SELECT
-                        toInt64(manager_login_key % 9223372036854775807) AS manager_login_key,
-                        manager_login
-                    FROM ad_analytics.Dim_ManagerLogin
-                    UNION ALL
-                    SELECT
-                        toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
-                        ifNull(manager_login, '') AS manager_login
-                    FROM ad_analytics.yandex_direct_return_commission_report
-                    WHERE manager_login IS NOT NULL
-                      AND manager_login != ''
-                )
-                GROUP BY manager_login_key
-            """
-        elif table == "Dim_Source":
-            select_sql = """
-                SELECT
-                    source_key,
-                    `источник`,
-                    `поставщик`,
-                    _source_table
-                FROM ad_analytics.Dim_Source
-            """
-        elif table == "Dim_Campaign":
-            select_sql = """
-                WITH service_campaigns AS (
-                    SELECT
-                        assumeNotNull(campaign_id) AS CampaignId,
-                        anyLastIf(campaign_name, campaign_name IS NOT NULL AND campaign_name != '') AS CampaignName,
-                        anyLastIf(account_login, account_login IS NOT NULL AND account_login != '') AS account_login,
-                        anyLastIf(campaign_status, campaign_status IS NOT NULL AND campaign_status != '') AS campaign_status,
-                        anyLastIf(specialist, specialist IS NOT NULL AND specialist != '') AS specialist
-                    FROM (
-                        SELECT
-                            campaign_id,
-                            campaign_name,
-                            ulogin AS account_login,
-                            campaign_status,
-                            `специалист` AS specialist
-                        FROM ad_analytics.yandex_direct_korrektirovki
-                        WHERE campaign_id IS NOT NULL
-                          AND campaign_id != 0
-                        UNION ALL
-                        SELECT
-                            campaign_id,
-                            campaign_name,
-                            login AS account_login,
-                            CAST(NULL, 'Nullable(String)') AS campaign_status,
-                            `специалист` AS specialist
-                        FROM ad_analytics.yandex_direct_minus_snapshot
-                        WHERE campaign_id != 0
-                        UNION ALL
-                        SELECT
-                            campaign_id,
-                            campaign_name,
-                            login AS account_login,
-                            CAST(NULL, 'Nullable(String)') AS campaign_status,
-                            CAST(NULL, 'Nullable(String)') AS specialist
-                        FROM ad_analytics.yandex_direct_history
-                        WHERE campaign_id IS NOT NULL
-                          AND campaign_id != 0
-                    )
-                    GROUP BY CampaignId
-                )
-                SELECT
-                    dc.CampaignId,
-                    dc.CampaignName,
-                    dc.account_login,
-                    dc.campaign_code,
-                    dc.tp,
-                    dc.cpc_cpa,
-                    dc.site_quiz,
-                    dc.campaign_status AS `статус_кампании`,
-                    ss.specialist AS `специалист`,
-                    CAST(NULL, 'Nullable(String)') AS manager_login,
-                    dc.campaign_status,
-                    dc.payment_model,
-                    dc.payment_model AS `тип_оплаты`,
-                    dc.`номер кампании | название кампании`
-                FROM ad_analytics.Dim_Campaign dc
-                LEFT JOIN service_campaigns ss ON ss.CampaignId = dc.CampaignId
-                UNION ALL
-                SELECT
-                    ss.CampaignId,
-                    ss.CampaignName,
-                    ifNull(ss.account_login, '') AS account_login,
-                    CAST(NULL, 'Nullable(String)') AS campaign_code,
-                    '' AS tp,
-                    '' AS cpc_cpa,
-                    '' AS site_quiz,
-                    ss.campaign_status AS `статус_кампании`,
-                    ss.specialist AS `специалист`,
-                    CAST(NULL, 'Nullable(String)') AS manager_login,
-                    ss.campaign_status,
-                    CAST(NULL, 'Nullable(String)') AS payment_model,
-                    CAST(NULL, 'Nullable(String)') AS `тип_оплаты`,
-                    concat(toString(ss.CampaignId), ' | ', ifNull(ss.CampaignName, '')) AS `номер кампании | название кампании`
-                FROM service_campaigns ss
-                LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = ss.CampaignId
-                WHERE dc.CampaignId = 0
-            """
-        elif table == "Dim_AdGroup":
-            select_sql = """
-                SELECT
-                    AdGroupId,
-                    AdGroupName,
-                    adgroup_code,
-                    `номер группы | название группы`,
-                    `марки авто`,
-                    ag_part1,
-                    ag_part2,
-                    ag_part3,
-                    ag_part4,
-                    ag_part5,
-                    ag_part6,
-                    ag_part7,
-                    ag_part1 AS ag_part1_name,
-                    `неверный_кодер_new`,
-                    parent_CampaignId
-                FROM ad_analytics.Dim_AdGroup
-                UNION ALL
-                SELECT
-                    sg.AdGroupId,
-                    CAST(NULL, 'Nullable(String)') AS AdGroupName,
-                    CAST(NULL, 'Nullable(String)') AS adgroup_code,
-                    '' AS `номер группы | название группы`,
-                    '' AS `марки авто`,
-                    '' AS ag_part1,
-                    '' AS ag_part2,
-                    '' AS ag_part3,
-                    '' AS ag_part4,
-                    '' AS ag_part5,
-                    '' AS ag_part6,
-                    '' AS ag_part7,
-                    '' AS ag_part1_name,
-                    CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
-                    sg.parent_CampaignId
-                FROM (
-                    SELECT
-                        assumeNotNull(ad_group_id) AS AdGroupId,
-                        anyLast(ifNull(campaign_id, 0)) AS parent_CampaignId
-                    FROM ad_analytics.yandex_direct_korrektirovki
-                    WHERE ad_group_id IS NOT NULL
-                      AND ad_group_id != 0
-                    GROUP BY AdGroupId
-                ) sg
-                LEFT JOIN ad_analytics.Dim_AdGroup da ON da.AdGroupId = sg.AdGroupId
-                WHERE da.AdGroupId = 0
-            """
-        elif table == "Dim_Site":
-            select_sql = """
-                SELECT
-                    domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`, `направление`,
-                    `статус`, status, `специалист`, `проджект`, project_manager, `id_салона`,
-                    `менеджер`, `Название crm`
-                FROM ad_analytics.Dim_Site
-            """
-        elif table == "fact_region_spend":
-            select_sql = _region_spend_pbi_sql()
-        elif table == "fact_adformat_spend":
-            select_sql = _adformat_spend_pbi_sql()
-        elif table == "fact_criterion_spend":
-            select_sql = _criterion_spend_pbi_sql()
-        elif table == "fact_region_zayavki":
-            select_sql = _region_zayavki_pbi_sql()
-        elif table == "fact_vk_ads":
-            select_sql = """
-                SELECT
-                    f.date AS date,
-                    f.account_id AS account_id,
-                    f.`салон`,
-                    f.ad_plan_id AS ad_plan_id,
-                    f.ad_group_id AS ad_group_id,
-                    f.banner_id AS banner_id,
-                    f.`атрибуция`,
-                    f.shows,
-                    f.clicks,
-                    f.spent,
-                    f.`заявки`,
-                    f.`заявки_корр`,
-                    f.`записи`,
-                    f.`квал`,
-                    f.`визиты`,
-                    f.`продажи`,
-                    f.`регион`,
-                    f.`тип_сайта`,
-                    f.`специалист`
-                FROM ad_analytics.fact_vk_ads f
-            """
-        elif table == "fact_criterion_zayavki":
-            select_sql = _criterion_zayavki_pbi_sql()
-        elif table in {"Dim_Criterion", "dim_criterion"}:
-            select_sql = """
-                SELECT criterion, criterion_type, criterion_raw
-                FROM ad_analytics.Dim_Criterion
-            """
-        elif table == "check_utm_fuck_direct":
-            select_sql = """
-                SELECT
-                    id,
-                    login,
-                    CampaignId,
-                    group_id,
-                    tracking_params,
-                    `домен`,
-                    toFloat64(cost) AS cost,
-                    date,
-                    utm_source_type
-                FROM ad_analytics.check_utm_fuck_direct
-            """
-        elif table == "fact_ml_korrektirovki":
-            select_sql = """
-                SELECT
-                    CampaignId,
-                    AdGroupId,
-                    RlAdjustmentId,
-                    priezd_arrival_date,
-                    prodazhi_arrival_date,
-                    dohod_do_kredita,
-                    dobro,
-                    toFloat64(total_cost) AS total_cost,
-                    toFloat64(kol_vo_zayavok) AS kol_vo_zayavok,
-                    toFloat64(korr) AS korr,
-                    toFloat64(kval) AS kval,
-                    toFloat64(priezd) AS priezd,
-                    toFloat64(prodazhi) AS prodazhi,
-                    toFloat64(Clicks) AS Clicks,
-                    toFloat64(Impressions) AS Impressions,
-                    nekorr,
-                    ne_otvechaet,
-                    nedozvon,
-                    filtr,
-                    priedet,
-                    `План заявки`,
-                    `План приезда`,
-                    Date,
-                    domain,
-                    `атрибуция`,
-                    _source_table,
-                    `источник`,
-                    lowerUTF8(trim(BOTH ' ' FROM ifNull(AdNetworkType, ''))) AS ad_network_type_key,
-                    `аккаунт|сайт`,
-                    `поставщик`,
-                    lowerUTF8(trim(BOTH ' ' FROM ifNull(Device, ''))) AS device_key,
-                    fid,
-                    `тип_заявки`,
-                    ml_audience_name,
-                    bid_percent,
-                    ml_tier
-                FROM ad_analytics.fact_ml_korrektirovki
-            """
-        elif table == "yandex_direct_history":
-            select_sql = """
-                SELECT
-                    toInt64(cityHash64(toString(ifNull(datetime, toDateTime(0))), ifNull(login, ''), ifNull(toString(campaign_id), ''), ifNull(new_value, '')) % 9223372036854775807) AS id,
-                    login AS ulogin,
-                    datetime,
-                    CAST(NULL, 'Nullable(String)') AS user_login,
-                    CAST(NULL, 'Nullable(Int64)') AS user_uid,
-                    change_source,
-                    event_type,
-                    CAST(NULL, 'Nullable(String)') AS category,
-                    campaign_id,
-                    old_value,
-                    new_value,
-                    CAST(NULL, 'Nullable(String)') AS raw_event,
-                    `директолог`,
-                    domain,
-                    salon,
-                    updated_at AS loaded_at
-                FROM ad_analytics.yandex_direct_history
-            """
-        elif table in DIRECT_SERVICE_BI_SELECTS:
-            select_sql = DIRECT_SERVICE_BI_SELECTS[table]
-        elif table == "yandex_direct_cookie_analytics_website_pages":
-            select_sql = """
-                SELECT
-                    id,
-                    login_key,
-                    domain,
-                    toInt64(ifNull(round(clicks), 0)) AS clicks,
-                    toInt64(ifNull(round(goal_all_forms), 0)) AS goal_all_forms,
-                    toInt64(ifNull(round(goal_crm_order_created), 0)) AS goal_crm_order_created,
-                    toInt64(ifNull(round(goal_crm_order_paid), 0)) AS goal_crm_order_paid,
-                    final_url,
-                    directologist,
-                    template,
-                    salon,
-                    city,
-                    region,
-                    site_type,
-                    loaded_at,
-                    page_type,
-                    banner_href,
-                    date_from,
-                    date_to,
-                    toFloat64(sum) AS sum,
-                    toInt64OrZero(ifNull(agoalnum, '')) AS agoalnum,
-                    toFloat64(aconv) AS aconv,
-                    toFloat64(agoalcost) AS agoalcost
-                FROM ad_analytics.yandex_direct_cookie_analytics_website_pages
-            """
-        elif table == "yandex_direct_return_commission_report":
-            select_sql = """
-                SELECT
-                    id,
-                    client_login,
-                    date,
-                    lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
-                    slot,
-                    campaign_type,
-                    ad_type,
-                    toFloat64(cost) AS cost,
-                    toFloat64(cost_with_vat) AS cost_with_vat,
-                    toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
-                    user_login,
-                    toFloat64(rate) AS rate,
-                    toFloat64(commission) AS commission
-                FROM ad_analytics.yandex_direct_return_commission_report
-            """
-        else:
-            select_sql = f"SELECT * FROM ad_analytics.{q(table)}"
-        _replace_view(client, view_name, select_sql)
+        _replace_view(client, view_name, _pbi_view_select_sql(table))
         out[view_name] = count_rows(client, f"ad_analytics.{q(view_name)}")
     return out
 
