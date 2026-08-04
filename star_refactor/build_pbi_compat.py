@@ -24,6 +24,7 @@ def _site_key_expr(alias: str = "f") -> str:
 
 PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
+    "Dim_AdFormat",
     "Dim_AdNetworkType",
     "Dim_Adjustment",
     "Dim_Campaign",
@@ -387,7 +388,7 @@ def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
             f.campaign_id,
             f.ad_group_id,
             f.ad_network_type_key,
-            f.ad_format,
+            lowerUTF8(trim(BOTH ' ' FROM ifNull(f.ad_format, ''))) AS ad_format_key,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -805,6 +806,21 @@ def _dim_ad_network_type_pbi_sql() -> str:
     """
 
 
+def _dim_ad_format_pbi_sql() -> str:
+    return """
+        SELECT
+            ad_format_key,
+            anyLast(ad_format) AS ad_format
+        FROM (
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_format, ''))) AS ad_format_key,
+                ifNull(ad_format, '') AS ad_format
+            FROM ad_analytics.fact_adformat_spend
+        )
+        GROUP BY ad_format_key
+    """
+
+
 def _dim_adjustment_pbi_sql() -> str:
     return """
         SELECT
@@ -1206,6 +1222,7 @@ def _return_commission_pbi_sql() -> str:
 PBI_VIEW_SQL_BUILDERS = {
     "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
     "Dim_Date": _dim_date_pbi_sql,
+    "Dim_AdFormat": _dim_ad_format_pbi_sql,
     "Dim_AdNetworkType": _dim_ad_network_type_pbi_sql,
     "Dim_Adjustment": _dim_adjustment_pbi_sql,
     "Dim_Device": _dim_device_pbi_sql,
