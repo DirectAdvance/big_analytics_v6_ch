@@ -645,3 +645,14 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
   `Dim_AdNetworkType.AdNetworkType`; refs на старые fact-поля отсутствуют.
 - Проверено: rows 10121/10121, суммы `total_cost`/`Clicks`/`Impressions` совпали с учетом Float64,
   unmatched по новым связям 0/0, JSON 5220/5220, report refs 8604 без missing column/measure.
+
+**2026-08-04: Power BI star thin — `manager_login` вынесен в `Dim_ManagerLogin`:**
+- В PBIP добавлена таблица `Dim_ManagerLogin`; в `big_analytics_full` и
+  `yandex_direct_return_commission_report` текстовый `manager_login` заменен на `manager_login_key`.
+- Для Power BI ключ нормализован как signed Int64 (`UInt64 % 9223372036854775807`) одинаково в фактах
+  и dim; добавлены связи `big_analytics_full.manager_login_key -> Dim_ManagerLogin.manager_login_key`
+  и `yandex_direct_return_commission_report.manager_login_key -> Dim_ManagerLogin.manager_login_key`.
+- Визуал с `big_analytics_full.manager_login` перемаплен на `Dim_ManagerLogin.manager_login`.
+- Проверено: `bi_pbi_big_analytics_full` rows 5395734/5395734, суммы `total_cost`/`Обращения`
+  совпали с учетом Float64, `Dim_ManagerLogin` 37/37 уникальных ключей, unmatched по новым связям 0/0,
+  JSON 5220/5220, report refs 8604 без missing column/measure.

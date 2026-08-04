@@ -118,12 +118,11 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 f.`направление`
             ) AS `направление`,
             f.`тип_заявки`,
-            dm.manager_login,
+            toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key,
             f.account_login AS account_login
         FROM ad_analytics.fact_big_analytics f
         LEFT JOIN ad_analytics.Dim_Adjustment da ON da.RlAdjustmentId = f.`RlAdjustmentId`
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
-        LEFT JOIN ad_analytics.Dim_ManagerLogin dm ON dm.manager_login_key = f.manager_login_key
         {where_sql}
     """
 
@@ -815,6 +814,26 @@ def create_bi_views(client) -> dict[str, int]:
                     Device
                 FROM ad_analytics.Dim_Device
             """
+        elif table == "Dim_ManagerLogin":
+            select_sql = """
+                SELECT
+                    manager_login_key,
+                    anyLast(manager_login) AS manager_login
+                FROM (
+                    SELECT
+                        toInt64(manager_login_key % 9223372036854775807) AS manager_login_key,
+                        manager_login
+                    FROM ad_analytics.Dim_ManagerLogin
+                    UNION ALL
+                    SELECT
+                        toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
+                        ifNull(manager_login, '') AS manager_login
+                    FROM ad_analytics.yandex_direct_return_commission_report
+                    WHERE manager_login IS NOT NULL
+                      AND manager_login != ''
+                )
+                GROUP BY manager_login_key
+            """
         elif table == "Dim_Source":
             select_sql = """
                 SELECT
@@ -1115,7 +1134,7 @@ def create_bi_views(client) -> dict[str, int]:
                     ad_type,
                     toFloat64(cost) AS cost,
                     toFloat64(cost_with_vat) AS cost_with_vat,
-                    manager_login,
+                    toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
                     user_login,
                     toFloat64(rate) AS rate,
                     toFloat64(commission) AS commission
