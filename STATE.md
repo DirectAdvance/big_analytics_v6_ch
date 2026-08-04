@@ -3,6 +3,12 @@
 _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_full/ml/pixel/vk fact thinning). Полная история — `STATE_ARCHIVE.md`._
 
 **2026-08-04 +05: PBIP zayavki + big_full site thinning (Codex):**
+- Исправлена ошибка Power BI Desktop `Missing_References (Dim_Date) undefined`: все report JSON ссылки
+  на auto-date hierarchy (`PropertyVariationSource`/`Иерархия дат`) заменены на явные поля
+  `Dim_Date.year_month`, `Dim_Date.Год`, `Dim_Date.Date`; для legacy-таблиц
+  `yandex_direct_return_commission_report` и `yandex_direct_404_errors` добавлены лёгкие calculated
+  columns года/месяца. Проверено: `PropertyVariationSource` refs = 0, report JSON `2716/2716`,
+  checked model refs `4498`, missing refs `0`, relationship endpoints `142/142`, M-sources `34/34`.
 - Исправлена ошибка Power BI Desktop `content definition` на `linguisticMetadata`/context: после удаления
   `row_hash` в `ru-RU.tmdl` остались повреждённые generated `*_has_row_hash` relationship blocks.
   `linguisticMetadata` сброшен до минимального валидного JSON (`Entities={}`, `Relationships={}`).
