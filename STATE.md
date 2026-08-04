@@ -673,4 +673,6 @@ _Последнее обновление: 2026-08-04 (Codex: PBIP zayavki/big_fu
   missing, `LocalDateTable_`/old fact-to-fact ids refs 0, unmatched по новым связям 0/0.
 - `pixel_score` source vs rebuilt: rows 459881/459881, суммы заявок/воронки/расхода совпали
   (только Float64-представление в выводе).
+- Дополнительно облегчен `bi_pixel_score`: view теперь отдает 35 нужных PBI-колонок вместо 38,
+  лишние `салон`/`CampaignName`/`направление` не грузятся в Power BI; rows/sums сохранены.
 - Не проверено здесь: фактический refresh в Power BI Desktop, потому что Desktop недоступен из этой среды.

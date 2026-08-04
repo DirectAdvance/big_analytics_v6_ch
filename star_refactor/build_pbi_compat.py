@@ -1117,6 +1117,48 @@ def _direct_history_pbi_sql() -> str:
     """
 
 
+def _pixel_score_pbi_sql() -> str:
+    return """
+        SELECT
+            month,
+            domain,
+            `источник`,
+            CampaignId,
+            kol_vo_zayavok,
+            korr,
+            kval,
+            priezd,
+            prodazhi,
+            cpl_score,
+            `pixel_kol_vo_домена`,
+            `pixel_kol_vo_кампании`,
+            `cpl_avg_квал`,
+            `cpl_avg_визит`,
+            `cpl_avg_продажа`,
+            `cpl_кам_квал`,
+            `cpl_кам_визит`,
+            `cpl_кам_продажа`,
+            `score_квал`,
+            `score_визит`,
+            `score_продажа`,
+            `w_квал`,
+            `w_визит`,
+            `w_продажа`,
+            `status_квал`,
+            `status_визит`,
+            `status_продажа`,
+            `расход`,
+            weight,
+            `pixel_квал_домена`,
+            `attr_pixel_квал_кампании`,
+            `pixel_приезд_домена`,
+            `attr_pixel_приезд_кампании`,
+            `pixel_продажи_домена`,
+            `attr_pixel_продажи_кампании`
+        FROM ad_analytics.pixel_score
+    """
+
+
 def _cookie_pages_pbi_sql() -> str:
     return """
         SELECT
@@ -1189,6 +1231,7 @@ PBI_VIEW_SQL_BUILDERS = {
     "check_utm_fuck_direct": _check_utm_direct_pbi_sql,
     "fact_ml_korrektirovki": _fact_ml_korrektirovki_pbi_sql,
     "yandex_direct_history": _direct_history_pbi_sql,
+    "pixel_score": _pixel_score_pbi_sql,
     "yandex_direct_cookie_analytics_website_pages": _cookie_pages_pbi_sql,
     "yandex_direct_return_commission_report": _return_commission_pbi_sql,
 }
