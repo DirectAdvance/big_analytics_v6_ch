@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "period": {"from": "2026-02-01", "to": "2026-07-31"},
+  "attribution": "По дате заявки",
+  "sides": {
+    "v5": {
+      "kind": "postgres",
+      "table": "public.fact_big_analytics",
+      "alias": "f",
+      "date_expr": "f.\"Date\"",
+      "attribution_expr": "f.\"атрибуция\"",
+      "exclude_expr": "f.\"_source_table\" <> 'пиксель'",
+      "joins": []
+    },
+    "v6": {
+      "kind": "clickhouse",
+      "table": "ad_analytics.fact_big_analytics",
+      "alias": "f",
+      "date_expr": "f.Date",
+      "attribution_expr": "f.`атрибуция`",
+      "exclude_expr": "f.`_source_table` <> 'pixel'",
+      "joins": []
+    }
+  },
+  "metrics": {
+    "расход":    {"v5": "f.total_cost",     "v6": "f.total_cost"},
+    "обращения": {"v5": "f.kol_vo_zayavok", "v6": "f.kol_vo_zayavok"},
+    "заявки":    {"v5": "f.korr",           "v6": "f.korr"},
+    "квал":      {"v5": "f.kval",           "v6": "f.kval"},
+    "приедет":   {"v5": "f.priedet",        "v6": "f.priedet"},
+    "приезд":    {"v5": "f.priezd",         "v6": "f.priezd"},
+    "продажи":   {"v5": "f.prodazhi",       "v6": "f.prodazhi"},
+    "не корр":   {"v5": "f.nekorr",         "v6": "f.nekorr"}
+  },
+  "dimensions": {
+    "месяц": {
+      "v5": "to_char(f.\"Date\", 'YYYY-MM')",
+      "v6": "formatDateTime(f.Date, '%Y-%m')"
+    },
+    "специалист": {
+      "v5": "f.\"специалист\"",
+      "v6": "f.`специалист`"
+    },
+    "Название crm": {
+      "v5": "f.\"Название crm\"",
+      "v6": "f.`Название crm`"
+    },
+    "_source_table": {
+      "v5": "f.\"_source_table\"",
+      "v6": "f.`_source_table`"
+    },
+    "источник": {
+      "v5": "f.\"источник\"",
+      "v6": "ds.`источник`",
+      "v6_joins": ["LEFT JOIN ad_analytics.Dim_Source ds ON ds.source_key = f.source_key"],
+      "values_comparable": ["Контекст", "SEO", "Пиксель", "Пиксель_атрибуц", "VK Ads", "Посевы_Max", "Посевы_Telegram", "Посевы_VK"]
+    }
+  },
+  "columns_required": {
+    "v5": {
+      "public.fact_big_analytics": ["Date", "атрибуция", "_source_table", "total_cost", "kol_vo_zayavok", "korr", "kval", "priedet", "priezd", "prodazhi", "nekorr", "специалист", "Название crm", "источник"]
+    },
+    "v6": {
+      "ad_analytics.fact_big_analytics": ["Date", "атрибуция", "_source_table", "total_cost", "kol_vo_zayavok", "korr", "kval", "priedet", "priezd", "prodazhi", "nekorr", "специалист", "Название crm", "source_key"],
+      "ad_analytics.Dim_Source": ["source_key", "источник"]
+    }
+  }
+}
