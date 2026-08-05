@@ -86,20 +86,24 @@ campaign_score AS
 (
     SELECT
         *,
-        greatest(
-            toDecimal64(0.000001, 6),
-            (zayavki + 3 * korr + 10 * kval + 30 * priezd + 100 * prodazhi) / nullIf(clicks, 0)
-        ) AS score
+        (zayavki + 3 * korr + 10 * kval + 30 * priezd + 100 * prodazhi) / nullIf(clicks, 0) AS score
     FROM campaign_monthly
 ),
 score_weights AS
 (
+    -- PIXEL_SALON_JOIN_2026-08-05: ключ нормировки = (месяц, САЛОН, домен) — как в v5
+    -- (step11.py:564 PARTITION BY month, "салон", domain). Без `салон` веса нормировались
+    -- по домену, а джойн без `салон` множил каждую пиксельную строку-день на все салоны.
+    -- WHERE score > 0 — гейт v5 (`cr_composite > 0`, step11.py:202/242) вместо пола 1e-6:
+    -- кампания без конверсий в атрибуции не участвует.
     SELECT
         month,
+        `салон`,
         domain,
         `CampaignId`,
-        score / nullIf(sum(score) OVER (PARTITION BY month, domain), 0) AS weight
+        score / nullIf(sum(score) OVER (PARTITION BY month, `салон`, domain), 0) AS weight
     FROM campaign_score
+    WHERE score > 0
 ),
 pixel_daily AS
 (
@@ -229,7 +233,7 @@ attributed AS
         concat(toString(p.`Date`), '|', ifNull(p.domain, ''), '|пиксель_атрибуц|', toString(sw.`CampaignId`)) AS key_pixel_score
     FROM pixel_daily p
     INNER JOIN score_weights sw
-      ON sw.month = p.month AND sw.domain = p.domain
+      ON sw.month = p.month AND sw.`салон` = p.`салон` AND sw.domain = p.domain
     LEFT JOIN campaign_attrs ca ON ca.`CampaignId` = sw.`CampaignId`
     LEFT JOIN gs_domain gs_pix ON gs_pix.domain_key = lower(trim(ifNull(p.domain, '')))
 ),
@@ -305,8 +309,11 @@ leftovers AS
         concat(toString(p.`Date`), '|', ifNull(p.domain, ''), '|пиксель_атрибуц|0') AS key_pixel_score
     FROM pixel_daily p
     LEFT JOIN gs_domain gs_pix ON gs_pix.domain_key = lower(trim(ifNull(p.domain, '')))
-    WHERE (p.month, p.domain) NOT IN (
-        SELECT month, domain FROM score_weights
+    -- PIXEL_SALON_JOIN_2026-08-05: ключ остатка обязан совпадать с ключом джойна выше,
+    -- иначе группа (месяц, салон, домен) без своих весов выпадет из обеих веток и
+    -- сумма обращений по пикселю уедет вниз.
+    WHERE (p.month, p.`салон`, p.domain) NOT IN (
+        SELECT month, `салон`, domain FROM score_weights
     )
 )
 SELECT * FROM attributed

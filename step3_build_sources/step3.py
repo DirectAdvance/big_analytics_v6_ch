@@ -221,6 +221,10 @@ def _category_match_expr(
 def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salon_expr: str) -> str:
     status = f"ifNull({status_expr}, '')"
     reason = f"lower(ifNull({reason_expr}, ''))"
+    # REASON_CRM_SCOPE_2026-08-05: reason-метрики (dohod_do_kredita/dobro) матчатся В РАЗРЕЗЕ CRM,
+    # как и status-сторона в _category_match_expr. Глобальный матч по одному lower(reason)
+    # тянул причину чужой CRM на все CRM сразу и раздувал reason-воронку.
+    crm = _crm_expr(source_type_expr)
     correct = _category_match_expr(
         ("correct", "qualified", "visit", "sale", "credit", "approved"),
         status_expr,
@@ -255,12 +259,12 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     toDecimal64(if({status} = 'Фильтр', 1, 0), 6) AS filtr,
     toDecimal64(if({status} = 'Недозвон', 1, 0), 6) AS nedozvon,
     toDecimal64(if({status} = 'Приедет', 1, 0), 6) AS priedet,
-    toInt64(if({reason} IN (
-        SELECT lower(reason) FROM raw_data.crm_status_mapping
+    toInt64(if(({crm}, {reason}) IN (
+        SELECT crm, lower(reason) FROM raw_data.crm_status_mapping
         WHERE category IN ('credit', 'approved') AND ifNull(reason, '') != ''
     ), 1, 0)) AS dohod_do_kredita,
-    toInt64(if({reason} IN (
-        SELECT lower(reason) FROM raw_data.crm_status_mapping
+    toInt64(if(({crm}, {reason}) IN (
+        SELECT crm, lower(reason) FROM raw_data.crm_status_mapping
         WHERE category = 'approved' AND ifNull(reason, '') != ''
     ), 1, 0)) AS dobro
 """
