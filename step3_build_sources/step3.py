@@ -452,6 +452,34 @@ def _domain_specialist_expr(alias: str) -> str:
     )
 
 
+# DIRECT_LEAD_BRANCHES_2026-08-05
+# key3 лида = lower(created_date|campaign_id|group_id|device|correction_id) (step1.py:225-238).
+# Лид без campaign_id/группы/девайса/корректировки даёт хвост '|0|0|0|0' — в статистике Директа
+# такого ключа не бывает (замер: 0 строк raw_yandex с этим хвостом), значит ветка direct_zero
+# пересекаться с основной веткой direct не может по построению.
+_ZERO_KEY3_PATTERN = "%|0|0|0|0"
+
+
+def _direct_lead_universe_filter(prefix: str = "") -> str:
+    """Единый предикат «лид принадлежит Директу» — не SEO, не пиксель, не соц.посевы.
+
+    Используется И основной веткой (`lead_scored` в `_build_direct_sql`), И ветками
+    direct_unmatched / direct_zero. Одно определение на три ветки — иначе разъезд
+    фильтров даст либо потерю лидов, либо двойной учёт.
+    """
+    p = prefix
+    return f"""
+    ifNull({p}key3, '') != ''
+      AND NOT (ifNull({p}utm_source, '') = '' OR ({p}utm_source = 'seo' AND {p}utm_medium = 'organic'))
+      AND ifNull({p}utm_source, '') NOT LIKE 'victory_%'
+      AND ifNull({p}utm_source, '') NOT IN ('telegram','stories_tg','vk_storis','telegram_storis','max','vk','vk_groups','vkads')
+"""
+
+
+def _lead_date_filter(lo: str, hi: str) -> str:
+    return f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"
+
+
 def _build_direct_sql(target_table: str, raw_date_filter: str = "") -> str:
     return f"""
 CREATE TABLE ad_analytics.{target_table}
@@ -544,10 +572,7 @@ lead_scored AS
         fid AS fid,
         {_metric_expr("status", "reason", "source_type", "salon")}
     FROM ad_analytics.{LEADS_DEDUPED_STAGE}
-    WHERE ifNull(key3, '') != ''
-      AND NOT (ifNull(utm_source, '') = '' OR (utm_source = 'seo' AND utm_medium = 'organic'))
-      AND ifNull(utm_source, '') NOT LIKE 'victory_%'
-      AND ifNull(utm_source, '') NOT IN ('telegram','stories_tg','vk_storis','telegram_storis','max','vk','vk_groups','vkads')
+    WHERE {_direct_lead_universe_filter()}
 ),
 la AS
 (
@@ -655,6 +680,8 @@ def _build_lead_source_sql(
     direction_name: str,
     provider: str,
     lead_date_filter: str = "",
+    source_table: str | None = None,
+    extra_where: str = "",
 ) -> str:
     return f"""
 CREATE TABLE ad_analytics.{table}
@@ -790,7 +817,7 @@ SELECT
     CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
     CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
     '{provider}' AS `поставщик`,
-    '{table.replace("big_analytics_", "")}' AS _source_table,
+    '{source_table or table.replace("big_analytics_", "")}' AS _source_table,
     CAST(NULL, 'Nullable(String)') AS cascade_level,
     CAST(NULL, 'Nullable(String)') AS campaign_status,
     CAST(NULL, 'Nullable(String)') AS payment_model
@@ -798,6 +825,7 @@ FROM lead_scored l
 LEFT JOIN gs_domain_best gs ON gs.domain_key = l.domain_key AND gs.match_date = l.created_date
 LEFT JOIN crm_by_domain crm ON crm.domain_key = l.domain_key
 WHERE ifNull(l.created_date, toDate('1970-01-01')) >= toDate('2026-01-01')
+  {extra_where}
 """
 
 
@@ -846,6 +874,80 @@ AND lowerUTF8(trim(ifNull(domain, ''))) NOT IN (
 
 def _build_pixel_sql(lead_date_filter: str = "") -> str:
     raise RuntimeError("big_analytics_pixel is built by step5_build_pixel, not by step3")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DIRECT_LEAD_BRANCHES_2026-08-05 — две потерянные ветки лидов Директа
+# ------------------------------------------------------------------------------
+# Основная ветка (`_build_direct_sql`) идёт ОТ ТАБЛИЦЫ РАСХОДА: `FROM yd LEFT JOIN la`.
+# Лид, чьего key3 нет в статистике Директа, не порождает ни одной строки — исчезает
+# из витрины целиком. В v5 такие лиды жили отдельными ветками (step3.py:467/628/1109
+# → direct_unmatched, :475/1287 → direct_zero) с total_cost=NULL.
+#
+# Обе ветки идут ОТ ЛИДА (`_build_lead_source_sql`), поэтому:
+#   * total_cost / Impressions / Clicks = 0 — расход НЕ дублируется, только воронка;
+#   * `_source_table` = 'direct_unmatched' / 'direct_zero' — ровно те значения, что
+#     ждёт GOLDEN_SOURCES в data_check/verify_big_analytics.py:127.
+#
+# Дизъюнктность трёх веток (лид попадает ровно в одну):
+#   direct           — key3 ∈ raw_yandex за тот же день;
+#   direct_unmatched — key3 ∉ raw_yandex И key3 не '…|0|0|0|0';
+#   direct_zero      — key3 вида '…|0|0|0|0' (в raw_yandex таких ключей 0 строк).
+# Anti-join ограничен окном батча [lo, hi) СПЕЦИАЛЬНО: key3 начинается с даты
+# (created_date у лида, `Date` у расхода), поэтому лид дня D может совпасть только
+# со строкой расхода дня D. Ограничение окна = точный эквивалент глобального
+# anti-join, но без построения множества из 4.7 млн ключей на каждый батч.
+#
+# `gs.direction = 'Авто'` — СТРОГОЕ равенство (NULL исключается) — воспроизводит
+# v5-гейт `FROM big_analytics_direct WHERE direction = 'Авто'`
+# (v5 step6_build_full/step6.py:114): лид на домене, которого нет в gsheet_sites,
+# в витрину v5 не попадал. Без этого гейта ветки притащили бы ~273 тыс. лидов
+# доменов-«ничьих» (domain_id IS NULL в CRM). ⚠️ Именно ЗДЕСЬ строгое равенство,
+# а не `ifNull(…, 'Авто')` как в основной ветке: там гейт стоит поверх строки
+# расхода, у которой домен известен из аккаунта Директа, здесь — поверх лида.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_direct_unmatched_sql(lo: str, hi: str) -> str:
+    """Лиды Директа, чьего key3 нет в статистике расхода (v5: direct_unmatched)."""
+    filt = f"""
+{_direct_lead_universe_filter("l.")}
+      AND l.key3 NOT LIKE '{_ZERO_KEY3_PATTERN}'
+      AND l.key3 NOT IN (
+          SELECT key3
+          FROM ad_analytics.raw_yandex
+          WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
+            AND ifNull(key3, '') != ''
+      )
+"""
+    return _build_lead_source_sql(
+        "big_analytics_direct_unmatched",
+        filt,
+        "Контекст",
+        "Комплекс",
+        "Яндекс",
+        _lead_date_filter(lo, hi),
+        source_table="direct_unmatched",
+        extra_where="AND gs.direction = 'Авто'",
+    )
+
+
+def _build_direct_zero_sql(lo: str, hi: str) -> str:
+    """Лиды Директа без campaign_id (key3 '…|0|0|0|0') — v5: direct_zero."""
+    filt = f"""
+{_direct_lead_universe_filter("l.")}
+      AND l.key3 LIKE '{_ZERO_KEY3_PATTERN}'
+"""
+    return _build_lead_source_sql(
+        "big_analytics_direct_zero",
+        filt,
+        "Контекст",
+        "Комплекс",
+        "Яндекс",
+        _lead_date_filter(lo, hi),
+        source_table="direct_zero",
+        extra_where="AND gs.direction = 'Авто'",
+    )
 
 
 def _build_crop_sql_batched(lead_date_filter: str = "") -> str:
@@ -975,16 +1077,18 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
 
     lead_ranges = day_ranges("2026-01-01")
 
+    # Билдеры принимают окно батча (lo, hi): веткам direct_unmatched/direct_zero
+    # нужна не только дата лида, но и то же окно для anti-join к raw_yandex.
     lead_builders = [
-        ("big_analytics_seo", _build_seo_sql),
-        ("big_analytics_crop_targeting", _build_crop_sql_batched),
+        ("big_analytics_seo", lambda lo, hi: _build_seo_sql(_lead_date_filter(lo, hi))),
+        ("big_analytics_crop_targeting", lambda lo, hi: _build_crop_sql_batched(_lead_date_filter(lo, hi))),
+        # DIRECT_LEAD_BRANCHES_2026-08-05
+        ("direct_unmatched", _build_direct_unmatched_sql),
+        ("direct_zero", _build_direct_zero_sql),
     ]
     for table, builder in lead_builders:
         t_table = time.perf_counter()
-        batch_selects = [
-            _select_from_create(builder(f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"))
-            for lo, hi in lead_ranges
-        ]
+        batch_selects = [_select_from_create(builder(lo, hi)) for lo, hi in lead_ranges]
         logger.info("  append %s into ad_analytics.%s (%d daily batches)", table, SOURCE_STORE, len(batch_selects))
         for idx, select_sql in enumerate(batch_selects, start=1):
             t_batch = time.perf_counter()

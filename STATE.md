@@ -1,8 +1,33 @@
 # big_analytics_v6_ch — Состояние (handoff)
 
-_Последнее обновление: 2026-08-05 (oleg_programmer: rivendell CRM mapping fix). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-05 (oleg_programmer: возврат веток direct_unmatched/direct_zero). Полная история — `STATE_ARCHIVE.md`._
 
-**2026-08-05 +05: v6_ch — rivendell CRM mapping fix + гард класса бага (oleg_programmer):**
+**2026-08-05 +05: v6_ch — возвращены две потерянные ветки лидов Директа (oleg_programmer):**
+- **Баг:** `step3_build_sources/step3.py::_build_direct_sql` собирает Директ ОТ РАСХОДА
+  (`FROM yd LEFT JOIN la ON la.key3 = yd.key3`). Лид, чьего key3 нет в статистике Директа, и лид
+  без campaign_id (key3 `…|0|0|0|0`) не порождали ни одной строки — исчезали из витрины.
+- **Фикс (маркер `DIRECT_LEAD_BRANCHES_2026-08-05`):** две ветки ОТ ЛИДА через
+  `_build_lead_source_sql` — `_build_direct_unmatched_sql` / `_build_direct_zero_sql`,
+  `_source_table='direct_unmatched'/'direct_zero'` (ровно то, что ждёт `GOLDEN_SOURCES`),
+  `total_cost/Impressions/Clicks = 0`. Общий предикат direct-универса вынесен в
+  `_direct_lead_universe_filter()` — одно определение на три ветки.
+- **Гейт `gs.direction = 'Авто'` (строгое равенство, NULL исключается)** воспроизводит v5-гейт
+  `FROM big_analytics_direct WHERE direction='Авто'` (v5 step6.py:114). Без него ветки притащили бы
+  ~273 тыс. лидов доменов, которых нет в gsheet_sites (domain_id IS NULL в CRM).
+- **Доказано read-only на живом CH (прогона НЕ было):** direct_zero 22 010 строк / 22 010 обращений /
+  korr 12 223 / kval 1 959 / приезд 1 364 / продажи 115; direct_unmatched 14 111 / 14 111 / 6 564 /
+  1 403 / 1 116 / 84. Пересечений: 0 с веткой direct (`key3 ∈ raw_yandex` = 0 строк), 0 с direct_zero,
+  0 с crop_targeting. Расход новых строк = 0; SQL веток direct/seo/crop после рефактора
+  ПОБАЙТОВО идентичен (сверено с `git show HEAD:` версией). Golden-срез Кудерко: +36 обращений,
+  +0 продаж, +0 ₽. Дневной батч == глобальное окно (сверено на 2026-03-15).
+- **Отличие от v5 by design:** каскад `CASCADE_MATCH_2026-07-03` не портирован — 6 479 строк, которые
+  v5 подобрал бы в `direct`, в v6 остаются в `direct_unmatched` (потери/задвоения нет, только срез).
+- **НЕ трогал:** ветку direct, seo, crop, звонки, `recreate_source_views` (вью `big_analytics_direct`
+  по-прежнему = direct/tp8/tp9/tp10), step6, corrections.
+- **НЕ проверено:** прогон пайплайна и golden (запрет в задаче); эффект на `fact_big_analytics`
+  появится только после step3 → corrections → step6 → build_unified → build_star.
+
+**2026-08-05 +05 (пред.): v6_ch — rivendell CRM mapping fix + гард класса бага (oleg_programmer):**
 - **Баг:** `step3_build_sources/step3.py::_crm_expr` не знал `rivendell_excel` и молча self-мапил его
   (`else source_type`) в ключ `'rivendell_excel'`, которого нет в `raw_data.crm_status_mapping`.
   В CH-маппинге НЕТ general-ветки (в отличие от v5) → вся воронка CRM обнулялась.
