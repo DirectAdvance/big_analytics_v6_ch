@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_settings import DATE_FROM
+from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, range_batches, swap_shadow, table_exists
 from step3_build_sources.step3 import _metric_expr
 
@@ -507,14 +507,18 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
         ),
         banner_dim AS
         (
+            -- VK_AUTO_ACCOUNT_SCOPE_2026-08-05: только свои Авто-аккаунты — зеркало v5,
+            -- где banner_dim читал уже суженный `public.local_vk_ads_stats_day`
+            -- (`work/big_analytics_v5/star_refactor/build_star.py:1323-1330`).
             SELECT
-                banner_id,
-                anyLast(account_id) AS account_id,
-                anyLast(ad_plan_id) AS ad_plan_id,
-                anyLast(ad_group_id) AS ad_group_id
-            FROM raw_data.vk_ads_stats_day
-            WHERE banner_id IS NOT NULL
-            GROUP BY banner_id
+                b.banner_id AS banner_id,
+                anyLast(b.account_id) AS account_id,
+                anyLast(b.ad_plan_id) AS ad_plan_id,
+                anyLast(b.ad_group_id) AS ad_group_id
+            FROM raw_data.vk_ads_stats_day AS b
+            WHERE b.banner_id IS NOT NULL
+              AND b.account_id IN ({VK_AUTO_ACCOUNTS_SQL})
+            GROUP BY b.banner_id
         ),
         salon_dim AS
         (
@@ -551,6 +555,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
         WHERE toDateOrNull(s.date) >= toDate('{DATE_FROM}')
           {stats_where_sql}
           AND (ifNull(s.shows, 0) != 0 OR ifNull(s.clicks, 0) != 0 OR ifNull(s.spent, 0) != 0)
+          -- VK_AUTO_ACCOUNT_SCOPE_2026-08-05: рекламная сторона — только свои Авто-аккаунты.
+          AND s.account_id IN ({VK_AUTO_ACCOUNTS_SQL})
 
         UNION ALL
 
@@ -647,45 +653,51 @@ def build_vk_ads_fact(client) -> int:
 
 
 def build_vk_dims(client) -> dict[str, int]:
+    # VK_AUTO_ACCOUNT_SCOPE_2026-08-05: измерения строятся над тем же скоупом, что и
+    # fact_vk_ads — иначе в Dim_* попадали кампании/группы/объявления 86 чужих агентских
+    # клиентов (медцентры, недвижимость, юристы), у которых нет ни одной строки факта.
     ddl = {
-        "Dim_VkAdPlan": """
+        "Dim_VkAdPlan": f"""
             CREATE TABLE ad_analytics.Dim_VkAdPlan_new
             ENGINE = MergeTree
             ORDER BY ifNull(ad_plan_id, 0)
             AS
             SELECT
-                CAST(ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
-                anyLast(ad_plan_name) AS ad_plan_name,
-                CAST(anyLast(account_id), 'Nullable(Int64)') AS account_id
-            FROM raw_data.vk_ads_stats_day
-            WHERE ad_plan_id IS NOT NULL
-            GROUP BY ad_plan_id
+                CAST(s.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
+                anyLast(s.ad_plan_name) AS ad_plan_name,
+                CAST(anyLast(s.account_id), 'Nullable(Int64)') AS account_id
+            FROM raw_data.vk_ads_stats_day AS s
+            WHERE s.ad_plan_id IS NOT NULL
+              AND s.account_id IN ({VK_AUTO_ACCOUNTS_SQL})
+            GROUP BY s.ad_plan_id
         """,
-        "Dim_VkAdGroup": """
+        "Dim_VkAdGroup": f"""
             CREATE TABLE ad_analytics.Dim_VkAdGroup_new
             ENGINE = MergeTree
             ORDER BY ifNull(ad_group_id, 0)
             AS
             SELECT
-                CAST(ad_group_id, 'Nullable(Int64)') AS ad_group_id,
-                anyLast(ad_group_name) AS ad_group_name,
-                CAST(anyLast(ad_plan_id), 'Nullable(Int64)') AS ad_plan_id
-            FROM raw_data.vk_ads_stats_day
-            WHERE ad_group_id IS NOT NULL
-            GROUP BY ad_group_id
+                CAST(s.ad_group_id, 'Nullable(Int64)') AS ad_group_id,
+                anyLast(s.ad_group_name) AS ad_group_name,
+                CAST(anyLast(s.ad_plan_id), 'Nullable(Int64)') AS ad_plan_id
+            FROM raw_data.vk_ads_stats_day AS s
+            WHERE s.ad_group_id IS NOT NULL
+              AND s.account_id IN ({VK_AUTO_ACCOUNTS_SQL})
+            GROUP BY s.ad_group_id
         """,
-        "Dim_VkBanner": """
+        "Dim_VkBanner": f"""
             CREATE TABLE ad_analytics.Dim_VkBanner_new
             ENGINE = MergeTree
             ORDER BY ifNull(banner_id, 0)
             AS
             SELECT
-                CAST(banner_id, 'Nullable(Int64)') AS banner_id,
-                anyLast(banner_name) AS banner_name,
-                CAST(anyLast(ad_group_id), 'Nullable(Int64)') AS ad_group_id
-            FROM raw_data.vk_ads_stats_day
-            WHERE banner_id IS NOT NULL
-            GROUP BY banner_id
+                CAST(s.banner_id, 'Nullable(Int64)') AS banner_id,
+                anyLast(s.banner_name) AS banner_name,
+                CAST(anyLast(s.ad_group_id), 'Nullable(Int64)') AS ad_group_id
+            FROM raw_data.vk_ads_stats_day AS s
+            WHERE s.banner_id IS NOT NULL
+              AND s.account_id IN ({VK_AUTO_ACCOUNTS_SQL})
+            GROUP BY s.banner_id
         """,
     }
     rows: dict[str, int] = {}

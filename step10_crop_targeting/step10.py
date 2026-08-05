@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_settings import DATE_FROM
+from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, range_batches, replace_view, swap_shadow, table_exists
 from step3_build_sources.step3 import SOURCE_STORE, _metric_expr
 
@@ -788,7 +788,17 @@ def _insert_crop_api_costs(client, target: str) -> None:
 
 
 def _insert_vk_ads_costs(client, target: str) -> None:
+    """Строки чистого расхода ВК Рекламы (_source_table='vk_ads') в cost-overlay витрины.
+
+    VK_AUTO_ACCOUNT_SCOPE_2026-08-05: скоуп сужен до Авто-аккаунтов агентства
+    (`VK_AUTO_ACCOUNTS_SQL`), как в v5 (там сужение стояло на step0 при наливе
+    `local_vk_ads_stats_day`). Без него сюда попадал ВЕСЬ агентский кабинет —
+    90 чужих account_id и 13.5 млн ₽ вместо расхода своих Авто-клиентов.
+    Зерно (event_date, account_id, ad_plan_id) — как у v5 `vk_ads_by_plan`
+    (`work/big_analytics_v5/step3_build_sources/step3.py:2689-2697`), не менялось.
+    """
     _require(client, "raw_data", "vk_ads_stats_day")
+    _require(client, "raw_data", "vk_ads_agency_clients")
     client.command(
         f"""
         INSERT INTO {target}
@@ -811,6 +821,7 @@ def _insert_vk_ads_costs(client, target: str) -> None:
                 FROM raw_data.vk_ads_stats_day
                 WHERE toDateOrNull(date) >= toDate('{DATE_FROM}')
                   AND ifNull(spent, 0) != 0
+                  AND account_id IN ({VK_AUTO_ACCOUNTS_SQL})
             )
             WHERE event_date IS NOT NULL
             GROUP BY event_date, account_id, ad_plan_id
