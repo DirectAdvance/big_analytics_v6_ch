@@ -1,6 +1,35 @@
 # big_analytics_v6_ch — Состояние (handoff)
 
-_Последнее обновление: 2026-08-05 (oleg_programmer: возврат веток direct_unmatched/direct_zero). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-05 (oleg_programmer: правки A/B по справочнику статусов). Полная история — `STATE_ARCHIVE.md`._
+
+**2026-08-05 +05: v6_ch — правка A (продажи Маркара) + правка B (Плекс «Отказ клиента») — КОД ГОТОВ, БД ЗАБЛОКИРОВАНА:**
+- **A (маркер `MARCAR_GSHEET_STATUS_2026-08-05`)** — порт v5 `_patch_marcar_statuses()` (v5 step0.py:1228).
+  В v6 источник `raw_data.leads_all` — реплика CRM (writes нет), поэтому патч сдвинут в
+  `step1_load_raw/step1.py` ВЫРАЖЕНИЕМ: `_marcar_patched_status_expr()` + LEFT JOIN на
+  `raw_data.gsheet_priezdi_marcar` в `_raw_leads_select_sql` И `_raw_calls_sql` (в v5 UPDATE
+  накрывал local_leads_all целиком, вместе со звонками). Приоритет `Продажа>Дошел в КО>Одобрение>Приехал`,
+  вниз по воронке не перезаписывает.
+  ⚠️ Побочка, которую поймал тест: третий JOIN заставил анализатор CH назвать колонку `l.id` вместо
+  `id` → `raw_leads.id` переименовалась бы и step3 упал. Лечится явным `l.id AS id` (в обоих селектах).
+  Схема raw_leads/raw_calls/raw_perform_leads сверена с версией из HEAD — имена и типы идентичны.
+- **B (маркер `PLEX_OTKAZ_QUALIFIED_2026-08-05`)** — 47 строк `plex`/«Отказ клиента» `correct`→`qualified`
+  (паритет с v5, решение Семёна). Вторая половина A — 3 строки `marcar`: «Продажа»→sale,
+  «Дошел в КО»/«Одобрение»→visit (в CH-маппинге нет general-ветки, поэтому без них патч статусов немой).
+- **Обе правки справочника — в `migrations/02_status_mapping_ab_2026-08-05.py`** (`--check` / `--apply` /
+  `--rollback` / `--only=A|B`), откат одной командой.
+- **🛑 БЛОКЕР:** `--apply` падает `ACCESS_DENIED`: у `clickhouse_avto` только `GRANT SELECT ON raw_data.*`
+  (полные права — лишь на `ad_analytics.*`). Нужна ОДНА внешняя операция под админом:
+  `GRANT SELECT, INSERT, ALTER UPDATE, ALTER DELETE ON raw_data.crm_status_mapping TO clickhouse_avto;`
+  (или прогнать миграцию админским пользователем). Другой креды в `.secret/.env` нет.
+- **Замерено read-only (симуляция всех веток витрины на живом CH, прогона НЕ было), created_date≥2026-01-01:**
+  A: prodazhi 3713→3978 (**+265**), priezd +64, kval +54, korr +50, nekorr −50, заявок 0, строк 0.
+  B: kval 58 904→65 414 (**+6510**), korr/priezd/prodazhi/заявки/строки — **ровно 0**.
+  Вложенность `korr≥kval≥priezd≥prodazhi` — OK во всех ветках после обеих правок.
+- **НЕ трогал:** `_raw_yandex_sql` (расход), step3/step5/step6, corrections, любые таблицы кроме
+  `raw_data.crm_status_mapping` (и та не изменена — блокер). `build_pixel.py` не патчил: патченых
+  лидов Маркара в pixel-ветке 0 (замерено).
+- **НЕ проверено:** прогон пайплайна и golden (запрет в задаче); эффект в `fact_big_analytics`
+  появится только после step1 → step3 → corrections → step5/6 → build_star.
 
 **2026-08-05 +05: v6_ch — возвращены две потерянные ветки лидов Директа (oleg_programmer):**
 - **Баг:** `step3_build_sources/step3.py::_build_direct_sql` собирает Директ ОТ РАСХОДА

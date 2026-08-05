@@ -44,6 +44,87 @@ def _excluded_domain_list() -> str:
     return ", ".join(str(i) for i in EXCLUDED_DOMAIN_IDS)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MARCAR_GSHEET_STATUS_2026-08-05 — патч статусов Маркара по гугл-таблице приездов
+# ------------------------------------------------------------------------------
+# Порт v5 `step0_sync_local/step0.py::_patch_marcar_statuses()` (v5:1228, вызов v5:1741).
+# В v5 патч был UPDATE по локальной копии `local_leads_all`; в v6 источник
+# `raw_data.leads_all` — реплика CRM, писать в неё нельзя, поэтому патч сдвинут на
+# один шаг вниз: он применяется ВЫРАЖЕНИЕМ при сборке `raw_leads` / `raw_calls`.
+# Результат для всех последующих шагов идентичен v5 — status у лида Маркара уже
+# патченый ещё до step3 (`_step3_leads_deduped`), до дедупликации и до воронки.
+#
+# Механика: в `raw_data.gsheet_priezdi_marcar` лежит ссылка на карточку CRM
+# (`.../crm.marcar.ru/.../<id>`); хвост после последнего `/` == `leads_all.source_record_id`.
+# Патч НЕ перезаписывает статус «вниз» по воронке: применяется, только если
+# приоритет gsheet-статуса СТРОГО выше приоритета текущего CRM-статуса
+# (0 = самый высокий). Статус вне списка = приоритет 9999, т.е. любой из четырёх
+# gsheet-статусов его перебивает — ровно как в v5.
+#
+# ⚠️ Без второй половины правки (строки `marcar` в `raw_data.crm_status_mapping`
+# для «Продажа»/«Дошел в КО»/«Одобрение» — `migrations/02_status_mapping_ab_2026-08-05.py`)
+# патч НЕ даёт воронки: в CH-маппинге нет general-ветки, как в v5.
+# ══════════════════════════════════════════════════════════════════════════════
+MARCAR_SOURCE_TYPE = "marcar_crm_excel"
+
+# Иерархия статусов Маркара (0 = высший). Копия v5 `_MARCAR_STATUS_PRIORITY` (v5 step0.py:1145).
+MARCAR_STATUS_PRIORITY: dict[str, int] = {
+    "Продажа": 0,
+    "Дошел в КО": 1,
+    "Одобрение": 2,
+    "Приехал": 3,
+}
+
+
+def _marcar_priority_expr(status_expr: str) -> str:
+    branches = "".join(f"{status_expr} = '{status}', {prio}, " for status, prio in MARCAR_STATUS_PRIORITY.items())
+    return f"multiIf({branches}9999)"
+
+
+def _marcar_gsheet_subquery() -> str:
+    """id карточки Маркара -> лучший (самый глубокий) статус из гугл-таблицы приездов."""
+    statuses_in = ", ".join(f"'{status}'" for status in MARCAR_STATUS_PRIORITY)
+    return f"""
+SELECT
+    lead_record_id,
+    argMin(status, prio) AS status
+FROM
+(
+    SELECT
+        replaceRegexpOne(ifNull(link, ''), '^.+/', '') AS lead_record_id,
+        ifNull(status, '') AS status,
+        {_marcar_priority_expr("ifNull(status, '')")} AS prio
+    FROM raw_data.gsheet_priezdi_marcar
+    WHERE ifNull(link, '') LIKE '%crm.marcar.ru%'
+      AND match(ifNull(link, ''), '^https?://.+/[0-9]+$')
+      AND ifNull(status, '') IN ({statuses_in})
+)
+GROUP BY lead_record_id
+"""
+
+
+def _marcar_join_sql(lead_alias: str, join_alias: str = "mp") -> str:
+    return f"""
+LEFT JOIN ({_marcar_gsheet_subquery()}) AS {join_alias}
+  ON {join_alias}.lead_record_id = ifNull({lead_alias}.source_record_id, '')
+"""
+
+
+def _marcar_patched_status_expr(lead_alias: str, join_alias: str = "mp") -> str:
+    """status лида с применённым патчем Маркара (только «вверх» по воронке)."""
+    current = f"ifNull({lead_alias}.status, '')"
+    patched = f"ifNull({join_alias}.status, '')"
+    return f"""
+    if(
+        {lead_alias}.source_type = '{MARCAR_SOURCE_TYPE}'
+        AND {patched} != ''
+        AND {_marcar_priority_expr(patched)} < {_marcar_priority_expr(current)},
+        CAST({join_alias}.status, 'Nullable(String)'),
+        {lead_alias}.status
+    )
+"""
+
+
 def _drop_and_create(client, table: str, create_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS {table} SYNC")
     client.command(create_sql, settings=SAFE_QUERY_SETTINGS)
@@ -200,13 +281,16 @@ def _raw_leads_select_sql(source: str = "raw_data.leads_all") -> str:
     excluded = _excluded_domain_list()
     return f"""
 SELECT
-    l.id,
+    -- явный алиас обязателен: с третьим JOIN (mp) анализатор CH называет колонку `l.id`,
+    -- и `raw_leads.id` переименовывается — step3 (`ORDER BY … id`) падает
+    l.id AS id,
     l.created_date,
     l.arrival_date,
     l.domain_id,
     d.domain AS domain,
     l.deal_type,
-    l.status,
+    -- MARCAR_GSHEET_STATUS_2026-08-05
+    {_marcar_patched_status_expr("l")} AS status,
     l.source_type,
     l.campaign_id,
     l.group_id,
@@ -250,6 +334,7 @@ SELECT
     ))) AS key3_arrival_date
 FROM {source} AS l
 LEFT JOIN raw_data.domains AS d ON d.id = l.domain_id
+{_marcar_join_sql("l")}
 WHERE l.deal_type != 'Звонок'
   AND (l.domain_id NOT IN ({excluded}) OR l.domain_id IS NULL)
 """
@@ -294,12 +379,14 @@ PARTITION BY toYYYYMM(ifNull(created_date, toDate('{DATE_FROM}')))
 ORDER BY (ifNull(created_date, toDate('{DATE_FROM}')), ifNull(domain_id, 0), id)
 AS
 SELECT
-    l.id,
+    l.id AS id,  -- см. комментарий в _raw_leads_select_sql: алиас держит имя колонки
     l.created_date,
     l.domain_id,
     d.domain AS domain,
     l.deal_type,
-    l.status,
+    -- MARCAR_GSHEET_STATUS_2026-08-05: в v5 патч был UPDATE по local_leads_all,
+    -- т.е. накрывал и звонки (deal_type='Звонок') — здесь то же выражение.
+    {_marcar_patched_status_expr("l")} AS status,
     l.reason,
     l.source_type,
     l.phone,
@@ -308,6 +395,7 @@ SELECT
     l.utm_campaign
 FROM {source} AS l
 LEFT JOIN raw_data.domains AS d ON d.id = l.domain_id
+{_marcar_join_sql("l")}
 WHERE l.deal_type = 'Звонок'
   AND l.domain_id IS NOT NULL
   {source_filter}
