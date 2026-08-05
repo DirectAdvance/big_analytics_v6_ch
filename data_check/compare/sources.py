@@ -29,7 +29,9 @@ def _find_secret_loader() -> str:
 
 
 def pg_connect():
-    sys.path.insert(0, _find_secret_loader())
+    loader_dir = _find_secret_loader()
+    if loader_dir not in sys.path:
+        sys.path.insert(0, loader_dir)
     from loader import load_db  # noqa: E402
     import psycopg2  # noqa: E402
     return psycopg2.connect(**load_db("victory"))
@@ -84,6 +86,33 @@ def build_query(contract: dict, side: str, dimension: str) -> Tuple[str, List[st
     return sql, params
 
 
+def fetch(contract: dict, side: str, dimension: str) -> Dict[str, Dict[str, Decimal]]:
+    """Строит запрос, выполняет его на нужной стороне и приводит к общему формату.
+
+    Postgres принимает параметры позиционно (`%s`); ClickHouse — по имени, поэтому
+    список параметров мапится в {"p0": ..., "p1": ..., "p2": ...} под плейсхолдеры
+    `{pN:String}`, которые уже расставлены в build_query.
+    """
+    sql, params = build_query(contract, side, dimension)
+    metric_names = list(contract["metrics"].keys())
+    kind = contract["sides"][side]["kind"]
+
+    if kind == "postgres":
+        conn = pg_connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+    else:
+        client = ch_connect()
+        param_map = {"p%d" % i: value for i, value in enumerate(params)}
+        rows = client.query(sql, parameters=param_map).result_rows
+
+    return rows_to_map(rows, metric_names)
+
+
 def rows_to_map(rows, metric_names: List[str]) -> Dict[str, Dict[str, Decimal]]:
     if not rows:
         raise SourceError("запрос вернул 0 строк — это ошибка исполнения, а не нулевые метрики")
@@ -93,6 +122,10 @@ def rows_to_map(rows, metric_names: List[str]) -> Dict[str, Dict[str, Decimal]]:
         if key is None or str(key).strip() == "":
             key = "(пусто)"
         out[str(key)] = {
+            # SUM() возвращает NULL именно когда в группе нет ни одного NOT NULL значения —
+            # это легитимное состояние данных, а не слепота гейта. Слепота уже перехвачена
+            # выше: 0 строк -> SourceError, отсутствующая колонка -> ContractError в
+            # validate_columns. Поэтому NULL-метрика здесь осознанно становится Decimal(0).
             name: Decimal(str(row[i + 1] if row[i + 1] is not None else 0))
             for i, name in enumerate(metric_names)
         }
