@@ -9,6 +9,7 @@ raw_data snapshot; it does not import CRM data.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,22 @@ logger = logging.getLogger("pipeline.step3")
 SOURCE_STORE = "big_analytics_sources"
 LEADS_DEDUPED_STAGE = "_step3_leads_deduped"
 DIRECT_SOURCE_TYPES = ("direct", "tp8", "tp9", "tp10")
+
+# source_type (raw_leads/raw_calls) -> ключ `crm` в raw_data.crm_status_mapping.
+# Сверено с живой БД 2026-08-05: raw_leads / raw_data.leads_all / raw_calls дают ровно эти
+# source_type, crm_status_mapping — ровно эти 8 значений crm. Маркер: CRM_MAP_RIVENDELL_2026-08-05.
+CRM_BY_SOURCE_TYPE = {
+    "crmf_excel": "crmf",
+    "genzes_excel": "genzes",
+    "marcar_crm_excel": "marcar",
+    "mauto_excel": "mauto",
+    "mega_crm_excel": "mega",
+    "plex_excel": "plex",
+    "redauto_excel": "redauto",
+    "rivendell_excel": "rivendell",
+}
+# Фолбэк для source_type, которого нет в словаре: снять суффикс `_excel` / `_crm_excel`.
+_CRM_FALLBACK_RE = "(_crm)?_excel$"
 STEP3_QUERY_SETTINGS = {
     **SAFE_QUERY_SETTINGS,
     "max_execution_time": 180,
@@ -91,16 +108,80 @@ def _key_pixel_expr(date_expr: str, domain_expr: str, source_expr: str, campaign
     )
 
 
+def _crm_key(source_type: str) -> str:
+    """Python-двойник `_crm_expr` — тот же ключ `crm` для одного source_type."""
+    if source_type in CRM_BY_SOURCE_TYPE:
+        return CRM_BY_SOURCE_TYPE[source_type]
+    return re.sub(_CRM_FALLBACK_RE, "", source_type)
+
+
 def _crm_expr(source_type_expr: str) -> str:
-    return (
-        f"multiIf({source_type_expr} = 'crmf_excel', 'crmf', "
-        f"{source_type_expr} = 'genzes_excel', 'genzes', "
-        f"{source_type_expr} = 'marcar_crm_excel', 'marcar', "
-        f"{source_type_expr} = 'mauto_excel', 'mauto', "
-        f"{source_type_expr} = 'mega_crm_excel', 'mega', "
-        f"{source_type_expr} = 'plex_excel', 'plex', "
-        f"{source_type_expr} = 'redauto_excel', 'redauto', {source_type_expr})"
+    """SQL-выражение source_type -> ключ `crm` в raw_data.crm_status_mapping.
+
+    Фолбэк — снятие суффикса, НЕ self-map: `else source_type` возвращал ключ вида
+    `rivendell_excel`, которого в crm_status_mapping нет, и вся воронка такой CRM
+    молча обнулялась (в CH-маппинге нет general-ветки, в отличие от v5).
+    """
+    branches = "".join(
+        f"{source_type_expr} = '{source_type}', '{crm}', "
+        for source_type, crm in sorted(CRM_BY_SOURCE_TYPE.items())
     )
+    fallback = f"replaceRegexpOne({source_type_expr}, '{_CRM_FALLBACK_RE}', '')"
+    return f"multiIf({branches}{fallback})"
+
+
+def check_crm_mapping_coverage(client) -> list[str]:
+    """Громко сообщить про source_type, чей ключ отсутствует в crm_status_mapping.
+
+    Не роняет шаг: неизвестная CRM не должна останавливать pipeline. Но и молчать
+    нельзя — ключ без строк в raw_data.crm_status_mapping обнуляет ВСЮ воронку
+    (korr/kval/priezd/prodazhi) этих строк.
+    """
+    problems: list[str] = []
+    try:
+        rows = client.query(
+            """
+            SELECT source_type, sum(n) AS n
+            FROM (
+                SELECT source_type, count() AS n FROM ad_analytics.raw_leads GROUP BY source_type
+                UNION ALL
+                SELECT source_type, count() AS n FROM ad_analytics.raw_calls GROUP BY source_type
+            )
+            GROUP BY source_type
+            ORDER BY n DESC
+            """
+        ).result_rows
+        mapped = {
+            str(row[0])
+            for row in client.query("SELECT DISTINCT crm FROM raw_data.crm_status_mapping").result_rows
+        }
+    except Exception as exc:  # проверка не обязана ронять шаг
+        logger.warning("  CRM mapping coverage check пропущен: %s", exc)
+        return problems
+
+    for source_type, n in rows:
+        source_type = str(source_type or "")
+        crm = _crm_key(source_type)
+        if source_type not in CRM_BY_SOURCE_TYPE:
+            logger.warning(
+                "  CRM mapping: неизвестный source_type=%r (%s строк) — ключ выведен фолбэком как %r; "
+                "добавьте его в CRM_BY_SOURCE_TYPE (step3.py)",
+                source_type,
+                f"{int(n):,}",
+                crm,
+            )
+        if crm not in mapped:
+            problems.append(f"{source_type}->{crm}:{int(n)}")
+            logger.error(
+                "  CRM mapping: source_type=%r -> crm=%r ОТСУТСТВУЕТ в raw_data.crm_status_mapping "
+                "— воронка (korr/kval/priezd/prodazhi) обнулится для %s строк",
+                source_type,
+                crm,
+                f"{int(n):,}",
+            )
+    if not problems:
+        logger.info("  CRM mapping coverage OK: %d source_type покрыты crm_status_mapping", len(rows))
+    return problems
 
 
 def _category_match_expr(
@@ -852,6 +933,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     total = 0
     parts: list[str] = []
     shadow = f"ad_analytics.{SOURCE_STORE}_new"
+
+    crm_problems = check_crm_mapping_coverage(client)
+    if crm_problems:
+        parts.append("crm_mapping_missing=" + "|".join(crm_problems))
 
     t_stage = time.perf_counter()
     client, leads_rows = _rebuild_leads_deduped_stage(client)
