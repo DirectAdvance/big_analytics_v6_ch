@@ -54,7 +54,6 @@ logger = logging.getLogger("corrections")
 
 SOURCE_TABLE = "ad_analytics.big_analytics_sources"
 SHADOW_TABLE = "ad_analytics.big_analytics_sources_new"
-COMPONENT_TABLES = ["big_analytics_sources"]
 
 # Скоупы — прямой перевод «таблица v5 → _source_table v6».
 # Каждая стадия пересборки читает предыдущую под алиасом `s`, поэтому скоуп
@@ -137,26 +136,25 @@ _PITERKINA_LOGINS = (
 
 _CHEPELEV_DATE = "2026-07-17"
 _CHEPELEV_NAME = "Чепелев Никита"
-_CHEPELEV_SITE_LOGIN_PAIRS = (
-    ("tenet-park-msk.ru", "porg-4776zkhx"),
-    ("autopark-moscow.ru", "porg-vwnkfsr6"),
-    ("tenet-auto-ufa.ru", "porg-rjykrcf7"),
-    ("protenet-kras.ru", "porg-iythq6m5"),
-    ("exeed-moreauto.ru", "direct781"),
-    ("ural-auto-cars.site", "porg-gclfs2bh"),
-    ("multicars-kuban.site", "porg-n7g7whoa"),
+# CHEPELEV_LOGIN_ONLY_2026-08-06: матч ТОЛЬКО по account_login — дословный паритет с
+# v5 `_rule1d_чепелев` (v5 corrections.py:890-930, `account_login = ANY(...)`). Сайты
+# приведены в комментарии как происхождение списка, но в предикат НЕ входят: правило
+# описывает владение АККАУНТОМ, а не парой (сайт, аккаунт), и все 4 правила специалиста
+# обязаны иметь одну и ту же форму. Пара (домен, логин) сделала бы выражение зависимым
+# от того, передал ли конкретный вызов домен, — а колонка `domain` на визитной и
+# пиксельной осях резолвится другим алиасом (см. 6 вызовов ниже).
+#   tenet-park-msk.ru, autopark-moscow.ru, tenet-auto-ufa.ru, protenet-kras.ru,
+#   exeed-moreauto.ru, ural-auto-cars.site, multicars-kuban.site
+_CHEPELEV_LOGINS = (
+    "porg-4776zkhx", "porg-vwnkfsr6", "porg-rjykrcf7", "porg-iythq6m5",
+    "direct781", "porg-gclfs2bh", "porg-n7g7whoa",
 )
 
 SPECIALIST_DATE_RULES = (
-    (_KUDERKO_NAME, _KUDERKO_DATE, _KUDERKO_LOGINS, ()),
-    (_SERGEEV_NAME, _SERGEEV_DATE, _SERGEEV_LOGINS, ()),
-    (_PITERKINA_NAME, _PITERKINA_DATE, _PITERKINA_LOGINS, ()),
-    (
-        _CHEPELEV_NAME,
-        _CHEPELEV_DATE,
-        tuple(login for _, login in _CHEPELEV_SITE_LOGIN_PAIRS),
-        _CHEPELEV_SITE_LOGIN_PAIRS,
-    ),
+    (_KUDERKO_NAME, _KUDERKO_DATE, _KUDERKO_LOGINS),
+    (_SERGEEV_NAME, _SERGEEV_DATE, _SERGEEV_LOGINS),
+    (_PITERKINA_NAME, _PITERKINA_DATE, _PITERKINA_LOGINS),
+    (_CHEPELEV_NAME, _CHEPELEV_DATE, _CHEPELEV_LOGINS),
 )
 
 
@@ -164,22 +162,20 @@ def specialist_correction_expr(
     date_expr: str,
     account_expr: str,
     specialist_expr: str,
-    domain_expr: str | None = None,
 ) -> str:
-    """Return CH expression matching v5 account-based specialist corrections."""
+    """Return CH expression matching v5 account-based specialist corrections.
+
+    Выражение зависит ТОЛЬКО от (дата, логин аккаунта, текущий специалист), поэтому
+    все вызовы — заявочная ось, визитная ось, пиксельная атрибуция — считают одно и
+    то же правило. Необязательных аргументов нет намеренно: забытый аргумент раньше
+    молча менял правило на конкретной оси.
+    """
     branches: list[str] = []
     account_key = f"lowerUTF8(trim(ifNull({account_expr}, '')))"
-    domain_key = f"lowerUTF8(trim(ifNull({domain_expr}, '')))" if domain_expr else None
-    for name, date_barrier, logins, site_login_pairs in SPECIALIST_DATE_RULES:
-        match_expr = f"{account_key} IN ({_sql_list(logins)})"
-        if site_login_pairs and domain_key:
-            match_expr = " OR ".join(
-                f"({domain_key} = {_lit(domain)} AND {account_key} = {_lit(login)})"
-                for domain, login in site_login_pairs
-            )
+    for name, date_barrier, logins in SPECIALIST_DATE_RULES:
         branches.append(
             f"{date_expr} < toDate('{date_barrier}') "
-            f"AND ({match_expr}), {_lit(name)}"
+            f"AND ({account_key} IN ({_sql_list(logins)})), {_lit(name)}"
         )
     branches.append(
         f"{account_key} = {_lit(_PITERKINA_LOGIN)} "
@@ -591,6 +587,13 @@ def _stage3_adgroup_maps() -> str:
 
 
 def _naming_joins() -> str:
+    """7 LEFT JOIN к `raw_data.gsheet_naming` — по одному на ag_part1..7.
+
+    ⚠️ Уникальность пары (type, code) в справочнике НЕ гарантирована ни ключом, ни
+    проверкой: это гугл-таблица. Появится дубль — LEFT JOIN размножит строку витрины,
+    и это НЕ тихая порча: гейт `_invariants` сверяет rows/расход/воронку до и после
+    пересборки и уронит шаг (fail-closed). На 2026-08-06 дублей 0.
+    """
     return "\n".join(
         f"LEFT JOIN raw_data.gsheet_naming n{idx} "
         f"ON n{idx}.type = 'ag_part{idx}' "
@@ -825,7 +828,7 @@ def _stage6_labels() -> str:
     )
 
     # ── специалист: правила по аккаунту (v5 rules 1..1д) + fallback v3 ────────
-    account_rules = specialist_correction_expr("s.`Date`", "s.account_login", "s.`специалист`", "s.domain")
+    account_rules = specialist_correction_expr("s.`Date`", "s.account_login", "s.`специалист`")
     fallback = (
         f"if(ifNull(trim({account_rules}), '') != '', {account_rules}, "
         "coalesce("

@@ -264,7 +264,7 @@ def _leads_branch_columns() -> dict[str, str]:
     дефолтом типа (Decimal→0, String→'', Nullable→NULL) — именно так обнуляются
     claim-метрики Impressions/Clicks/total_cost."""
     specialist = specialist_correction_expr(
-        "g.eff_arrival_date", "g.account_login", "g.specialist_raw", "g.domain"
+        "g.eff_arrival_date", "g.account_login", "g.specialist_raw"
     )
     return {
         "key3": "concat('visit_lead|', g._source_table, '|', toString(g.eff_arrival_date), "
@@ -501,7 +501,7 @@ WHERE priezd > 0 OR prodazhi > 0
 # ══════════════════════════════════════════════════════════════════════════════
 def _calls_branch_columns() -> dict[str, str]:
     specialist = specialist_correction_expr(
-        "g.eff_arrival_date", "g.account_login", "g.specialist_raw", "g.domain"
+        "g.eff_arrival_date", "g.account_login", "g.specialist_raw"
     )
     return {
         "key3": "concat('visit_call|', toString(g.eff_arrival_date), '|', ifNull(g.domain, ''))",
