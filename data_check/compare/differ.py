@@ -75,7 +75,14 @@ def concentration(deltas: Dict[str, Decimal]) -> Optional[Tuple[List[str], Decim
     return None
 
 
+_ACCEPTED_REQUIRED_KEYS = ("метрика", "измерение", "значение", "решение")
+
+
 def load_accepted(path: str) -> List[dict]:
+    """Читает реестр осознанных отличий. Каждая запись валидируется целиком: битая
+    запись (пропущенный/опечатанный ключ) роняет загрузку сразу, а не проваливается
+    молча в apply_accepted — иначе сломанное решение и устаревшее решение неотличимы.
+    """
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -83,6 +90,23 @@ def load_accepted(path: str) -> List[dict]:
         raise ContractError("не читается реестр отличий %s: %s" % (path, exc))
     if not isinstance(data, list):
         raise ContractError("реестр отличий должен быть списком")
+
+    seen: Dict[Tuple[object, object, object], int] = {}
+    for idx, entry in enumerate(data, start=1):
+        if not isinstance(entry, dict):
+            raise ContractError("запись %d реестра отличий должна быть объектом" % idx)
+        missing = [k for k in _ACCEPTED_REQUIRED_KEYS if k not in entry]
+        if missing:
+            raise ContractError(
+                "запись %d реестра отличий: не хватает ключей %s" % (idx, ", ".join(missing))
+            )
+        triple = (entry["метрика"], entry["измерение"], entry["значение"])
+        if triple in seen:
+            raise ContractError(
+                "запись %d реестра отличий дублирует запись %d: метрика=%r, измерение=%r, значение=%r"
+                % (idx, seen[triple], triple[0], triple[1], triple[2])
+            )
+        seen[triple] = idx
     return data
 
 
@@ -99,6 +123,7 @@ def apply_accepted(diffs: Dict[str, dict], accepted: List[dict],
                 row["verdict"] = ACCEPTED
                 row["решение"] = entry.get("решение", "")
                 used.add(idx)
+                break
     stale = [e for i, e in enumerate(accepted)
              if e.get("метрика") == metric and e.get("измерение") == dimension
              and i not in used]

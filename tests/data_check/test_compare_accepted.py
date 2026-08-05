@@ -59,3 +59,41 @@ def test_apply_accepted_reports_stale_entry():
     diffs = {"Фаиг": {"delta": Decimal("-1"), "verdict": MISMATCH}}
     _, stale = apply_accepted(diffs, [ENTRY], "продажи", "Название crm")
     assert stale and stale[0]["значение"] == "Маркар"
+
+
+def test_load_accepted_rejects_typo_key(tmp_path):
+    broken = dict(ENTRY)
+    del broken["метрика"]
+    broken["метрике"] = "продажи"  # опечатка вместо "метрика"
+    with pytest.raises(ContractError) as exc:
+        load_accepted(_write(tmp_path, [broken]))
+    assert "метрика" in str(exc.value)
+
+
+def test_load_accepted_rejects_missing_reshenie(tmp_path):
+    broken = dict(ENTRY)
+    del broken["решение"]
+    with pytest.raises(ContractError) as exc:
+        load_accepted(_write(tmp_path, [broken]))
+    assert "решение" in str(exc.value)
+
+
+def test_load_accepted_rejects_duplicate_triple(tmp_path):
+    with pytest.raises(ContractError):
+        load_accepted(_write(tmp_path, [ENTRY, dict(ENTRY)]))
+
+
+def test_load_accepted_well_formed_registry_still_works(tmp_path):
+    second = dict(ENTRY, значение="Генезис", решение="другое решение")
+    path = _write(tmp_path, [ENTRY, second])
+    accepted = load_accepted(path)
+    assert len(accepted) == 2
+
+    diffs = {
+        "Маркар": {"delta": Decimal("-548"), "verdict": MISMATCH},
+        "Генезис": {"delta": Decimal("-3"), "verdict": MISMATCH},
+    }
+    out, stale = apply_accepted(diffs, accepted, "продажи", "Название crm")
+    assert out["Маркар"]["verdict"] == ACCEPTED
+    assert out["Генезис"]["verdict"] == ACCEPTED
+    assert stale == []
