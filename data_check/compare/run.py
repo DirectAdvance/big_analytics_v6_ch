@@ -112,45 +112,54 @@ def _totals(collector: _Collector, metrics):
 
 
 def _dimension_slice(collector: _Collector, accepted, metric: str, dimension: str):
-    """Один срез метрики по измерению: строки, очаг, погашенные и устаревшие записи."""
+    """Один срез метрики по измерению: строки, очаг, погашенные записи и факт открытых дельт.
+
+    Устаревшие записи реестра здесь НЕ собираются: их считает _drilldown одной
+    глобальной развёрткой в конце прогона (см. там же).
+    """
     left, right = collector.get(dimension)
     rows = differ.compare_by_dimension(left, right, metric)
-    rows, stale = differ.apply_accepted(rows, accepted, metric, dimension)
+    rows, _stale_here = differ.apply_accepted(rows, accepted, metric, dimension)
 
-    hits = [dict(row, метрика=metric, значение=key)
+    # Измерение едет в hits вместе с метрикой и значением: по этой тройке _drilldown
+    # потом отличает сработавшую запись реестра от устаревшей.
+    hits = [dict(row, метрика=metric, измерение=dimension, значение=key)
             for key, row in rows.items() if row["verdict"] == differ.ACCEPTED]
     # В concentration идут ТОЛЬКО открытые MISMATCH: у неё нет порога материальности,
     # и дробный шум (<1) слепил бы из ничего «локализованный блокер».
     open_deltas = {key: row["delta"] for key, row in rows.items()
                    if row["verdict"] == differ.MISMATCH}
     payload = {"hotspot": differ.concentration(open_deltas), "rows": rows}
-    return payload, hits, stale, bool(open_deltas)
+    return payload, hits, bool(open_deltas)
 
 
 def _drilldown(collector: _Collector, accepted, totals):
-    """Спуск по каждой метрике.
+    """Спуск по каждой метрике — ПО ВСЕМ измерениям, безусловно.
 
     Тотал — сумма по значениям измерения, поэтому +500 в одном салоне и -500 в другом
-    схлопываются в ноль: вердикт тотала MATCH при реальном расхождении. Поэтому спуск
-    по «месяцу» идёт ВСЕГДА, а выживший per-key MISMATCH поднимает вердикт тотала до
-    MISMATCH — иначе гейт напечатает PASS поверх расхождения.
-    """
-    drilldown, accepted_hits, stale_all = {}, [], []
-    for metric, total_row in totals.items():
-        payload, hits, stale, has_open = _dimension_slice(
-            collector, accepted, metric, _TOTALS_DIMENSION)
-        per_dim = {_TOTALS_DIMENSION: payload}
-        accepted_hits.extend(hits)
-        stale_all.extend(stale)
+    схлопываются в ноль: вердикт тотала MATCH при реальном расхождении. Выживший
+    per-key MISMATCH поднимает вердикт тотала до MISMATCH — иначе гейт напечатает PASS
+    поверх расхождения.
 
-        if total_row["verdict"] == differ.MISMATCH or has_open:
-            for dimension in _EXTRA_DIMENSIONS:
-                payload, hits, stale, extra_open = _dimension_slice(
-                    collector, accepted, metric, dimension)
-                per_dim[dimension] = payload
-                accepted_hits.extend(hits)
-                stale_all.extend(stale)
-                has_open = has_open or extra_open
+    Спуск в остальные измерения тоже безусловный, и это НЕ перестраховка. Расхождение
+    может быть нейтральным к месяцу: помесячные итоги совпадают байт в байт, а строки
+    привязаны к другому специалисту / источнику / CRM / _source_table. Ровно этот класс
+    и есть подпись миграции — §11.3 спеки описывает 143 908 строк с неверным
+    campaign_code из-за схлопывания Dim по CampaignId = 0, §11.4 — целые классы
+    _source_table, которых в v6 нет. Условный спуск такое расхождение не запросил бы
+    ни разу и вернул бы exit 0. Цена безусловности близка к нулю: коллектор кэширует
+    срез по измерению на все восемь метрик — это 4 лишних запроса на сторону за прогон.
+    """
+    drilldown, accepted_hits = {}, []
+    for metric, total_row in totals.items():
+        per_dim = {}
+        has_open = False
+        for dimension in [_TOTALS_DIMENSION] + _EXTRA_DIMENSIONS:
+            payload, hits, dim_open = _dimension_slice(
+                collector, accepted, metric, dimension)
+            per_dim[dimension] = payload
+            accepted_hits.extend(hits)
+            has_open = has_open or dim_open
 
         if has_open and total_row["verdict"] != differ.MISMATCH:
             logger.info("метрика «%s»: тотал сошёлся (вердикт %s), но per-key расхождения "
@@ -163,16 +172,42 @@ def _drilldown(collector: _Collector, accepted, totals):
             total_row["escalated"] = True
             total_row["verdict"] = differ.MISMATCH
         drilldown[metric] = per_dim
+
+    # Глобальная развёртка устаревших: запись реестра устарела ровно тогда, когда за
+    # ВЕСЬ прогон она не погасила ничего. Развёртка внутри одного среза этого не видит —
+    # запись, чьё измерение не попало в спуск (например, добавили измерение в контракт,
+    # но не в _EXTRA_DIMENSIONS), не проверялась бы ни разу и молча жила бы вечно.
+    applied = {(h["метрика"], h["измерение"], h["значение"]) for h in accepted_hits}
+    stale_all = [entry for entry in accepted
+                 if (entry["метрика"], entry["измерение"],
+                     entry["значение"]) not in applied]
     return drilldown, accepted_hits, stale_all
+
+
+def _provenance(contract: dict) -> dict:
+    """Паспорт обеих витрин для шапки отчёта (спека §5).
+
+    v6 дополнительно удостоверяется run_id прогона: §8 фиксирует, что текущая витрина
+    собрана частичным прогоном `7313aec1fd42` со step6, без фикса rivendell. Вердикт
+    без этой строки нельзя отличить от вердикта по полностью пересобранной v6.
+    """
+    prov = {side: sources.fetch_provenance(contract, side) for side in ("v5", "v6")}
+    run_id, run_at = sources.fetch_v6_run(contract)
+    prov["v6"]["run_id"] = run_id
+    prov["v6"]["run_at"] = run_at
+    return prov
 
 
 def _build_result(contract: dict, accepted) -> dict:
     collector = _Collector(contract)
     metrics = list(contract["metrics"].keys())
+    provenance = _provenance(contract)
     totals = _totals(collector, metrics)
     drilldown, accepted_hits, stale_all = _drilldown(collector, accepted, totals)
     return {
         "period": "%s..%s" % (contract["period"]["from"], contract["period"]["to"]),
+        "attribution": contract["attribution"],
+        "provenance": provenance,
         "totals": totals,
         "drilldown": drilldown,
         "accepted": accepted_hits,
@@ -196,7 +231,7 @@ def main(argv=None) -> int:
     args = _parse_args(argv)
     try:
         contract = load_contract(args.contract)
-        accepted = differ.load_accepted(args.accepted)
+        accepted = differ.load_accepted(args.accepted, contract)
         _validate_schemas(contract)
         result = _build_result(contract, accepted)
     except (ContractError, sources.SourceError) as exc:

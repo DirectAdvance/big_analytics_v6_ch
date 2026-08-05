@@ -45,6 +45,12 @@ def _slices(left, right, dimensions=ALL_DIMENSIONS):
     return {dimension: pair for dimension in dimensions}
 
 
+def _report(totals, drilldown, hits, stale):
+    return format_report({"period": "2026-02-01..2026-07-31",
+                          "attribution": "По дате заявки", "totals": totals,
+                          "drilldown": drilldown, "accepted": hits, "stale": stale})
+
+
 # --- закрытие ложного PASS -------------------------------------------------------------
 
 def test_offsetting_deltas_escalate_matched_total_to_mismatch():
@@ -69,8 +75,7 @@ def test_escalated_total_makes_report_fail():
                                       {"2026-02": 1500, "2026-03": 500}))
     totals = _totals(collector, METRICS)
     drilldown, hits, stale = _drilldown(collector, [], totals)
-    text = format_report({"period": "2026-02-01..2026-07-31", "totals": totals,
-                          "drilldown": drilldown, "accepted": hits, "stale": stale})
+    text = _report(totals, drilldown, hits, stale)
     assert "ГЕЙТ: FAIL" in text
     assert "блокеры: расход" in text
 
@@ -85,8 +90,8 @@ def test_fractional_noise_does_not_escalate_and_makes_no_hotspot():
     assert totals[METRIC]["verdict"] == differ.MATCH
     assert "escalated" not in totals[METRIC]
     assert drilldown[METRIC][_TOTALS_DIMENSION]["hotspot"] is None
-    # спуск в остальные измерения не запускался — нечего локализовывать
-    assert collector.asked == [_TOTALS_DIMENSION]
+    # спуск идёт по всем измерениям всегда, но очага не находит — локализовывать нечего
+    assert collector.asked == ALL_DIMENSIONS
 
 
 def test_mismatching_total_drills_every_dimension():
@@ -103,18 +108,71 @@ def test_mismatching_total_drills_every_dimension():
 
 def test_accepted_registry_suppresses_escalation():
     """Расхождение, погашенное решением Семёна, не поднимает вердикт тотала."""
-    accepted = [{"метрика": METRIC, "измерение": _TOTALS_DIMENSION, "значение": key,
-                 "решение": "осознанное отличие"} for key in ("2026-02", "2026-03")]
+    accepted = [{"метрика": METRIC, "измерение": dimension, "значение": key,
+                 "решение": "осознанное отличие"}
+                for dimension in ALL_DIMENSIONS for key in ("2026-02", "2026-03")]
     collector = FakeCollector(_slices({"2026-02": 1000, "2026-03": 1000},
                                       {"2026-02": 1500, "2026-03": 500}))
     totals = _totals(collector, METRICS)
-    drilldown, hits, _ = _drilldown(collector, accepted, totals)
+    drilldown, hits, stale = _drilldown(collector, accepted, totals)
 
     assert totals[METRIC]["verdict"] == differ.MATCH
     assert "escalated" not in totals[METRIC]
     assert drilldown[METRIC][_TOTALS_DIMENSION]["hotspot"] is None
     assert {h["значение"] for h in hits} == {"2026-02", "2026-03"}
-    assert collector.asked == [_TOTALS_DIMENSION]
+    assert stale == []  # каждая запись реестра сработала — устаревших нет
+    assert collector.asked == ALL_DIMENSIONS
+
+
+def test_registry_entry_never_applied_anywhere_is_reported_stale():
+    """Запись, чьё измерение вообще не попадает в спуск, обязана всплыть как устаревшая.
+
+    Раньше устаревшие искались ВНУТРИ той же пары (метрика, измерение): запись с
+    измерением, которого нет в спуске, не проверялась ни разу и жила молча вечно.
+    """
+    accepted = [{"метрика": METRIC, "измерение": "направление", "значение": "Юг",
+                 "решение": "давно закрытое отличие"}]
+    collector = FakeCollector(_slices({"2026-02": 1000}, {"2026-02": 1000}))
+    totals = _totals(collector, METRICS)
+    _, _, stale = _drilldown(collector, accepted, totals)
+
+    assert [e["значение"] for e in stale] == ["Юг"]
+
+
+# --- расхождение, нейтральное к месяцу (подпись миграции) ------------------------------
+
+def test_mismatch_hidden_from_month_but_visible_by_specialist_escalates():
+    """Помесячные итоги совпадают байт в байт, но 500 квал уехали к другому специалисту.
+
+    Это не крайний случай, а подпись миграции: §11.3 спеки — 143 908 строк с неверным
+    campaign_code, §11.4 — целые классы _source_table, отсутствующие в v6. Ключи
+    измерений повреждены, помесячный срез при этом чист. Пока спуск в остальные
+    измерения был условным (только при MISMATCH тотала или открытой дельте по месяцу),
+    такое расхождение НЕ запрашивалось ни разу и гейт печатал PASS с exit 0.
+    """
+    clean_month = (_side({"2026-02": 1000, "2026-03": 1000}),
+                   _side({"2026-02": 1000, "2026-03": 1000}))
+    moved = (_side({"Кудерко": 1500, "Фаиг": 500}),
+             _side({"Кудерко": 1000, "Фаиг": 1000}))
+    slices = {dimension: clean_month for dimension in ALL_DIMENSIONS}
+    slices["специалист"] = moved
+
+    collector = FakeCollector(slices)
+    totals = _totals(collector, METRICS)
+    assert totals[METRIC]["delta"] == 0
+    assert totals[METRIC]["verdict"] == differ.MATCH
+    drilldown, hits, stale = _drilldown(collector, [], totals)
+
+    # месяц чист — очага там нет, а расхождение есть и локализовано по специалисту
+    assert drilldown[METRIC][_TOTALS_DIMENSION]["hotspot"] is None
+    assert drilldown[METRIC]["специалист"]["hotspot"] is not None
+    assert totals[METRIC]["verdict"] == differ.MISMATCH
+    assert totals[METRIC]["escalated"] is True
+    assert totals[METRIC]["original_verdict"] == differ.MATCH
+
+    text = _report(totals, drilldown, hits, stale)
+    assert "ГЕЙТ: FAIL" in text
+    assert "блокеры: расход" in text
 
 
 # --- ограничение среза сопоставимыми значениями ----------------------------------------

@@ -64,6 +64,13 @@ def ch_connect():
     return get_client()
 
 
+def _side_marks(kind: str) -> List[str]:
+    """Плейсхолдеры периода и атрибуции: PostgreSQL позиционные, ClickHouse именованные."""
+    if kind == "postgres":
+        return ["%s", "%s", "%s"]
+    return ["{p0:String}", "{p1:String}", "{p2:String}"]
+
+
 def build_query(contract: dict, side: str, dimension: str) -> Tuple[str, List[str]]:
     dims = contract["dimensions"]
     if dimension not in dims:
@@ -79,10 +86,7 @@ def build_query(contract: dict, side: str, dimension: str) -> Tuple[str, List[st
     metric_names = list(contract["metrics"].keys())
     metric_exprs = ["SUM(%s)" % contract["metrics"][m][side] for m in metric_names]
 
-    if spec["kind"] == "postgres":
-        marks = ["%s", "%s", "%s"]
-    else:
-        marks = ["{p0:String}", "{p1:String}", "{p2:String}"]
+    marks = _side_marks(spec["kind"])
 
     sql = (
         "SELECT {dim} AS dim_value, {metrics}\n"
@@ -117,22 +121,100 @@ def fetch(contract: dict, side: str, dimension: str) -> Dict[str, Dict[str, Deci
     """
     sql, params = build_query(contract, side, dimension)
     metric_names = list(contract["metrics"].keys())
-    kind = contract["sides"][side]["kind"]
+    rows = execute(contract["sides"][side]["kind"], sql, params)
+    return rows_to_map(rows, metric_names)
 
+
+def execute(kind: str, sql: str, params: List[str]):
+    """Выполняет готовый запрос на нужной стороне и отдаёт сырые строки."""
     if kind == "postgres":
         conn = pg_connect()
         try:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
-                rows = cur.fetchall()
+                return cur.fetchall()
         finally:
             conn.close()
-    else:
-        client = ch_connect()
-        param_map = {"p%d" % i: value for i, value in enumerate(params)}
-        rows = client.query(sql, parameters=param_map).result_rows
+    client = ch_connect()
+    param_map = {"p%d" % i: value for i, value in enumerate(params)}
+    return client.query(sql, parameters=param_map).result_rows
 
-    return rows_to_map(rows, metric_names)
+
+# Витрину ad_analytics.fact_big_analytics пишет шаг build_star, поэтому последняя его
+# OK-запись в журнале и есть паспорт витрины v6. У v5 аналога НЕТ: PostgreSQL-контур
+# журнала прогонов не ведёт — для него печатаются только дата и объём, run_id не
+# выдумывается.
+_V6_BUILD_STEP = "build_star"
+_V6_RUN_SQL = (
+    "SELECT run_id, run_at FROM ad_analytics.data_quality_log\n"
+    "WHERE step = {p0:String} AND status = 'OK'\n"
+    "ORDER BY run_at DESC LIMIT 1"
+)
+
+
+def build_provenance_query(contract: dict, side: str) -> Tuple[str, List[str]]:
+    """Паспорт стороны: свежесть и объём ТОЙ ЖЕ выборки, по которой вынесен вердикт.
+
+    Период, атрибуция и exclude берутся те же, что и у метрик, — паспорт, посчитанный
+    по другой популяции, описывал бы не тот прогон, который сравнивается.
+    """
+    spec = contract["sides"][side]
+    marks = _side_marks(spec["kind"])
+    sql = (
+        "SELECT max({date}) AS max_date, count(*) AS row_count\n"
+        "FROM {table} {alias}\n"
+        "{joins}\n"
+        "WHERE {date} >= {p0} AND {date} <= {p1}\n"
+        "  AND {attr} = {p2}\n"
+        "  AND {exclude}"
+    ).format(
+        date=spec["date_expr"],
+        table=spec["table"],
+        alias=spec["alias"],
+        joins="\n".join(spec.get("joins", [])),
+        attr=spec["attribution_expr"],
+        exclude=spec["exclude_expr"],
+        p0=marks[0], p1=marks[1], p2=marks[2],
+    )
+    params = [contract["period"]["from"], contract["period"]["to"], contract["attribution"]]
+    return sql, params
+
+
+def fetch_provenance(contract: dict, side: str) -> dict:
+    """Из какой витрины пришла сторона: таблица, max(Date) и число строк в периоде.
+
+    Вердикт без провенанса неотличим от вердикта по частично собранной витрине
+    (спека §8: текущая v6 собрана прогоном со step6, без фикса rivendell). Поэтому
+    пустая выборка здесь — ошибка исполнения, а не «ноль строк»: гейт не имеет права
+    напечатать паспорт витрины, которой в периоде нет.
+    """
+    sql, params = build_provenance_query(contract, side)
+    rows = execute(contract["sides"][side]["kind"], sql, params)
+    if not rows or rows[0][1] in (None, 0):
+        raise SourceError(
+            "сторона %s: в периоде %s..%s нет ни одной строки — провенанс не собрать"
+            % (side, contract["period"]["from"], contract["period"]["to"]))
+    return {
+        "table": contract["sides"][side]["table"],
+        "max_date": rows[0][0],
+        "rows": int(rows[0][1]),
+        "run_id": None,
+        "run_at": None,
+    }
+
+
+def fetch_v6_run(contract: dict) -> Tuple[str, object]:
+    """(run_id, run_at) прогона, собравшего текущую витрину v6.
+
+    Отсутствие записи — тоже ошибка исполнения: см. fetch_provenance, вердикт без
+    паспорта прогона нельзя отличить от вердикта по частичной витрине.
+    """
+    rows = execute(contract["sides"]["v6"]["kind"], _V6_RUN_SQL, [_V6_BUILD_STEP])
+    if not rows:
+        raise SourceError(
+            "в ad_analytics.data_quality_log нет ни одной OK-записи шага %r — "
+            "нечем удостоверить, каким прогоном собрана витрина v6" % _V6_BUILD_STEP)
+    return rows[0][0], rows[0][1]
 
 
 def rows_to_map(rows, metric_names: List[str]) -> Dict[str, Dict[str, Decimal]]:

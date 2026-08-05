@@ -78,10 +78,20 @@ def concentration(deltas: Dict[str, Decimal]) -> Optional[Tuple[List[str], Decim
 _ACCEPTED_REQUIRED_KEYS = ("метрика", "измерение", "значение", "решение")
 
 
-def load_accepted(path: str) -> List[dict]:
-    """Читает реестр осознанных отличий. Каждая запись валидируется целиком: битая
-    запись (пропущенный/опечатанный ключ) роняет загрузку сразу, а не проваливается
-    молча в apply_accepted — иначе сломанное решение и устаревшее решение неотличимы.
+def load_accepted(path: str, contract: dict) -> List[dict]:
+    """Читает реестр осознанных отличий и сверяет каждую запись с контрактом.
+
+    Структура валидируется целиком: битая запись (пропущенный/опечатанный ключ)
+    роняет загрузку сразу, а не проваливается молча в apply_accepted — иначе
+    сломанное решение и устаревшее решение неотличимы.
+
+    Имена `метрика`/`измерение` сверяются со СЛОВАРЁМ КОНТРАКТА, а не только с
+    самими собой. Опечатка («Название CRM» вместо «Название crm», «Продажи» вместо
+    «продажи») даёт запись, которая не сработает НИКОГДА и при этом никогда не будет
+    названа устаревшей: развёртка stale ищет неиспользованные записи в той же паре
+    (метрика, измерение), которая ни с чем не совпадает. Это ровно тот молчаливый
+    класс, который запрещает §7 спеки, — внутри файла, чья работа держать решения
+    Семёна на виду.
     """
     try:
         with open(path, encoding="utf-8") as fh:
@@ -91,6 +101,9 @@ def load_accepted(path: str) -> List[dict]:
     if not isinstance(data, list):
         raise ContractError("реестр отличий должен быть списком")
 
+    known_metrics = set(contract["metrics"])
+    known_dimensions = set(contract["dimensions"])
+
     seen: Dict[Tuple[object, object, object], int] = {}
     for idx, entry in enumerate(data, start=1):
         if not isinstance(entry, dict):
@@ -99,6 +112,16 @@ def load_accepted(path: str) -> List[dict]:
         if missing:
             raise ContractError(
                 "запись %d реестра отличий: не хватает ключей %s" % (idx, ", ".join(missing))
+            )
+        if entry["метрика"] not in known_metrics:
+            raise ContractError(
+                "запись %d реестра отличий: метрика %r не описана в контракте "
+                "(известны: %s)" % (idx, entry["метрика"], ", ".join(sorted(known_metrics)))
+            )
+        if entry["измерение"] not in known_dimensions:
+            raise ContractError(
+                "запись %d реестра отличий: измерение %r не описано в контракте "
+                "(известны: %s)" % (idx, entry["измерение"], ", ".join(sorted(known_dimensions)))
             )
         triple = (entry["метрика"], entry["измерение"], entry["значение"])
         if triple in seen:
@@ -112,7 +135,13 @@ def load_accepted(path: str) -> List[dict]:
 
 def apply_accepted(diffs: Dict[str, dict], accepted: List[dict],
                    metric: str, dimension: str) -> Tuple[Dict[str, dict], List[dict]]:
-    """Гасит расхождения, закрытые решением Семёна. Возвращает (diffs, устаревшие записи)."""
+    """Гасит расхождения, закрытые решением Семёна.
+
+    Возвращает (diffs, устаревшие ЗДЕСЬ записи) — второй элемент виден только в
+    границах одного среза. Итоговый список устаревших записей run.py собирает сам
+    глобальной развёрткой по всему прогону: запись, чьё измерение вообще не попало
+    в спуск, в per-slice развёртке не видна ни разу.
+    """
     used = set()
     for key, row in diffs.items():
         for idx, entry in enumerate(accepted):

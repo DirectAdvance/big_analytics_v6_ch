@@ -45,25 +45,89 @@ def format_totals(totals: Dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
+_TOP_CONTRIBUTORS = 3
+
+
+def _signed(value: Decimal) -> str:
+    """Дельта всегда со знаком: читателю нужно направление, а не только модуль."""
+    text = _fmt(value)
+    return text if text.startswith("-") else "+" + text
+
+
+def format_contributors(rows: Dict[str, dict]) -> str:
+    """Верхние вкладчики среза с величинами: «март -2104 · апрель -1987 · ост. (14) -861».
+
+    Берутся только ОТКРЫТЫЕ MISMATCH — те же строки, на которых считается концентрация.
+    Погашенные решением и дробный шум сюда не попадают, иначе величины в спуске
+    рассказывали бы не про то расхождение, которое держит гейт.
+    """
+    open_rows = [(key, row["delta"]) for key, row in rows.items()
+                 if row.get("verdict") == MISMATCH]
+    if not open_rows:
+        return ""
+    ranked = sorted(open_rows, key=lambda kv: abs(kv[1]), reverse=True)
+    parts = ["%s %s" % (key, _signed(delta)) for key, delta in ranked[:_TOP_CONTRIBUTORS]]
+    rest = ranked[_TOP_CONTRIBUTORS:]
+    if rest:
+        # Количество остатка печатается рядом с суммой: 14 взаимогасящихся ключей
+        # дают «ост. +0», и без счётчика это читалось бы как «там ничего нет».
+        parts.append("ост. (%d) %s" % (len(rest), _signed(sum((d for _, d in rest),
+                                                             Decimal("0")))))
+    return " · ".join(parts)
+
+
 def format_drilldown(metric: str, per_dimension: Dict[str, dict]) -> str:
     lines = ["УРОВЕНЬ 1 — СПУСК по метрике «%s»" % metric]
     for dimension, payload in per_dimension.items():
         hotspot = payload.get("hotspot")
         if hotspot:
             keys, share = hotspot
-            lines.append("  по %-16s %s (%.0f%%)  🎯 концентрация"
-                         % (dimension.upper(), " · ".join(keys), share * 100))
+            tail = "%s (%.0f%%)  🎯 концентрация" % (" · ".join(keys), share * 100)
         else:
-            lines.append("  по %-16s размазано → не здесь" % dimension.upper())
+            tail = "размазано → не здесь"
+        lines.append("  по %-16s %s" % (dimension.upper(), tail))
+        contributors = format_contributors(payload.get("rows") or {})
+        if contributors:
+            lines.append("     %-16s %s" % ("", contributors))
+    return "\n".join(lines)
+
+
+def format_provenance(provenance: Dict[str, dict]) -> str:
+    """Шапка «откуда взята каждая сторона» (спека §5)."""
+    lines = []
+    for side in ("v5", "v6"):
+        info = provenance[side]
+        run = ("прогон %s от %s" % (info["run_id"], info["run_at"])
+               if info.get("run_id") else "журнала прогонов нет")
+        lines.append("  %s: %s   строк %d   max(Date) %s   %s"
+                     % (side, info["table"], info["rows"], info["max_date"], run))
+    return "\n".join(lines)
+
+
+def format_restrictions(restrictions: Dict[str, dict]) -> str:
+    """Сужённые срезы печатаются, а не пропадают (спека §5)."""
+    lines = ["СРЕЗ СУЖЕН (сравнивались НЕ все значения измерения)"]
+    for dimension, info in restrictions.items():
+        lines.append("  измерение «%s»: сравнивалось %d значений (%s)"
+                     % (dimension, len(info["kept"]), ", ".join(info["kept"])))
+        for side in ("v5", "v6"):
+            excluded = info["excluded_%s" % side]
+            lines.append("    отложено %s (%d): %s"
+                         % (side, len(excluded), ", ".join(excluded) or "—"))
     return "\n".join(lines)
 
 
 def format_report(result: dict) -> str:
     open_mismatch = [n for n, r in result["totals"].items() if r["verdict"] == MISMATCH]
-    parts = ["ГЕЙТ v5 → v6   период %s   атрибуция: по дате заявки" % result["period"], "",
-             format_totals(result["totals"])]
+    parts = ["ГЕЙТ v5 → v6   период %s   атрибуция: %s"
+             % (result["period"], result["attribution"])]
+    if result.get("provenance"):
+        parts.append(format_provenance(result["provenance"]))
+    parts += ["", format_totals(result["totals"])]
     for metric, per_dim in result["drilldown"].items():
         parts += ["", format_drilldown(metric, per_dim)]
+    if result.get("restrictions"):
+        parts += ["", format_restrictions(result["restrictions"])]
     if result["accepted"]:
         parts += ["", "ОСОЗНАННЫЕ ОТЛИЧИЯ (погашены решением)"]
         for entry in result["accepted"]:
