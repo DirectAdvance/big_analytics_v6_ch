@@ -6,12 +6,16 @@
 """
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
+
+from data_check.compare.contract import ContractError
 
 MATCH = "MATCH"
 FRACTIONAL = "FRACTIONAL"
 MISMATCH = "MISMATCH"
+ACCEPTED = "ACCEPTED"
 
 _CONCENTRATION_SHARE = Decimal("0.8")
 _CONCENTRATION_MAX_KEYS = 3
@@ -69,3 +73,33 @@ def concentration(deltas: Dict[str, Decimal]) -> Optional[Tuple[List[str], Decim
         if acc / total >= _CONCENTRATION_SHARE:
             return picked, acc / total
     return None
+
+
+def load_accepted(path: str) -> List[dict]:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ContractError("не читается реестр отличий %s: %s" % (path, exc))
+    if not isinstance(data, list):
+        raise ContractError("реестр отличий должен быть списком")
+    return data
+
+
+def apply_accepted(diffs: Dict[str, dict], accepted: List[dict],
+                   metric: str, dimension: str) -> Tuple[Dict[str, dict], List[dict]]:
+    """Гасит расхождения, закрытые решением Семёна. Возвращает (diffs, устаревшие записи)."""
+    used = set()
+    for key, row in diffs.items():
+        for idx, entry in enumerate(accepted):
+            if (entry.get("метрика") == metric
+                    and entry.get("измерение") == dimension
+                    and entry.get("значение") == key):
+                row["original_verdict"] = row["verdict"]
+                row["verdict"] = ACCEPTED
+                row["решение"] = entry.get("решение", "")
+                used.add(idx)
+    stale = [e for i, e in enumerate(accepted)
+             if e.get("метрика") == metric and e.get("измерение") == dimension
+             and i not in used]
+    return diffs, stale
