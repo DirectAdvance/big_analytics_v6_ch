@@ -1,7 +1,7 @@
 """Текстовый отчёт гейта."""
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Dict
 
 from data_check.compare.differ import ACCEPTED, FRACTIONAL, MISMATCH
@@ -10,7 +10,27 @@ _FRACTIONAL_NOTE = "дробный остаток"
 
 
 def _fmt(value: Decimal) -> str:
-    return ("%.6f" % value).rstrip("0").rstrip(".") if value % 1 else "%d" % value
+    """Форматирует Decimal для вывода, не мутируя исходное значение.
+
+    Ноль всегда печатается как "0" (без знака). Ненулевое значение никогда не
+    печатается как "0"/"-0" — если 6-знаковое округление коллапсирует его в ноль
+    (например, Decimal('-1E-7')), отдаём str(value), чтобы читатель видел, что
+    это реальное ненулевое число, а не совпадение.
+    """
+    if value == 0:
+        return "0"
+    try:
+        has_fraction = bool(value % 1)
+    except InvalidOperation:
+        # value % 1 не помещается в текущую точность контекста (сверхбольшая
+        # экспонента) — не роняем форматирование, отдаём как есть.
+        return str(value)
+    if not has_fraction:
+        return "%d" % value
+    text = ("%.6f" % value).rstrip("0").rstrip(".")
+    if text in ("0", "-0", ""):
+        return str(value)
+    return text
 
 
 def format_totals(totals: Dict[str, dict]) -> str:
