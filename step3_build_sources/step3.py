@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, q, replace_view, swap_shadow
+from step1_load_raw.step1 import MARCAR_SOURCE_TYPE, MARCAR_STATUS_PRIORITY
 
 logger = logging.getLogger("pipeline.step3")
 
@@ -182,6 +183,52 @@ def check_crm_mapping_coverage(client) -> list[str]:
     if not problems:
         logger.info("  CRM mapping coverage OK: %d source_type покрыты crm_status_mapping", len(rows))
     return problems
+
+
+def check_marcar_status_mapping(client) -> None:
+    """MARCAR_STATUS_GUARD_2026-08-05 — fail-fast на связку «код ↔ справочник».
+
+    `step1` (`MARCAR_GSHEET_STATUS_2026-08-05`) проставляет лидам Маркара статусы из
+    `MARCAR_STATUS_PRIORITY` по гугл-таблице приездов. Парная половина правки —
+    строки этих статусов в `raw_data.crm_status_mapping`
+    (`migrations/02_status_mapping_ab_2026-08-05.py`, ветка A). Если миграция не
+    применена — или откачена без отката кода — статуса нет в справочнике,
+    `_category_match_expr` не находит его ни в одной категории, и воронка патченых
+    лидов МОЛЧА обнуляется (замерено на паритете с v5: priezd ≈ −646, prodazhi −6).
+    Порядок правок обязан быть парным в ОБЕ стороны, поэтому проверка симметрична:
+    любой из двух статусов рассинхрона роняет шаг.
+
+    ⚠️ Существующий `check_crm_mapping_coverage` этого НЕ ловит: он проверяет
+    наличие ключа `crm`, а не статусов внутри него, — ключ `marcar` есть всегда,
+    и проверка рапортует «coverage OK».
+
+    Условие `reason = '' AND salon = ''` — не косметика: `_category_match_expr`
+    матчит голый статус только по этой ветке справочника, строка с заполненным
+    reason/salon воронку патченого лида не включит.
+    """
+    crm = _crm_key(MARCAR_SOURCE_TYPE)
+    statuses_sql = ", ".join(f"'{status}'" for status in MARCAR_STATUS_PRIORITY)
+    mapped = {
+        str(row[0])
+        for row in client.query(
+            f"""
+            SELECT DISTINCT status
+            FROM raw_data.crm_status_mapping
+            WHERE crm = '{crm}' AND ifNull(reason, '') = '' AND ifNull(salon, '') = ''
+              AND status IN ({statuses_sql})
+            """
+        ).result_rows
+    }
+    missing = [status for status in MARCAR_STATUS_PRIORITY if status not in mapped]
+    if missing:
+        raise RuntimeError(
+            f"raw_data.crm_status_mapping: для crm={crm!r} нет статусов {missing} "
+            f"(reason='' и salon=''), которые проставляет патч Маркара в step1_load_raw/step1.py "
+            "(MARCAR_STATUS_PRIORITY). Воронка патченых лидов обнулится молча. "
+            "Примените migrations/02_status_mapping_ab_2026-08-05.py --apply --only=A "
+            "либо откатите патч в step1."
+        )
+    logger.info("  Marcar status mapping OK: %d статусов патча покрыты crm=%r", len(mapped), crm)
 
 
 def _category_match_expr(
@@ -424,17 +471,108 @@ def _rebuild_leads_deduped_stage(client):
     return client, count_rows(client, target)
 
 
-def _ag_parts_expr(prefix: str = "") -> str:
+def _ag_part_exprs(prefix: str = "") -> list[str]:
     ag = f"{prefix}adgroup_code"
-    return f"""
-    splitByChar('_', ifNull({ag}, ''))[1] AS ag_part1,
-    splitByChar('_', ifNull({ag}, ''))[2] AS ag_part2,
-    splitByChar('_', ifNull({ag}, ''))[3] AS ag_part3,
-    splitByChar('_', ifNull({ag}, ''))[4] AS ag_part4,
-    splitByChar('_', ifNull({ag}, ''))[5] AS ag_part5,
-    splitByChar('_', ifNull({ag}, ''))[6] AS ag_part6,
-    splitByChar('_', ifNull({ag}, ''))[7] AS ag_part7
+    return [f"splitByChar('_', ifNull({ag}, ''))[{idx}]" for idx in range(1, 8)]
+
+
+def _ag_parts_expr(prefix: str = "") -> str:
+    parts = ",\n    ".join(f"{expr} AS ag_part{idx}" for idx, expr in enumerate(_ag_part_exprs(prefix), start=1))
+    return f"\n    {parts}\n"
+
+
+def _direct_napravlenie_expr(prefix: str = "yd.") -> str:
+    """`направление` строки Директа: посевные кодеры tp8/tp9/tp10 → 'Комплекс'."""
+    tp = f"ifNull({prefix}tp, '')"
+    return f"if(startsWith({tp}, 'tp8') OR startsWith({tp}, 'tp9') OR startsWith({tp}, 'tp10'), 'Комплекс', 'Контекст')"
+
+
+def _direct_source_table_expr(prefix: str = "yd.") -> str:
+    """`_source_table` строки Директа — v6-эквивалент v5 `_move_tp8_to_crop()`."""
+    tp = f"ifNull({prefix}tp, '')"
+    return (
+        f"if(startsWith({tp}, 'tp8'), 'tp8', "
+        f"if(startsWith({tp}, 'tp9'), 'tp9', "
+        f"if(startsWith({tp}, 'tp10'), 'tp10', 'direct')))"
+    )
+
+
+# Универс посевов — общее определение для ветки crop и для гейта посевной активности
+# (POSEVY_MIXED_DOMAIN_ROUTING_FIX ниже). Два разных списка utm молча разошлись бы.
+_CROP_UTM_FILTER = """
+(
+    ifNull(utm_source, '') IN ('telegram','stories_tg','vk_storis','telegram_storis','max','vk','vk_groups','vkads')
+    OR ifNull(utm_medium, '') IN ('posev','paid_social')
+)
 """
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POSEVY_MIXED_DOMAIN_ROUTING_FIX (порт v5 step6_build_full/step6.py:741-775)
+# ------------------------------------------------------------------------------
+# Лид без матча Директ-кампании (direct_zero / direct_unmatched) на СМЕШАННОМ
+# посевном домене (`gsheet_sites.direction_main='Посевы'`) в v5 красится в
+# `источник='Посевы_Telegram'`, иначе весь посевной трафик такого домена уезжает
+# в 'Контекст' — срез по каналу смещается. Подтип канала (Telegram/Max/VK) для
+# этой ветки неизвестен (ни tp, ни utm-канал сюда не долетают), поэтому берётся
+# тот же дефолт, что и у step10 для неопределённого канала посевов — Telegram.
+#
+# EXISTS-гейт v5 (POSEVY_ALLTIME_ACTIVITY_GATE_2026-08-05) сохранён: репейнтятся
+# только домены с РЕАЛЬНОЙ посевной активностью за всю историю. В v5 гейт смотрел
+# на {T_CROP} (`_source_table IN ('crop_targeting','tp8','tp9','tp10')` И
+# `kol_vo_zayavok > 0`); в v6 обе половины выражены через ИСТОЧНИК тех же строк —
+# лиды staging-таблицы со статусом (`kol_vo_zayavok > 0` ⟺ `status != ''`):
+#   * crop_targeting → лид посевного utm-универса (`_CROP_UTM_FILTER`);
+#   * tp8/tp9/tp10   → лид с посевным кодером в собственной `utm_campaign`.
+# ⚠️ tp-половину НЕЛЬЗЯ выкидывать: замерено, что 25 из 43 посевных доменов с
+# такими лидами засеяны ТОЛЬКО через tp-кампании Директа и в utm-универс не
+# попадают вовсе (ufa-autohouse.ru: 0 crop-utm лидов против 784 tp-лидов).
+# Кодер берётся из `utm_campaign` лида, а НЕ из `raw_yandex.tp`: на посевных
+# доменах оба определения дают идентичное множество (замерено: 0 расхождений в
+# обе стороны), а чтение staging-таблицы не требует полного скана raw_yandex
+# в каждом из ~217 дневных батчей.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_POSEV_REPAINT_PREDICATE = "l.domain_key IN (SELECT domain_key FROM posev_repaint_domains)"
+# Посевные кодеры Директа (tp8/tp9/tp10) в utm_campaign лида. tp6/tp7 — не посевы.
+_POSEV_TP_CODER_RE = "(?i)tp(8|9|10)_(cpc|cpa)_"
+
+
+def _posev_repaint_cte() -> str:
+    return f"""
+posev_active_domains AS
+(
+    SELECT DISTINCT lower(trim(ifNull(domain, ''))) AS domain_key
+    FROM ad_analytics.{LEADS_DEDUPED_STAGE}
+    WHERE ifNull(status, '') != ''
+      AND ifNull(domain, '') != ''
+      AND (
+          {_CROP_UTM_FILTER.strip()}
+          OR match(ifNull(utm_campaign, ''), '{_POSEV_TP_CODER_RE}')
+      )
+),
+posev_repaint_domains AS
+(
+    SELECT DISTINCT lower(trim(ifNull(gs.domain, ''))) AS domain_key
+    FROM raw_data.gsheet_sites gs
+    WHERE gs.direction_main = 'Посевы'
+      AND ifNull(gs.domain, '') != ''
+      AND lower(trim(ifNull(gs.domain, ''))) IN (SELECT domain_key FROM posev_active_domains)
+)"""
+
+
+def _unmatched_source_expr() -> str:
+    """`источник` ветки direct_unmatched — порт v5 step3.py:1090-1096 + repaint 6a3.
+
+    v5 сначала ставит источник по `gsheet_sites.status`, а посевной repaint (step6 6a3)
+    трогает ТОЛЬКО строки, у которых источник остался NULL. Порядок ветвей multiIf
+    воспроизводит это: статус выигрывает у repaint'а.
+    """
+    return f"""multiIf(
+        gs.status = 'Контекст активно', 'Контекст',
+        gs.status = 'SEO', 'SEO',
+        gs.status = 'SEO Flow', 'SEO Flow',
+        {_POSEV_REPAINT_PREDICATE}, 'Посевы_Telegram',
+        'Контекст')"""
 
 
 def _gs_pick_expr(field: str) -> str:
@@ -468,8 +606,17 @@ def _direct_lead_universe_filter(prefix: str = "") -> str:
     """Единый предикат «лид принадлежит Директу» — не SEO, не пиксель, не соц.посевы.
 
     Используется И основной веткой (`lead_scored` в `_build_direct_sql`), И ветками
-    direct_unmatched / direct_zero. Одно определение на три ветки — иначе разъезд
-    фильтров даст либо потерю лидов, либо двойной учёт.
+    direct_cascade / direct_unmatched / direct_zero. Одно определение на четыре ветки —
+    иначе разъезд фильтров даст либо потерю лидов, либо двойной учёт.
+
+    DIRECT_CROP_DISJOINT_2026-08-05: исключение по `utm_medium` — вторая половина
+    дизъюнктности с `_build_crop_sql_batched`. Тот ловит посев ДВУМЯ условиями
+    (`utm_source IN (…соц…)` OR `utm_medium IN ('posev','paid_social')`), а здесь
+    исключался только `utm_source` — 562 лида 2026 попадали в ОБА универса
+    одновременно. Сегодня они не задваиваются лишь потому, что их домены не
+    проходят гейт `gs.direction='Авто'` у lead-веток Директа; у crop-ветки такого
+    гейта нет, поэтому смена `direction` одного домена на 'Авто' немедленно дала бы
+    двойной учёт лида. Ср. v5 step3.py:2744 — там случай исключён явно.
     """
     p = prefix
     return f"""
@@ -477,6 +624,7 @@ def _direct_lead_universe_filter(prefix: str = "") -> str:
       AND NOT (ifNull({p}utm_source, '') = '' OR ({p}utm_source = 'seo' AND {p}utm_medium = 'organic'))
       AND ifNull({p}utm_source, '') NOT LIKE 'victory_%'
       AND ifNull({p}utm_source, '') NOT IN ('telegram','stories_tg','vk_storis','telegram_storis','max','vk','vk_groups','vkads')
+      AND ifNull({p}utm_medium, '') NOT IN ('posev','paid_social')
 """
 
 
@@ -484,15 +632,14 @@ def _lead_date_filter(lo: str, hi: str) -> str:
     return f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"
 
 
-def _build_direct_sql(target_table: str, raw_date_filter: str = "") -> str:
+def _yd_agg_cte(raw_date_filter: str = "") -> str:
+    """CTE `yd` — статистика Директа, свёрнутая по key3.
+
+    Вынесено из `_build_direct_sql`, чтобы каскадная ветка (`_build_direct_cascade_sql`)
+    матчилась ровно к тому же агрегату, что и основная ветка. Два определения одного
+    агрегата разъехались бы (v5 держит один `yd_agg` на обе ветки).
+    """
     return f"""
-CREATE TABLE ad_analytics.{target_table}
-ENGINE = MergeTree
-PARTITION BY toYYYYMM(`Date`)
-ORDER BY (`Date`, ifNull(`CampaignId`, 0), ifNull(key3, ''))
-AS
-WITH
-{_gs_account_cte()},
 yd AS
 (
     SELECT
@@ -520,7 +667,20 @@ yd AS
     WHERE 1 = 1
       {raw_date_filter}
     GROUP BY key3
-),
+)
+"""
+
+
+def _build_direct_sql(target_table: str, raw_date_filter: str = "") -> str:
+    return f"""
+CREATE TABLE ad_analytics.{target_table}
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(`Date`)
+ORDER BY (`Date`, ifNull(`CampaignId`, 0), ifNull(key3, ''))
+AS
+WITH
+{_gs_account_cte()},
+{_yd_agg_cte(raw_date_filter).strip()},
 gs_best AS
 (
     SELECT *
@@ -654,7 +814,7 @@ SELECT
     {_gs_pick_expr("client_id")} AS `id_салона`,
     {_gs_pick_expr("sales_manager")} AS `менеджер`,
     'Контекст' AS `источник`,
-    if(startsWith(ifNull(yd.tp, ''), 'tp8') OR startsWith(ifNull(yd.tp, ''), 'tp9') OR startsWith(ifNull(yd.tp, ''), 'tp10'), 'Комплекс', 'Контекст') AS `направление`,
+    {_direct_napravlenie_expr("yd.")} AS `направление`,
     concat(toString(yd.`CampaignId`), '|', ifNull(yd.`CampaignName`, '')) AS `номер кампании | название кампании`,
     concat(toString(yd.`AdGroupId`), '|', ifNull(yd.`AdGroupName`, '')) AS `номер группы | название группы`,
     CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
@@ -663,7 +823,7 @@ SELECT
     CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
     CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
     'Яндекс' AS `поставщик`,
-    if(startsWith(ifNull(yd.tp, ''), 'tp8'), 'tp8', if(startsWith(ifNull(yd.tp, ''), 'tp9'), 'tp9', if(startsWith(ifNull(yd.tp, ''), 'tp10'), 'tp10', 'direct'))) AS _source_table,
+    {_direct_source_table_expr("yd.")} AS _source_table,
     CAST(NULL, 'Nullable(String)') AS cascade_level,
     cs.campaign_status AS campaign_status,
     cs.payment_model AS payment_model
@@ -677,6 +837,96 @@ WHERE ifNull({_gs_pick_expr("direction")}, 'Авто') = 'Авто'
 """
 
 
+def _lead_source_columns(
+    source_expr: str,
+    direction_expr: str,
+    provider: str,
+    source_table_expr: str,
+) -> list[tuple[str, str]]:
+    """Единый УПОРЯДОЧЕННЫЙ список колонок всех лид-веток: (алиас, SQL-выражение).
+
+    Порядок обязан совпадать с `_build_direct_sql` — все ветки льются одним
+    `INSERT INTO <shadow> SELECT …`, а он в ClickHouse ПОЗИЦИОННЫЙ: перестановка
+    колонок молча разложит значения не по тем полям. Поэтому список ровно один на
+    все лид-ветки, а расхождения задаются через `overrides` в
+    `_build_lead_source_sql`, а не копией SELECT'а.
+    """
+    return [
+        ("key3", "l.key3"),
+        ("Date", "l.created_date"),
+        ("День недели", _weekday_expr("l.created_date")),
+        ("week_start", "toStartOfWeek(l.created_date, 1)"),
+        ("CampaignId", "l.campaign_id"),
+        ("CampaignName", "CAST(NULL, 'Nullable(String)')"),
+        ("AdGroupId", "l.group_id"),
+        ("AdGroupName", "CAST(NULL, 'Nullable(String)')"),
+        ("AdNetworkType", "CAST(NULL, 'Nullable(String)')"),
+        ("Device", "CAST(NULL, 'Nullable(String)')"),
+        ("Impressions", "toDecimal64(0, 6)"),
+        ("Clicks", "toDecimal64(0, 6)"),
+        ("total_cost", "toDecimal64(0, 6)"),
+        ("domain", "l.domain"),
+        ("RlAdjustmentId", "l.correction_id"),
+        ("RlAdjustmentId_total", "toString(l.correction_id)"),
+        ("campaign_code", "CAST(NULL, 'Nullable(String)')"),
+        ("tp", "CAST(NULL, 'Nullable(String)')"),
+        ("cpc_cpa", "CAST(NULL, 'Nullable(String)')"),
+        ("site_quiz", "CAST(NULL, 'Nullable(String)')"),
+        ("adgroup_code", "CAST(NULL, 'Nullable(String)')"),
+        ("account_login", "gs.login_key"),
+        ("manager_login", "gs.directologist"),
+        ("ag_part1", "CAST(NULL, 'Nullable(String)')"),
+        ("ag_part2", "CAST(NULL, 'Nullable(String)')"),
+        ("ag_part3", "CAST(NULL, 'Nullable(String)')"),
+        ("ag_part4", "CAST(NULL, 'Nullable(String)')"),
+        ("ag_part5", "CAST(NULL, 'Nullable(String)')"),
+        ("ag_part6", "CAST(NULL, 'Nullable(String)')"),
+        ("ag_part7", "CAST(NULL, 'Nullable(String)')"),
+        ("марки авто", "''"),
+        ("Название crm", "crm.crm_name"),
+        ("тип_заявки", "if(ifNull(l.deal_type, '') = '', 'Заявка', l.deal_type)"),
+        ("kol_vo_zayavok", "l.kol_vo_zayavok"),
+        ("korr", "l.korr"),
+        ("kval", "l.kval"),
+        ("priezd", "l.priezd"),
+        ("prodazhi", "l.prodazhi"),
+        ("nekorr", "l.nekorr"),
+        ("ne_otvechaet", "l.ne_otvechaet"),
+        ("filtr", "l.filtr"),
+        ("nedozvon", "l.nedozvon"),
+        ("priedet", "l.priedet"),
+        ("dohod_do_kredita", "l.dohod_do_kredita"),
+        ("dobro", "l.dobro"),
+        ("статус", "gs.status"),
+        ("специалист", _domain_specialist_expr("gs")),
+        ("тип_сайта", "gs.site_type"),
+        ("шаблон", "gs.template"),
+        ("салон", "coalesce(nullIf(l.salon, ''), gs.salon)"),
+        ("город", "gs.city"),
+        ("регион", "gs.region"),
+        ("direction", "gs.direction"),
+        ("неверный_кодер_new", "CAST(NULL, 'Nullable(String)')"),
+        ("fid", "l.fid"),
+        ("проджект", "gs.project_manager"),
+        ("id_салона", "gs.client_id"),
+        ("менеджер", "gs.sales_manager"),
+        ("источник", source_expr),
+        ("направление", direction_expr),
+        ("номер кампании | название кампании", "CAST(NULL, 'Nullable(String)')"),
+        ("номер группы | название группы", "CAST(NULL, 'Nullable(String)')"),
+        ("План заявки", "CAST(NULL, 'Nullable(Int32)')"),
+        ("План приезда", "CAST(NULL, 'Nullable(Int32)')"),
+        ("аккаунт|сайт", "concat(ifNull(gs.login_key, ''), '|', ifNull(l.domain, ''))"),
+        ("priezd_arrival_date", "CAST(NULL, 'Nullable(Int64)')"),
+        ("prodazhi_arrival_date", "CAST(NULL, 'Nullable(Int64)')"),
+        ("поставщик", f"'{provider}'"),
+        ("_source_table", source_table_expr),
+        ("cascade_level", "CAST(NULL, 'Nullable(String)')"),
+        ("campaign_status", "CAST(NULL, 'Nullable(String)')"),
+        ("payment_model", "CAST(NULL, 'Nullable(String)')"),
+    ]
+
+
 def _build_lead_source_sql(
     table: str,
     source_filter: str,
@@ -686,7 +936,23 @@ def _build_lead_source_sql(
     lead_date_filter: str = "",
     source_table: str | None = None,
     extra_where: str = "",
+    extra_ctes: str = "",
+    extra_joins: str = "",
+    overrides: dict[str, str] | None = None,
 ) -> str:
+    columns = _lead_source_columns(
+        f"'{source_name}'",
+        f"'{direction_name}'",
+        provider,
+        f"'{source_table or table.replace('big_analytics_', '')}'",
+    )
+    if overrides:
+        known = {alias for alias, _ in columns}
+        unknown = sorted(set(overrides) - known)
+        if unknown:
+            raise ValueError(f"unknown lead-source column overrides: {unknown}")
+        columns = [(alias, overrides.get(alias, expr)) for alias, expr in columns]
+    select_list = ",\n    ".join(f"{expr} AS {q(alias)}" for alias, expr in columns)
     return f"""
 CREATE TABLE ad_analytics.{table}
 ENGINE = MergeTree
@@ -695,6 +961,7 @@ ORDER BY (ifNull(`Date`, toDate('2026-01-01')), ifNull(domain, ''), ifNull(key3,
 AS
 WITH
 {_gs_account_cte()},
+{extra_ctes}
 lead_scored AS
 (
     SELECT
@@ -753,81 +1020,11 @@ gs_domain_best AS
     WHERE rn = 1
 )
 SELECT
-    l.key3 AS key3,
-    l.created_date AS `Date`,
-    {_weekday_expr("l.created_date")} AS `День недели`,
-    toStartOfWeek(l.created_date, 1) AS week_start,
-    l.campaign_id AS `CampaignId`,
-    CAST(NULL, 'Nullable(String)') AS `CampaignName`,
-    l.group_id AS `AdGroupId`,
-    CAST(NULL, 'Nullable(String)') AS `AdGroupName`,
-    CAST(NULL, 'Nullable(String)') AS `AdNetworkType`,
-    CAST(NULL, 'Nullable(String)') AS `Device`,
-    toDecimal64(0, 6) AS `Impressions`,
-    toDecimal64(0, 6) AS `Clicks`,
-    toDecimal64(0, 6) AS total_cost,
-    l.domain AS domain,
-    l.correction_id AS `RlAdjustmentId`,
-    toString(l.correction_id) AS `RlAdjustmentId_total`,
-    CAST(NULL, 'Nullable(String)') AS campaign_code,
-    CAST(NULL, 'Nullable(String)') AS tp,
-    CAST(NULL, 'Nullable(String)') AS cpc_cpa,
-    CAST(NULL, 'Nullable(String)') AS site_quiz,
-    CAST(NULL, 'Nullable(String)') AS adgroup_code,
-    gs.login_key AS account_login,
-    gs.directologist AS manager_login,
-    CAST(NULL, 'Nullable(String)') AS ag_part1,
-    CAST(NULL, 'Nullable(String)') AS ag_part2,
-    CAST(NULL, 'Nullable(String)') AS ag_part3,
-    CAST(NULL, 'Nullable(String)') AS ag_part4,
-    CAST(NULL, 'Nullable(String)') AS ag_part5,
-    CAST(NULL, 'Nullable(String)') AS ag_part6,
-    CAST(NULL, 'Nullable(String)') AS ag_part7,
-    '' AS `марки авто`,
-    crm.crm_name AS `Название crm`,
-    if(ifNull(l.deal_type, '') = '', 'Заявка', l.deal_type) AS `тип_заявки`,
-    l.kol_vo_zayavok,
-    l.korr,
-    l.kval,
-    l.priezd,
-    l.prodazhi,
-    l.nekorr,
-    l.ne_otvechaet,
-    l.filtr,
-    l.nedozvon,
-    l.priedet,
-    l.dohod_do_kredita,
-    l.dobro,
-    gs.status AS `статус`,
-    {_domain_specialist_expr("gs")} AS `специалист`,
-    gs.site_type AS `тип_сайта`,
-    gs.template AS `шаблон`,
-    coalesce(nullIf(l.salon, ''), gs.salon) AS `салон`,
-    gs.city AS `город`,
-    gs.region AS `регион`,
-    gs.direction AS direction,
-    CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
-    l.fid AS fid,
-    gs.project_manager AS `проджект`,
-    gs.client_id AS `id_салона`,
-    gs.sales_manager AS `менеджер`,
-    '{source_name}' AS `источник`,
-    '{direction_name}' AS `направление`,
-    CAST(NULL, 'Nullable(String)') AS `номер кампании | название кампании`,
-    CAST(NULL, 'Nullable(String)') AS `номер группы | название группы`,
-    CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
-    CAST(NULL, 'Nullable(Int32)') AS `План приезда`,
-    concat(ifNull(gs.login_key, ''), '|', ifNull(l.domain, '')) AS `аккаунт|сайт`,
-    CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
-    CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
-    '{provider}' AS `поставщик`,
-    '{source_table or table.replace("big_analytics_", "")}' AS _source_table,
-    CAST(NULL, 'Nullable(String)') AS cascade_level,
-    CAST(NULL, 'Nullable(String)') AS campaign_status,
-    CAST(NULL, 'Nullable(String)') AS payment_model
+    {select_list}
 FROM lead_scored l
 LEFT JOIN gs_domain_best gs ON gs.domain_key = l.domain_key AND gs.match_date = l.created_date
 LEFT JOIN crm_by_domain crm ON crm.domain_key = l.domain_key
+{extra_joins}
 WHERE ifNull(l.created_date, toDate('1970-01-01')) >= toDate('2026-01-01')
   {extra_where}
 """
@@ -847,13 +1044,9 @@ WHERE 0
 
 
 def _build_crop_sql() -> str:
-    filt = """
-(
-    ifNull(utm_source, '') IN ('telegram','stories_tg','vk_storis','telegram_storis','max','vk','vk_groups','vkads')
-    OR ifNull(utm_medium, '') IN ('posev','paid_social')
-)
-"""
-    return _build_lead_source_sql("big_analytics_crop_targeting", filt, "Посевы", "Комплекс", "Посевы")
+    return _build_lead_source_sql(
+        "big_analytics_crop_targeting", _CROP_UTM_FILTER, "Посевы", "Комплекс", "Посевы"
+    )
 
 
 def _build_seo_sql(lead_date_filter: str = "") -> str:
@@ -912,18 +1105,190 @@ def _build_pixel_sql(lead_date_filter: str = "") -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _build_direct_unmatched_sql(lo: str, hi: str) -> str:
-    """Лиды Директа, чьего key3 нет в статистике расхода (v5: direct_unmatched)."""
-    filt = f"""
-{_direct_lead_universe_filter("l.")}
-      AND l.key3 NOT LIKE '{_ZERO_KEY3_PATTERN}'
-      AND l.key3 NOT IN (
-          SELECT key3
-          FROM ad_analytics.raw_yandex
-          WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
-            AND ifNull(key3, '') != ''
-      )
+# ══════════════════════════════════════════════════════════════════════════════
+# CASCADE_MATCH_2026-07-03 (порт v5 step3.py:542-631, 1220-1235) — каскадный матчинг
+# ------------------------------------------------------------------------------
+# Лид, чьего key3 нет в статистике Директа один-в-один, всё-таки может принадлежать
+# известной кампании: CRM не парсит `r:` (correction_id), device в UTM расходится с
+# device Директа, а у tp6/tp7 group_id вообще занулён. v5 добирает такие лиды
+# каскадом по УКОРОЧЕННОМУ ключу и переводит их из `direct_unmatched` в `direct`:
+#   level 4 — date|campaign|group|device      (отброшен correction_id)
+#   level 3 — date|campaign|group             (отброшены device + correction_id)
+#   level 2 — date|campaign                   (отброшен ещё и group_id)
+# Каждый лид матчится РОВНО НА ОДНОМ уровне (v5: level3 исключает пойманных level4
+# и т.д.), при нескольких кандидатах берётся строка с max(total_cost).
+#
+# Порт использует ОДИН join вместо трёх: k4-равенство ⟹ k3a-равенство ⟹ k2-равенство,
+# поэтому join по k2 даёт полное множество кандидатов всех уровней, а
+# `ORDER BY cascade_rank DESC, match_cost DESC` внутри лида воспроизводит ту же
+# выборку, что три последовательных уровня v5 (сначала самый глубокий уровень,
+# внутри уровня — самый дорогой кандидат).
+#
+# Расход НЕ дублируется: total_cost/Impressions/Clicks = 0, строка расхода уже
+# посчитана основной веткой. Меняется только атрибуция воронки лида.
+#
+# Дизъюнктность с `direct_unmatched` — по построению, а не по вычитанию множеств:
+# лид попадает в каскад ⟺ у его key3 есть k2-кандидат в статистике; ветка
+# unmatched берёт ровно отрицание этого предиката (`_cascade_has_match_filter`).
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _key3_prefix(expr: str, parts: int) -> str:
+    """Первые `parts` компонент key3 (`date|campaign|group|device|correction`)."""
+    return f"arrayStringConcat(arraySlice(splitByChar('|', ifNull({expr}, '')), 1, {parts}), '|')"
+
+
+def _yd_key3_window(lo: str, hi: str) -> str:
+    return (
+        "SELECT key3 FROM ad_analytics.raw_yandex "
+        f"WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}') AND ifNull(key3, '') != ''"
+    )
+
+
+def _direct_lead_no_spend_filter(lo: str, hi: str, prefix: str = "l.") -> str:
+    """Универс лидов Директа без прямой пары в статистике: каскад + unmatched.
+
+    Одно определение на обе ветки — расхождение фильтров молча потеряло бы лиды
+    (лид не попал бы ни в одну ветку) или задвоило бы их.
+    """
+    return f"""
+{_direct_lead_universe_filter(prefix)}
+      AND {prefix}key3 NOT LIKE '{_ZERO_KEY3_PATTERN}'
+      AND {prefix}key3 NOT IN ({_yd_key3_window(lo, hi)})
 """
+
+
+def _cascade_has_match_filter(lo: str, hi: str, negate: bool, prefix: str = "l.") -> str:
+    """Предикат «у лида есть кандидат каскада» (k2 = date|campaign есть в статистике)."""
+    op = "NOT IN" if negate else "IN"
+    return f"""AND {_key3_prefix(prefix + "key3", 2)} {op} (
+          SELECT {_key3_prefix("key3", 2)} FROM ({_yd_key3_window(lo, hi)})
+      )"""
+
+
+def _cascade_ctes(lo: str, hi: str) -> str:
+    raw_date_filter = f"AND ry.`Date` >= toDate('{lo}') AND ry.`Date` < toDate('{hi}')"
+    yd_fields = [
+        "`CampaignId`",
+        "`CampaignName`",
+        "`AdGroupId`",
+        "`AdGroupName`",
+        "`AdNetworkType`",
+        "`Device`",
+        "`RlAdjustmentId`",
+        "account_login",
+        "manager_login",
+        "campaign_code",
+        "tp",
+        "cpc_cpa",
+        "site_quiz",
+        "adgroup_code",
+    ]
+    yk_list = ",\n        ".join(f"yk.{field} AS {field}" for field in yd_fields)
+    best_list = ",\n        ".join(yd_fields)
+    return f"""
+{_yd_agg_cte(raw_date_filter).strip()},
+yd_cascade AS
+(
+    SELECT
+        {", ".join(yd_fields)},
+        total_cost,
+        {_key3_prefix("key3", 4)} AS k4,
+        {_key3_prefix("key3", 3)} AS k3a,
+        {_key3_prefix("key3", 2)} AS k2
+    FROM yd
+),
+lead_cascade AS
+(
+    SELECT
+        l.key3 AS key3,
+        {_key3_prefix("l.key3", 4)} AS k4,
+        {_key3_prefix("l.key3", 3)} AS k3a,
+        {_key3_prefix("l.key3", 2)} AS k2
+    FROM ad_analytics.{LEADS_DEDUPED_STAGE} l
+    WHERE {_direct_lead_no_spend_filter(lo, hi)}
+      {_lead_date_filter(lo, hi)}
+),
+cascade_ranked AS
+(
+    SELECT
+        lk.key3 AS lead_key3,
+        multiIf(lk.k4 = yk.k4, 4, lk.k3a = yk.k3a, 3, 2) AS cascade_rank,
+        yk.total_cost AS match_cost,
+        {yk_list}
+    FROM yd_cascade yk
+    INNER JOIN lead_cascade lk ON lk.k2 = yk.k2
+),
+cascade_best AS
+(
+    SELECT
+        lead_key3,
+        toString(cascade_rank) AS cascade_level,
+        {best_list}
+    FROM
+    (
+        SELECT
+            *,
+            row_number() OVER (PARTITION BY lead_key3 ORDER BY cascade_rank DESC, match_cost DESC) AS rn
+        FROM cascade_ranked
+    )
+    WHERE rn = 1
+),
+"""
+
+
+def _build_direct_cascade_sql(lo: str, hi: str) -> str:
+    """Лиды Директа, добранные каскадом к кампании расхода (v5: `_source_table='direct'`)."""
+    filt = _direct_lead_no_spend_filter(lo, hi) + "      " + _cascade_has_match_filter(lo, hi, negate=False)
+    account_login = "coalesce(nullIf(ca.account_login, ''), gs.login_key)"
+    overrides = {
+        "CampaignId": "ca.`CampaignId`",
+        "CampaignName": "ca.`CampaignName`",
+        "AdGroupId": "ca.`AdGroupId`",
+        "AdGroupName": "ca.`AdGroupName`",
+        "AdNetworkType": "ca.`AdNetworkType`",
+        "Device": "ca.`Device`",
+        "RlAdjustmentId": "ca.`RlAdjustmentId`",
+        "RlAdjustmentId_total": "toString(ca.`RlAdjustmentId`)",
+        "campaign_code": "ca.campaign_code",
+        "tp": "ca.tp",
+        "cpc_cpa": "ca.cpc_cpa",
+        "site_quiz": "ca.site_quiz",
+        "adgroup_code": "ca.adgroup_code",
+        "account_login": account_login,
+        "manager_login": "coalesce(nullIf(ca.manager_login, ''), gs.directologist)",
+        "неверный_кодер_new": "if(ifNull(ca.campaign_code, '') = '', 'неверный кодер', NULL)",
+        "направление": _direct_napravlenie_expr("ca."),
+        "номер кампании | название кампании": "concat(toString(ca.`CampaignId`), '|', ifNull(ca.`CampaignName`, ''))",
+        "номер группы | название группы": "concat(toString(ca.`AdGroupId`), '|', ifNull(ca.`AdGroupName`, ''))",
+        "аккаунт|сайт": f"concat(ifNull({account_login}, ''), '|', ifNull(l.domain, ''))",
+        "_source_table": _direct_source_table_expr("ca."),
+        "cascade_level": "ca.cascade_level",
+        "campaign_status": "cs.campaign_status",
+        "payment_model": "cs.payment_model",
+        **{f"ag_part{idx}": expr for idx, expr in enumerate(_ag_part_exprs("ca."), start=1)},
+    }
+    return _build_lead_source_sql(
+        "big_analytics_direct_cascade",
+        filt,
+        "Контекст",
+        "Контекст",
+        "Яндекс",
+        _lead_date_filter(lo, hi),
+        source_table="direct",
+        extra_where="AND gs.direction = 'Авто'",
+        extra_ctes=_cascade_ctes(lo, hi).strip() + "\n",
+        extra_joins=(
+            "INNER JOIN cascade_best ca ON ca.lead_key3 = l.key3\n"
+            "LEFT JOIN ad_analytics.campaign_status_v cs ON cs.`CampaignId` = ca.`CampaignId`"
+        ),
+        overrides=overrides,
+    )
+
+
+def _build_direct_unmatched_sql(lo: str, hi: str) -> str:
+    """Лиды Директа, не добранные даже каскадом (v5: direct_unmatched)."""
+    filt = _direct_lead_no_spend_filter(lo, hi) + "      " + _cascade_has_match_filter(lo, hi, negate=True)
     return _build_lead_source_sql(
         "big_analytics_direct_unmatched",
         filt,
@@ -933,6 +1298,8 @@ def _build_direct_unmatched_sql(lo: str, hi: str) -> str:
         _lead_date_filter(lo, hi),
         source_table="direct_unmatched",
         extra_where="AND gs.direction = 'Авто'",
+        extra_ctes=_posev_repaint_cte() + ",\n",
+        overrides={"источник": _unmatched_source_expr()},
     )
 
 
@@ -951,17 +1318,15 @@ def _build_direct_zero_sql(lo: str, hi: str) -> str:
         _lead_date_filter(lo, hi),
         source_table="direct_zero",
         extra_where="AND gs.direction = 'Авто'",
+        extra_ctes=_posev_repaint_cte() + ",\n",
+        overrides={"источник": f"if({_POSEV_REPAINT_PREDICATE}, 'Посевы_Telegram', 'Контекст')"},
     )
 
 
 def _build_crop_sql_batched(lead_date_filter: str = "") -> str:
-    filt = """
-(
-    ifNull(utm_source, '') IN ('telegram','stories_tg','vk_storis','telegram_storis','max','vk','vk_groups','vkads')
-    OR ifNull(utm_medium, '') IN ('posev','paid_social')
-)
-"""
-    return _build_lead_source_sql("big_analytics_crop_targeting", filt, "Посевы", "Комплекс", "Посевы", lead_date_filter)
+    return _build_lead_source_sql(
+        "big_analytics_crop_targeting", _CROP_UTM_FILTER, "Посевы", "Комплекс", "Посевы", lead_date_filter
+    )
 
 
 def _select_from_create(create_sql: str) -> str:
@@ -1040,6 +1405,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     parts: list[str] = []
     shadow = f"ad_analytics.{SOURCE_STORE}_new"
 
+    # MARCAR_STATUS_GUARD_2026-08-05 — до любой тяжёлой работы: рассинхрон
+    # «код step1 ↔ справочник» обнуляет воронку молча, поэтому роняем шаг сразу.
+    check_marcar_status_mapping(client)
+
     crm_problems = check_crm_mapping_coverage(client)
     if crm_problems:
         parts.append("crm_mapping_missing=" + "|".join(crm_problems))
@@ -1086,7 +1455,8 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     lead_builders = [
         ("big_analytics_seo", lambda lo, hi: _build_seo_sql(_lead_date_filter(lo, hi))),
         ("big_analytics_crop_targeting", lambda lo, hi: _build_crop_sql_batched(_lead_date_filter(lo, hi))),
-        # DIRECT_LEAD_BRANCHES_2026-08-05
+        # DIRECT_LEAD_BRANCHES_2026-08-05 + CASCADE_MATCH_2026-07-03
+        ("direct_cascade", _build_direct_cascade_sql),
         ("direct_unmatched", _build_direct_unmatched_sql),
         ("direct_zero", _build_direct_zero_sql),
     ]
