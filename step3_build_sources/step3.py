@@ -394,8 +394,63 @@ crm_by_domain AS
 """
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PHONE_NORMALIZE_DEDUP_FIX + VISIT_DUP_DEDUP (порт v5 step3.py:93-133)
+# ------------------------------------------------------------------------------
+# 1. Ключ дедупа — НОРМАЛИЗОВАННЫЙ телефон (последние 10 цифр), а не голая
+#    строка `phone`. В v5 это лечило CRM-батч, отдающий телефоны с ведущей «7»
+#    (79321286162) вперемешку с форматом без неё (9614572141): точное сравнение
+#    не видело один и тот же лид как дубль. ⚠️ В v6 замерено: ВСЕ телефоны
+#    `raw_data.leads_all` уже нормализованы (11 цифр, только цифры), поэтому
+#    сегодня выражение — тождество (uniqExact по сырому и по нормализованному
+#    ключу совпадает до строки). Ставится как ГАРАНТИЯ на будущий батч в другом
+#    формате, а не ради текущей дельты.
+#
+# 2. `_rnv` — дедуп ВНУТРИ одного визита. Ветка `_hp = 1` оставляет ВСЕ
+#    visit/sale-строки партиции (лид может реально приезжать несколько раз);
+#    побочный эффект — один и тот же визит, выгруженный CRM дважды, выживает
+#    дважды и задваивает приезд. Разделитель «реальный повторный визит» vs
+#    «дубль выгрузки» — `arrival_date`: ключ визита = (норм. телефон, yclid,
+#    arrival_date). Порядок победителя внутри визита: visit/sale-статус → sale
+#    вперёд visit → строка с непустым reason (кормит dohod_do_kredita/dobro) →
+#    created_date, id (детерминизм).
+#
+# 3. Дедуп «Лидер» crmf → mauto (порт v5 corrections.py::run_dedup_crmf_lider).
+#    С 29.05.2026 салон «Лидер» переехал crmf → mauto; в период перехода один
+#    клиент попадал в обе CRM. У crmf-строк yclid пустой (замер: 138 из 200),
+#    поэтому штатный phone+yclid-дедуп их НЕ ловит — они уходят в ветку
+#    «phone или yclid пустой». v5 гасит их флагом `is_copy_for_removal` в
+#    raw_leads (в v6 флаг проставляет внешняя система, замер: 0 из 1 135 980),
+#    поэтому здесь тот же критерий выражен предикатом. Приоритет — mauto (новая
+#    CRM), исключается crmf-копия.
+#    ⚠️ Отличие от v5: v5 фильтрует флаг только в step13 (визитная ось), его
+#    step3 фильтра не имеет; в v6 обе оси читают ЭТОТ CTE, поэтому дубли уходят
+#    и с заявочной оси тоже. Замер: 200 строк, из них 0 продаж, 72 приезда.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Нормализованный телефон: только цифры, последние 10 (тот же паттерн, что v5).
+_PHONE_NORM_EXPR = "right(replaceRegexpAll(ifNull(phone, ''), '[^0-9]', ''), 10)"
+# Дата переезда салона «Лидер» с CRM crmf на mauto.
+_LIDER_DEDUP_DATE = "2026-05-29"
+_LIDER_SALON = "Лидер"
+
+
+def _lider_crmf_dup_filter() -> str:
+    """Предикат «строка НЕ является crmf-копией лида «Лидер», уехавшего в mauto»."""
+    return f"""
+    NOT (
+        source_type = 'crmf_excel'
+        AND salon = '{_LIDER_SALON}'
+        AND created_date >= toDate('{_LIDER_DEDUP_DATE}')
+        AND ifNull(phone, '') != ''
+        AND phone IN (SELECT phone FROM lider_mauto_phones)
+    )
+"""
+
+
 def _leads_deduped_cte() -> str:
-    return """
+    phone = _PHONE_NORM_EXPR
+    return f"""
 perform_domains AS
 (
     SELECT lowerUTF8(trim(ifNull(domain, ''))) AS domain
@@ -410,11 +465,28 @@ priezd_statuses AS
     WHERE category IN ('visit', 'sale', 'credit', 'approved')
       AND ifNull(status, '') != ''
 ),
+sale_statuses AS
+(
+    SELECT DISTINCT status
+    FROM raw_data.crm_status_mapping
+    WHERE category = 'sale'
+      AND ifNull(status, '') != ''
+),
+lider_mauto_phones AS
+(
+    SELECT DISTINCT phone
+    FROM ad_analytics.raw_leads
+    WHERE source_type = 'mauto_excel'
+      AND salon = '{_LIDER_SALON}'
+      AND created_date >= toDate('{_LIDER_DEDUP_DATE}')
+      AND ifNull(phone, '') != ''
+),
 all_leads AS
 (
     SELECT *
     FROM ad_analytics.raw_leads
     WHERE lowerUTF8(trim(ifNull(domain, ''))) NOT IN (SELECT domain FROM perform_domains)
+      AND {_lider_crmf_dup_filter().strip()}
     UNION ALL
     SELECT *
     FROM ad_analytics.raw_perform_leads
@@ -424,25 +496,34 @@ ranked_leads AS
     SELECT
         *,
         max(if(status IN (SELECT status FROM priezd_statuses), 1, 0))
-            OVER (PARTITION BY phone, yclid) AS _hp,
+            OVER (PARTITION BY {phone}, yclid) AS _hp,
         row_number() OVER (
-            PARTITION BY phone, yclid
+            PARTITION BY {phone}, yclid
             ORDER BY if(status IN (SELECT status FROM priezd_statuses), 0, 1), created_date
-        ) AS _rn
+        ) AS _rn,
+        row_number() OVER (
+            PARTITION BY {phone}, yclid, arrival_date
+            ORDER BY
+                if(status IN (SELECT status FROM priezd_statuses), 0, 1),
+                if(status IN (SELECT status FROM sale_statuses), 0, 1),
+                if(trim(ifNull(reason, '')) != '', 0, 1),
+                created_date,
+                id
+        ) AS _rnv
     FROM all_leads
     WHERE ifNull(phone, '') != ''
       AND ifNull(yclid, '') != ''
 ),
 leads_deduped AS
 (
-    SELECT * EXCEPT(_hp, _rn)
+    SELECT * EXCEPT(_hp, _rn, _rnv)
     FROM all_leads
     WHERE ifNull(phone, '') = ''
        OR ifNull(yclid, '') = ''
     UNION ALL
-    SELECT * EXCEPT(_hp, _rn)
+    SELECT * EXCEPT(_hp, _rn, _rnv)
     FROM ranked_leads
-    WHERE (_hp = 1 AND status IN (SELECT status FROM priezd_statuses))
+    WHERE (_hp = 1 AND status IN (SELECT status FROM priezd_statuses) AND _rnv = 1)
        OR (_hp = 0 AND _rn = 1)
 )
 """

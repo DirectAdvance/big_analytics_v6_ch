@@ -11,8 +11,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, q, replace_view
+from step3_build_sources.step3 import DIRECT_SOURCE_TYPES
 
 log = logging.getLogger("cleanup_wide_intermediates")
+
+# SOURCE_VIEWS_2026-08-06 — вьюхи источников, которые step3 строит НАД широкой
+# промежуточной `big_analytics_sources`. Эта таблица дропается здесь же (её роль
+# закончена: звезда собрана), и до правки все пять вьюх после каждого полного
+# прогона падали с `Code: 60 UNKNOWN_TABLE` — они оставались висеть на дропнутой
+# таблице. Дропать их вместе с таблицей нельзя: имена — публичный контракт
+# (data_check, step12, ручные разборы), а `SELECT count()` по ним обязан
+# работать. Поэтому они переводятся на звезду — ровно тем же приёмом, которым
+# этот модуль уже переводит `big_analytics_full`/`_arrival`/`_pixel_score`.
+# `EXCEPT(key_pixel_score)` — чтобы набор колонок совпал со step3-версией вьюхи
+# (широкий факт добавляет к нему ровно одну колонку).
+SOURCE_VIEWS = {
+    "big_analytics_direct": DIRECT_SOURCE_TYPES,
+    "big_analytics_seo": ("seo",),
+    "big_analytics_pixel": ("pixel",),
+    "big_analytics_crop_targeting": ("crop_targeting",),
+    "big_analytics_reviews": ("reviews",),
+}
 
 
 def _wide_fact_sql(where_sql: str) -> str:
@@ -128,6 +147,19 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         rows[table] = count_rows(client, f"ad_analytics.{q(table)}")
         log.info("  %s view rows=%d", table, rows[table])
 
+    # Сначала снять вьюхи источников с широкой таблицы, потом дропать её:
+    # обратный порядок оставил бы окно, в котором они уже сломаны.
+    for view, source_types in SOURCE_VIEWS.items():
+        types_sql = ", ".join(f"'{item}'" for item in source_types)
+        replace_view(
+            client,
+            f"ad_analytics.{view}",
+            "SELECT * EXCEPT(key_pixel_score) FROM ad_analytics.big_analytics_full "
+            f"WHERE `_source_table` IN ({types_sql})",
+        )
+        rows[view] = count_rows(client, f"ad_analytics.{q(view)}")
+        log.info("  %s view rows=%d", view, rows[view])
+
     client.command("DROP TABLE IF EXISTS ad_analytics.big_analytics_sources SYNC", settings=SAFE_QUERY_SETTINGS)
     replace_view(
         client,
@@ -141,7 +173,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     rows["big_analytics_unified"] = count_rows(client, "ad_analytics.big_analytics_unified")
     details = ", ".join(f"{key}={value:,}" for key, value in rows.items())
     log.info("cleanup_wide_intermediates завершён за %.1f сек: %s", time.perf_counter() - t0, details)
-    return {"rows": sum(rows.values()), "details": details}
+    # Вьюхи источников — срез того же факта, что и big_analytics_full: в сумму
+    # строк их не берём, иначе итог в data_quality_log считает одни и те же строки дважды.
+    total = sum(value for key, value in rows.items() if key not in SOURCE_VIEWS)
+    return {"rows": total, "details": details}
 
 
 if __name__ == "__main__":

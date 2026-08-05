@@ -13,7 +13,7 @@ _Последнее обновление: 2026-08-05 (главная сесси�
 ### Что осталось / открыто
 - **P4 + P5 — код готов, коммит `6998bc4`** (см. блок ниже; прогона не было). ⚠️ P4 закрыл только ~1/4 разрыва по `dohod_do_kredita` и НОЛЬ по `dobro` — остаток не в джойне, а в содержимом `raw_data.crm_status_mapping`.
 - **P12 + P13 — код готов, коммит `9a423f8`, прогона не было** (блок ниже). ⚠️ **Гард P13 теперь РОНЯЕТ шаг 3** до применения миграции A — прогон невозможен, пока нет GRANT.
-- Задачи **P6** (визитная ось пересчёт, а не копия), **P8** (перенос corrections.py), **P9** (дроп `big_analytics_sources` ломает 5 вьюх).
+- Задача **P6** (визитная ось пересчёт, а не копия). **P8 + P9 — код готов, прогона не было** (блок ниже).
 - **P7-A (VK Ads 90→4 аккаунта) — код готов, коммит `05c2148`, прогона не было.** Скоуп `VK_AUTO_ACCOUNTS_SQL` в `config/ch_settings.py`; применён в `star_refactor/build_star.py` (`_vk_ads_sql` + `build_vk_dims`) и `step10_crop_targeting/step10.py::_insert_vk_ads_costs`. Симуляция read-only: fact_vk_ads 31 231→760 строк / 90→4 акк / 5 639→98 баннеров / 13 510 302.68→1 360 664.29 ₽, заявки 304 без изменений; full `vk_ads` 7 320→145 строк / →1 360 664.61 ₽. Осталось 2 хвоста: (1) 95 110 ₽ — дыра в `raw_data.vk_ads_stats_day` (нет 2026-07-23..26 у 1090518071, в PG v5 есть); (2) воронка у `vk_ads` в full = 0, в v5 — 20 обращений через `leads_vk_agg` (отдельная задача).
 - **P7-B (таблица фидов) — BLOCKED, кода нет.** `ad_analytics.fact_direct_feed_funnel` — агрегат по площадкам РСЯ, а не по фидам (`placement_feed_key` = `yandex_direct_report_rows.placement`). Порт v5 невозможен: в ClickHouse нет `yandex_direct_feeds_report` (v5: 1 029 502 строки), `yandex_direct_feed_urls` (9 712), `direct_global_feed_rules` (14) и CRM-базы shadow orders. Факт зафиксирован в докстринге `direct_feed_funnel/build.py` (маркер `FEED_FUNNEL_NOT_PORTED_2026-08-05`, НЕ закоммичен — в файле лежит чужой незакоммиченный рефакторинг).
 - **P11 — полный прогон с шага 0 + сверка гейтом — ТОЛЬКО ПОСЛЕ ВСЕГО.**
@@ -28,6 +28,54 @@ _Последнее обновление: 2026-08-05 (главная сесси�
 - `.venv/bin/python3 data_check/compare/run.py` — гейт сравнения контуров
 - `migrations/02_status_mapping_ab_2026-08-05.py --check|--apply|--rollback|--only=A|B`
 - Журналы перекладчика: `raw_data.etl_runs`, `raw_data.migration_checkpoints`, `raw_data.reconciliation_results`
+
+**2026-08-06 +05: v6_ch — P8 (перенос corrections.py + дедуп телефона) + P9 (вьюхи источников), (oleg_programmer):**
+- Тронуты ТОЛЬКО `corrections.py`, `step3_build_sources/step3.py::_leads_deduped_cte`,
+  `star_refactor/cleanup_wide_intermediates.py`. Прогона НЕ было — всё доказано read-only SQL.
+- **P8.1 corrections.py 179 → ~1000 строк.** Все правила v5 выражены SQL-выражениями и применяются
+  ОДНОЙ пересборкой теневой `big_analytics_sources` (6 вложенных стадий вместо 6 UPDATE):
+  0a → 0b → 0d → 2 | 3 | 5 | ag_parts (0c/4/4б) + 6 | fix_wrong_domains + normalize_salons |
+  fill_missing_regions + fix_missing_managers + account_domain_backfill + crop_missing_utms +
+  спец-правила аккаунтов + apply_spec_fallback_v3. Скоуп каждого правила — фильтр `_source_table`,
+  повторяющий таблицу-цель v5 (`big_analytics_direct` → `'direct'`, crop → `tp8/tp9/tp10/crop_targeting`).
+- **Ключевая механика порядка:** `_rule0b` («kviz»→«quiz») обязан идти ДО `_rule6`, иначе фильтр
+  валидности пометил бы **520 112** живых строк `tp1_cpc_kviz` как «неверный кодер» (замер: kviz
+  520 112 → 0, quiz 40 848 → 560 960, «неверный кодер» в direct как было 0, так и осталось).
+  ag_parts считаются от ФИНАЛЬНОГО `adgroup_code` и от ДО-`_rule6` значения `tp` (иначе ветка
+  tp6/tp7 «MK/TK» умирает).
+- **Замер (симуляция на живом CH; `big_analytics_sources` в БД нет → подставлен `big_analytics_full`,
+  одинаково для «до» и «после», 5 263 683 строки):** campaign_code 520 112, adgroup_code 109 416,
+  AdGroupName 2 685, ag_part1 4 272 998, ag_part7 4 273 736, `неверный_кодер_new` 4 273 728
+  (0 → 4 272 966 «верный кодер»), domain 25, салон/город/регион по 143, специалист 576 198 → пусто 0.
+  Нулевые сегодня: 0a, rule3, normalize_salons-алиасы и word-sort канон, crop_missing_utms,
+  fix_missing_managers, account_domain_backfill, `_rule8_utm_classify` (в v6 `источник` NOT NULL всегда).
+- **Гейты в коде:** пересборка падает, если сместились строки/расход/воронка или ИЗМЕНИЛАСЬ СХЕМА
+  (типы). Проверено фактом: rows / cost 1 476 363 183.93 / kol_vo_zayavok / korr / kval / priezd /
+  prodazhi / credit / dobro — совпали ДО знака; DESCRIBE 72 колонки идентичен.
+- **⚠️ Golden-срез Кудерко сдвигается fallback-ом специалиста** (v5-паритет): строки 99 466 → 99 701,
+  расход 25 422 797.96 → **25 422 804.03** (+6.07 ₽, в допуске ±100), заявки +234, продажи 55 → 57.
+- **P8.2 дедуп телефона (`step3.py::_leads_deduped_cte`)** — нормализация телефона (последние 10 цифр),
+  визитный `_rnv` по (телефон, yclid, arrival_date) и дедуп «Лидер» crmf→mauto. Замер HEAD → NEW:
+  лиды/обращения **1 081 741 → 1 072 145 (−9 596)**, приезды 344 352 → 334 884, **продажи 6 203 → 6 203**;
+  универс Директа −9 401, SEO −88, посевы 0. Визитная ось (step13 читает ТОТ ЖЕ CTE): 28 373 → 27 964,
+  приезды 29 214 → 28 799, продажи 2 486 → 2 486 — оси не разъехались.
+  ⚠️ Нормализация телефона сама по себе даёт **0** строк: в `raw_data.leads_all` все телефоны уже
+  11-значные (замер `uniqExact` по сырому и нормализованному ключу совпал) — ставится как гарантия.
+  Дубли визитов: 98% групп имеют ОДИН created_date и разброс ≤4 дней → это дубль выгрузки, а не
+  повторный приезд. «Лидер»: 200 строк (0 продаж, 72 приезда, 138 без yclid).
+  ⚠️ Отличие от v5: v5 фильтрует флаг `is_copy_for_removal` только в step13, в v6 обе оси читают
+  один CTE, поэтому 200 строк уходят и с заявочной оси.
+- **P9** — `cleanup_wide_intermediates` теперь ПЕРЕД дропом `big_analytics_sources` переводит 5 вьюх
+  источников на звезду (`big_analytics_full` + фильтр `_source_table`, `EXCEPT(key_pixel_score)` —
+  набор колонок совпал со step3-версией). Доказано: определения выполняются, direct 4 652 452,
+  seo 37 389, pixel 30 872, crop 6 974, reviews 0. Тихий no-op в `corrections.py` убран — при
+  отсутствии таблицы `apply()` теперь РОНЯЕТ шаг с объяснением.
+- **НЕ перенесено:** `_rule7_fill_pixel` (в v6 пиксель строит step5), `_rule_perform_direction`
+  (не в списке задачи), `run_dedup_crmf_lider` в виде UPDATE флага (воспроизведён предикатом).
+- **НЕ покрыто пересборкой** (появляется ПОСЛЕ corrections): звонки (step6), `пиксель_атрибуц`
+  (step11), стоимостной оверлей посевов (step10) — в v5 их накрывают отдельные вызовы после `apply()`.
+- **НЕ проверено:** прогон пайплайна, golden, время пересборки на реальной таблице (замер только на
+  агрегатах: 70 сек на 5.26 млн строк без записи).
 
 **2026-08-05 +05: v6_ch — P12 (паритет веток Директа) + P13 (fail-fast Маркара), коммит `9a423f8` (oleg_programmer):**
 - Тронуты ТОЛЬКО `step3_build_sources/step3.py` и `step12_proverka_big_analytics/step12.py`. Прогона НЕ было — всё доказано read-only SQL против живого CH.
