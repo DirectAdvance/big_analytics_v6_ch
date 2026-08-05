@@ -1,0 +1,126 @@
+"""Исполнитель контракта: два коннекта, один общий формат результата.
+
+Своего знания о схемах не имеет — всё берёт из contract.json.
+Пустой результат = ошибка: гейт не должен зеленеть от слепоты.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from decimal import Decimal
+from typing import Dict, List, Set, Tuple
+
+
+class SourceError(Exception):
+    """Не удалось получить сопоставимые данные с одной из сторон."""
+
+
+def _find_secret_loader() -> str:
+    """Ищем .secret/loader.py вверх по дереву — путь до репо не хардкодим."""
+    cur = os.path.abspath(os.path.dirname(__file__))
+    while True:
+        candidate = os.path.join(cur, ".secret", "loader.py")
+        if os.path.isfile(candidate):
+            return os.path.dirname(candidate)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            raise SourceError("не найден .secret/loader.py вверх по дереву")
+        cur = parent
+
+
+def pg_connect():
+    sys.path.insert(0, _find_secret_loader())
+    from loader import load_db  # noqa: E402
+    import psycopg2  # noqa: E402
+    return psycopg2.connect(**load_db("victory"))
+
+
+def ch_connect():
+    from config.ch_db import get_client
+    return get_client()
+
+
+def build_query(contract: dict, side: str, dimension: str) -> Tuple[str, List[str]]:
+    dims = contract["dimensions"]
+    if dimension not in dims:
+        raise SourceError("измерение %r не описано в контракте" % dimension)
+    spec = contract["sides"][side]
+    dim_expr = dims[dimension].get(side)
+    if not dim_expr:
+        raise SourceError("измерение %r не выразимо на стороне %s" % (dimension, side))
+
+    joins = list(spec.get("joins", []))
+    joins.extend(dims[dimension].get("%s_joins" % side, []))
+
+    metric_names = list(contract["metrics"].keys())
+    metric_exprs = ["SUM(%s)" % contract["metrics"][m][side] for m in metric_names]
+
+    if spec["kind"] == "postgres":
+        marks = ["%s", "%s", "%s"]
+    else:
+        marks = ["{p0:String}", "{p1:String}", "{p2:String}"]
+
+    sql = (
+        "SELECT {dim} AS dim_value, {metrics}\n"
+        "FROM {table} {alias}\n"
+        "{joins}\n"
+        "WHERE {date} >= {p0} AND {date} <= {p1}\n"
+        "  AND {attr} = {p2}\n"
+        "  AND {exclude}\n"
+        "GROUP BY dim_value\n"
+        "ORDER BY dim_value"
+    ).format(
+        dim=dim_expr,
+        metrics=", ".join(metric_exprs),
+        table=spec["table"],
+        alias=spec["alias"],
+        joins="\n".join(joins),
+        date=spec["date_expr"],
+        attr=spec["attribution_expr"],
+        exclude=spec["exclude_expr"],
+        p0=marks[0], p1=marks[1], p2=marks[2],
+    )
+    params = [contract["period"]["from"], contract["period"]["to"], contract["attribution"]]
+    return sql, params
+
+
+def rows_to_map(rows, metric_names: List[str]) -> Dict[str, Dict[str, Decimal]]:
+    if not rows:
+        raise SourceError("запрос вернул 0 строк — это ошибка исполнения, а не нулевые метрики")
+    out = {}
+    for row in rows:
+        key = row[0]
+        if key is None or str(key).strip() == "":
+            key = "(пусто)"
+        out[str(key)] = {
+            name: Decimal(str(row[i + 1] if row[i + 1] is not None else 0))
+            for i, name in enumerate(metric_names)
+        }
+    return out
+
+
+def pg_columns(conn, tables: List[str]) -> Dict[str, Set[str]]:
+    existing = {}
+    with conn.cursor() as cur:
+        for full in tables:
+            schema, name = full.split(".", 1)
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s", (schema, name))
+            cols = {r[0] for r in cur.fetchall()}
+            if cols:
+                existing[full] = cols
+    return existing
+
+
+def ch_columns(client, tables: List[str]) -> Dict[str, Set[str]]:
+    existing = {}
+    for full in tables:
+        database, name = full.split(".", 1)
+        rows = client.query(
+            "SELECT name FROM system.columns WHERE database = {d:String} AND table = {t:String}",
+            parameters={"d": database, "t": name}).result_rows
+        cols = {r[0] for r in rows}
+        if cols:
+            existing[full] = cols
+    return existing
