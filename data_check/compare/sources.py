@@ -15,6 +15,11 @@ class SourceError(Exception):
     """Не удалось получить сопоставимые данные с одной из сторон."""
 
 
+# v5 — живой прод-контур Power BI, и гейт вычитывает с него ~4.2 млн строк на срез.
+# Таймаут не даёт запросу висеть вечно на чужой блокировке (KNOWN_ISSUES #21).
+PG_STATEMENT_TIMEOUT_MS = 300000
+
+
 def _find_secret_loader() -> str:
     """Ищем .secret/loader.py вверх по дереву — путь до репо не хардкодим."""
     cur = os.path.abspath(os.path.dirname(__file__))
@@ -29,12 +34,29 @@ def _find_secret_loader() -> str:
 
 
 def pg_connect():
+    """Коннект к v5. Сессия сразу переводится в READ ONLY и получает statement_timeout.
+
+    READ ONLY ставится на СЕССИЮ (`SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`),
+    а не на одну транзакцию: запись в прод-контур должна быть невозможна физически,
+    а не по договорённости, — и это одинаково для каждого чтения гейта, включая
+    интроспекцию схемы. Оба SET выполняются здесь, поэтому ни один вызывающий код
+    не может их случайно обойти.
+    """
     loader_dir = _find_secret_loader()
     if loader_dir not in sys.path:
         sys.path.insert(0, loader_dir)
     from loader import load_db  # noqa: E402
     import psycopg2  # noqa: E402
-    return psycopg2.connect(**load_db("victory"))
+    conn = psycopg2.connect(**load_db("victory"))
+    try:
+        conn.set_session(readonly=True)
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = %s", (PG_STATEMENT_TIMEOUT_MS,))
+        conn.commit()
+    except Exception:
+        conn.close()
+        raise
+    return conn
 
 
 def ch_connect():

@@ -30,20 +30,64 @@ _TOTALS_DIMENSION = "месяц"
 _EXTRA_DIMENSIONS = ["специалист", "источник", "Название crm", "_source_table"]
 
 
+def _restrict_to_comparable(contract: dict, dimension: str, left: dict, right: dict):
+    """Оставляет в обоих срезах только значения из `values_comparable` контракта.
+
+    У контуров разные справочники: v5 знает «Посевы_Звонки», v6 те же строки кладёт
+    под «Звонки». Без ограничения спуск покажет очаг в РАЗНИЦЕ НАЗВАНИЙ и уведёт
+    читателя от настоящего дефекта данных. Отброшенное не исчезает молча: значения
+    считаются, называются в INFO-логе и уезжают в результат — читатель обязан видеть,
+    что срез сужен и насколько.
+
+    Измерение без `values_comparable` сравнивается целиком и не трогается.
+    """
+    allowed = contract["dimensions"][dimension].get("values_comparable")
+    if not allowed:
+        return left, right, None
+
+    allowed = set(allowed)
+    kept_left = {k: v for k, v in left.items() if k in allowed}
+    kept_right = {k: v for k, v in right.items() if k in allowed}
+    excluded_left = sorted(set(left) - allowed)
+    excluded_right = sorted(set(right) - allowed)
+    if not kept_left or not kept_right:
+        raise sources.SourceError(
+            "измерение «%s»: после ограничения по values_comparable не осталось значений "
+            "(v5 %d, v6 %d) — сравнивать нечего"
+            % (dimension, len(kept_left), len(kept_right)))
+
+    info = {
+        "dimension": dimension,
+        "kept": sorted(set(kept_left) | set(kept_right)),
+        "excluded_v5": excluded_left,
+        "excluded_v6": excluded_right,
+    }
+    logger.info("измерение «%s» ограничено сопоставимыми значениями: оставлено %d (%s); "
+                "исключено v5 %d (%s); исключено v6 %d (%s)",
+                dimension, len(info["kept"]), ", ".join(info["kept"]),
+                len(excluded_left), ", ".join(excluded_left) or "—",
+                len(excluded_right), ", ".join(excluded_right) or "—")
+    return kept_left, kept_right, info
+
+
 class _Collector:
     """Пара срезов v5/v6 по измерению с кэшом: один запрос на измерение на сторону."""
 
     def __init__(self, contract: dict):
         self._contract = contract
         self._cache = {}
+        self.restrictions = {}
 
     def get(self, dimension: str):
         if dimension not in self._cache:
             logger.info("срез по измерению «%s»", dimension)
-            self._cache[dimension] = (
+            left, right, info = _restrict_to_comparable(
+                self._contract, dimension,
                 sources.fetch(self._contract, "v5", dimension),
-                sources.fetch(self._contract, "v6", dimension),
-            )
+                sources.fetch(self._contract, "v6", dimension))
+            if info:
+                self.restrictions[dimension] = info
+            self._cache[dimension] = (left, right)
         return self._cache[dimension]
 
 
@@ -109,8 +153,14 @@ def _drilldown(collector: _Collector, accepted, totals):
                 has_open = has_open or extra_open
 
         if has_open and total_row["verdict"] != differ.MISMATCH:
-            logger.info("метрика «%s»: тотал сошёлся, но per-key расхождения остались "
-                        "-> вердикт поднят до MISMATCH", metric)
+            logger.info("метрика «%s»: тотал сошёлся (вердикт %s), но per-key расхождения "
+                        "остались -> вердикт поднят до MISMATCH",
+                        metric, total_row["verdict"])
+            # delta и pct у такой строки остаются нулевыми — они честные, тотал
+            # действительно сошёлся. Метки нужны, чтобы потребитель --json отличал
+            # настоящее расхождение итога от поднятого вердикта.
+            total_row["original_verdict"] = total_row["verdict"]
+            total_row["escalated"] = True
             total_row["verdict"] = differ.MISMATCH
         drilldown[metric] = per_dim
     return drilldown, accepted_hits, stale_all
@@ -127,6 +177,7 @@ def _build_result(contract: dict, accepted) -> dict:
         "drilldown": drilldown,
         "accepted": accepted_hits,
         "stale": stale_all,
+        "restrictions": collector.restrictions,
     }
 
 
@@ -152,7 +203,9 @@ def main(argv=None) -> int:
         logger.error("гейт не выполнен: %s", exc)
         return 2
     except Exception as exc:  # коннект, сеть, битый ответ БД — это тоже ошибка исполнения
-        logger.error("гейт не выполнен: %s: %s", type(exc).__name__, exc)
+        # exc_info: падение против живого прод-контура должно быть разбираемо
+        # с одного прогона, без «повтори и посмотри, где именно».
+        logger.error("гейт не выполнен: %s: %s", type(exc).__name__, exc, exc_info=True)
         return 2
 
     if args.json:
