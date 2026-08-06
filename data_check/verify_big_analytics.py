@@ -55,7 +55,11 @@ PBI_SOURCE_OBJECTS = [
     "arf_fact",
     "arp_fact",
     "pbi_big_analytics_full",
-    "big_analytics_full_arrival",
+    # `big_analytics_full_arrival` здесь БЫТЬ НЕ ДОЛЖНО: с ca7174e (2026-08-04)
+    # `bi_big_analytics_full_arrival` переведена в `LEGACY_BI_VIEWS`
+    # (`star_refactor/build_pbi_compat.py`) и штатно дропается в `drop_bi_views()`.
+    # Сама витрина `big_analytics_full_arrival` проверяется выше — в
+    # `REQUIRED_TABLES` и `WIDE_COMPAT_VIEWS`.
     "check_utm_fuck_direct",
     "dim_criterion",
     "yandex_direct_history",
