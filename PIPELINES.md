@@ -152,7 +152,7 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 step10_crop_targeting/p
 <a id="steps-map"></a>
 ### Шаги пайплайна (карта «шаг → папка») — ЕДИНЫЙ ИСТОЧНИК
 
-> Это **единственная полная таблица** шагов 0–13 в проекте. Остальные файлы
+> Это **единственная полная таблица** шагов 0–14 (+ дробные 115 и post-loop 131…148) в проекте. Остальные файлы
 > (`CLAUDE.md`, `README.md`, `PROJECT_CHARTER.md`, `PLAN.md`) ссылаются сюда якорем
 > `PIPELINES.md#steps-map`. `CLAUDE.md` держит свою сжатую копию только для быстрой навигации.
 
@@ -170,8 +170,24 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 step10_crop_targeting/p
 | 9 | `step9_direct_history/` | История изменений Директа → yandex_direct_history (фон с шага 0) | ~30–60 мин |
 | 10 | `step10_crop_targeting/` | Посевы → big_analytics_crop_targeting | ~2–5 мин |
 | 11 | `step11_pixel_score/` | Атрибуция пикселей → big_analytics_pixel_score + доливка в full | ~10 сек |
+| **115** | `spec_fallback.py` (корень) | **Каскад специалиста по домену БЕЗ окна дат** по `big_analytics_full` | ~1 мин |
 | 12 | `step12_proverka_big_analytics/` | Проверка CRM-маппингов → Telegram-отчёт | ~30 сек |
 | 13 | `step13_arrival/` | Воронка по дате визита → big_analytics_full_arrival | ~1–2 мин |
+
+> **Шаг 115 `spec_fallback` (`SPEC_FALLBACK_V3_2026-08-06`, зарегистрирован в `pipeline.py` STEPS
+> между step11 и step12).** Пост-проход по пустому `специалист` в `big_analytics_full`: значение
+> берётся из `raw_data.gsheet_sites` по домену **БЕЗ окна дат**, каскадом
+> `directologist` → `direction_main` → `'Звонки'` при `campaign_code='звонки'` → `'Без специалиста'`.
+> Паритет с v5 `corrections.py:1859-1918` (`apply_spec_fallback_v3`), который в v5 зовётся
+> отдельно из `pipeline.py:1857/2030`.
+> **Почему именно после step10/step11, а не внутри corrections:** `corrections.apply()` работает по
+> `big_analytics_sources` между step3 и step5, а звонки (step6), пиксельная атрибуция (step11) и
+> посевной/`vk_ads` стоимостной оверлей (step10) доливаются в `big_analytics_full` уже ПОСЛЕ
+> corrections — их каскад специалиста не видит. Шаг 115 стоит до step12/step13, чтобы
+> `big_analytics_full_arrival` и звезда строились по уже заполненной колонке.
+> ⚠️ Гейт `match_priority IN (1,2)` в `step3._domain_specialist_expr` сознательно НЕ снят: выражение
+> общее для трёх осей и работает до corrections. ⚠️ `big_analytics_full_arrival` в скоуп шага 115
+> НЕ входит (в v5 это отдельный вызов) — `KNOWN_ISSUES.md` #31.
 
 > ⚠️ **`step13_utm_direct_audit`** живёт в `step_cron_night/step13_utm_direct_audit/` и
 > запускается ночным `pipeline_night.py` (а не дневным `pipeline.py`). В корне шаг 13 = `step13_arrival`
