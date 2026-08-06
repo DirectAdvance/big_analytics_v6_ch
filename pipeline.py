@@ -37,6 +37,10 @@ STEPS = [
     (9, "step9_direct_history.step9", "step9"),
     (10, "step10_crop_targeting.step10", "step10"),
     (11, "step11_pixel_score.step11", "step11"),
+    # SPEC_FALLBACK_V3_2026-08-06 — только ПОСЛЕ step10/step11: звонки, пиксель и
+    # посевной оверлей доливаются в full уже после corrections, поэтому каскад
+    # специалиста для них нужно догнать отдельным проходом (паритет с v5).
+    (115, "spec_fallback", "spec_fallback"),
     (12, "step12_proverka_big_analytics.step12", "step12"),
     (13, "step13_arrival.step13", "step13"),
     (131, "step13_arrival.build_unified", "build_unified"),
