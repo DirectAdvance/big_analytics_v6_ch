@@ -185,50 +185,206 @@ def check_crm_mapping_coverage(client) -> list[str]:
     return problems
 
 
-def check_marcar_status_mapping(client) -> None:
-    """MARCAR_STATUS_GUARD_2026-08-05 — fail-fast на связку «код ↔ справочник».
+# ══════════════════════════════════════════════════════════════════════════════
+# CODE_STATUS_CATEGORY_2026-08-06 — категории статусов, заданные КОДОМ
+# ------------------------------------------------------------------------------
+# `raw_data.crm_status_mapping` — чужая таблица: у роли пайплайна только
+# `SELECT ON raw_data.*`, GRANT на запись не выдаётся (миграция
+# `migrations/02_status_mapping_ab_2026-08-05.py` падала `ACCESS_DENIED`).
+# Поэтому категории, которые нельзя вписать строкой в справочник, объявляются
+# здесь — рядом с остальной логикой категорий (`_category_match_expr`).
+#
+# Семантика — ОVERRIDE, а не «добавка»: для пары (crm, status) из этого словаря
+# строки справочника игнорируются целиком (`(crm, status) NOT IN (...)` во всех
+# четырёх ветках `_category_match_expr` И в списках статусов дедупа
+# `priezd_statuses`/`sale_statuses`), а категорию задаёт словарь. Источник истины
+# для перечисленных пар — ровно он; «половина в справочнике, половина в коде» по
+# одной паре невозможна по построению.
+#
+# Скоуп ровно две CRM, остальные шесть не затрагиваются ни строкой:
+#
+#   A. MARCAR_GSHEET_STATUS_2026-08-05 — парная половина патча статусов Маркара.
+#      `step1_load_raw/step1.py` проставляет лидам Маркара статусы из
+#      `MARCAR_STATUS_PRIORITY` по `raw_data.gsheet_priezdi_marcar`; в справочнике
+#      из этих четырёх есть только «Приехал», а общей ветки (v5 `crm_name='default'`)
+#      в CH-справочнике нет — без пары патч молча обнуляет воронку (priezd ≈ −646,
+#      prodazhi −6). Категории сверены с v5 `local_crm_statuses` (замер 2026-08-06):
+#      «Продажа»→sale (crm_name='default'), «Дошел в КО»→visit (crm_name=''),
+#      «Одобрение»→visit (crm_name=''), «Приехал»→visit (crm_name='default').
+#      «Приехал» ПЕРЕНЕСЁН в код вместе с остальными тремя намеренно: иначе одна
+#      правка жила бы в двух местах и гард обязан был бы проверять оба. Значение
+#      совпадает с тем, что лежит в справочнике сегодня (visit), т.е. перенос —
+#      не смена поведения, а сведение четырёх статусов патча в один список.
+#
+#   B. PLEX_OTKAZ_QUALIFIED_2026-08-05 — «Отказ клиента» у Плекса: correct → qualified
+#      (паритет с v5, где статус лежит в общей ветке как qualified). Тот же барьер
+#      прав, та же техника. Эквивалентность миграции точная: все 47 строк
+#      `plex`/«Отказ клиента» сегодня `correct`, среди них есть строка с `reason=''`,
+#      которая уже сейчас матчит пару по первой ветке при ЛЮБОЙ причине, — поэтому
+#      override по паре (crm, status) накрывает ровно то же множество лидов.
+#      ⚠️ Это ЕДИНСТВЕННАЯ запись здесь, не связанная с патчем в коде: она —
+#      временный мост до GRANT'а, а не постоянное место для бизнес-классификации.
+#      Появится право на запись — правку B делать в справочнике и удалять отсюда
+#      (гард сам скажет, что справочник и код сошлись).
+#
+# ⚠️ Только status-сторона воронки. Reason-метрики (`dohod_do_kredita`/`dobro`)
+# читают справочник по (crm, reason) и этим механизмом НЕ покрыты — поэтому
+# категории 'credit'/'approved' здесь запрещены (проверяет гард).
+# ══════════════════════════════════════════════════════════════════════════════
+CODE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
+    # A. MARCAR_GSHEET_STATUS_2026-08-05 — все четыре статуса патча step1
+    ("marcar", "Продажа"): "sale",
+    ("marcar", "Дошел в КО"): "visit",
+    ("marcar", "Одобрение"): "visit",
+    ("marcar", "Приехал"): "visit",
+    # B. PLEX_OTKAZ_QUALIFIED_2026-08-05 — временный мост до GRANT'а на справочник
+    ("plex", "Отказ клиента"): "qualified",
+}
 
-    `step1` (`MARCAR_GSHEET_STATUS_2026-08-05`) проставляет лидам Маркара статусы из
-    `MARCAR_STATUS_PRIORITY` по гугл-таблице приездов. Парная половина правки —
-    строки этих статусов в `raw_data.crm_status_mapping`
-    (`migrations/02_status_mapping_ab_2026-08-05.py`, ветка A). Если миграция не
-    применена — или откачена без отката кода — статуса нет в справочнике,
-    `_category_match_expr` не находит его ни в одной категории, и воронка патченых
-    лидов МОЛЧА обнуляется (замерено на паритете с v5: priezd ≈ −646, prodazhi −6).
-    Порядок правок обязан быть парным в ОБЕ стороны, поэтому проверка симметрична:
-    любой из двух статусов рассинхрона роняет шаг.
+# Категории status-стороны. 'credit'/'approved' сознательно вне списка — см. выше.
+_CODE_STATUS_SIDE_CATEGORIES = frozenset({"correct", "qualified", "visit", "sale", "incorrect"})
 
-    ⚠️ Существующий `check_crm_mapping_coverage` этого НЕ ловит: он проверяет
-    наличие ключа `crm`, а не статусов внутри него, — ключ `marcar` есть всегда,
-    и проверка рапортует «coverage OK».
 
-    Условие `reason = '' AND salon = ''` — не косметика: `_category_match_expr`
-    матчит голый статус только по этой ветке справочника, строка с заполненным
-    reason/salon воронку патченого лида не включит.
+def _code_pairs(categories: tuple[str, ...] | None = None) -> list[tuple[str, str]]:
+    """Пары (crm, status) из `CODE_STATUS_CATEGORY`; None = все."""
+    return sorted(
+        pair
+        for pair, category in CODE_STATUS_CATEGORY.items()
+        if categories is None or category in categories
+    )
+
+
+def _code_pairs_sql(pairs: list[tuple[str, str]]) -> str:
+    return ", ".join(f"('{crm}', '{status}')" for crm, status in pairs)
+
+
+def _code_override_filter() -> str:
+    """` AND (crm, status) NOT IN (...)` — выкинуть из справочника пары, чью категорию задаёт код."""
+    pairs_sql = _code_pairs_sql(_code_pairs())
+    return f" AND (crm, status) NOT IN ({pairs_sql})" if pairs_sql else ""
+
+
+def _code_statuses_union_sql(categories: tuple[str, ...], column: str = "status") -> str:
+    """`UNION ALL SELECT arrayJoin([...])` — статусы, отнесённые кодом к `categories`."""
+    statuses = sorted({status for _crm, status in _code_pairs(categories)})
+    if not statuses:
+        return ""
+    array_sql = ", ".join(f"'{status}'" for status in statuses)
+    return f"\n    UNION ALL\n    SELECT arrayJoin([{array_sql}]) AS {column}\n"
+
+
+def check_code_status_categories(client) -> None:
+    """CODE_STATUS_CATEGORY_2026-08-06 — fail-fast на «статус проставляется, а категории нет».
+
+    Раньше (MARCAR_STATUS_GUARD_2026-08-05) гард проверял наличие строк в
+    `raw_data.crm_status_mapping` и ронял шаг, пока не применена миграция A. Прав
+    на запись в справочник нет и не будет, источник истины для этих статусов —
+    `CODE_STATUS_CATEGORY`, поэтому проверяется покрытие КОДОМ:
+
+      1. литералы словаря безопасны для подстановки в SQL;
+      2. ключи `crm` — те же, что выдаёт `_crm_expr` (иначе override мёртв);
+      3. категории — только status-сторона (reason-метрики механизмом не покрыты);
+      4. КАЖДЫЙ статус, который проставляет патч Маркара (`MARCAR_STATUS_PRIORITY`
+         в `step1_load_raw/step1.py`), имеет категорию — иначе воронка патченых
+         лидов молча обнулится (замер на паритете с v5: priezd ≈ −646, prodazhi −6).
+
+    Пункт 4 — тот же смысл, что у прежнего гарда: добавили пятый статус в патч
+    step1 и забыли категорию → шаг 3 падает до тяжёлой работы, а не отдаёт
+    молчаливую недостачу приездов.
+
+    ⚠️ `check_crm_mapping_coverage` этого НЕ ловит: он проверяет наличие ключа
+    `crm`, а не статусов внутри него, — ключ `marcar` есть всегда.
+
+    Пятый блок — информационный (не роняет шаг): показать, что говорит справочник
+    по тем же парам. Когда справочник и код сойдутся, строку из
+    `CODE_STATUS_CATEGORY` надо снять — лог скажет об этом явно.
     """
-    crm = _crm_key(MARCAR_SOURCE_TYPE)
-    statuses_sql = ", ".join(f"'{status}'" for status in MARCAR_STATUS_PRIORITY)
-    mapped = {
-        str(row[0])
-        for row in client.query(
-            f"""
-            SELECT DISTINCT status
-            FROM raw_data.crm_status_mapping
-            WHERE crm = '{crm}' AND ifNull(reason, '') = '' AND ifNull(salon, '') = ''
-              AND status IN ({statuses_sql})
-            """
-        ).result_rows
-    }
-    missing = [status for status in MARCAR_STATUS_PRIORITY if status not in mapped]
+    pairs = _code_pairs()
+    for crm, status in pairs:
+        if any(bad in crm or bad in status for bad in ("'", "\\")):
+            raise RuntimeError(
+                f"CODE_STATUS_CATEGORY: ключ ({crm!r}, {status!r}) содержит кавычку/бэкслеш — "
+                "он подставляется в SQL литералом, экранирования тут нет"
+            )
+
+    known_crm = set(CRM_BY_SOURCE_TYPE.values())
+    unknown = sorted({crm for crm, _status in pairs if crm not in known_crm})
+    if unknown:
+        raise RuntimeError(
+            f"CODE_STATUS_CATEGORY: ключи crm {unknown} не встречаются среди значений "
+            "CRM_BY_SOURCE_TYPE — `_crm_expr` такой ключ никогда не вернёт, override мёртв"
+        )
+
+    bad_categories = sorted(
+        {category for category in CODE_STATUS_CATEGORY.values() if category not in _CODE_STATUS_SIDE_CATEGORIES}
+    )
+    if bad_categories:
+        raise RuntimeError(
+            f"CODE_STATUS_CATEGORY: категории {bad_categories} вне status-стороны "
+            f"{sorted(_CODE_STATUS_SIDE_CATEGORIES)}. Reason-метрики (dohod_do_kredita/dobro) "
+            "читают справочник по (crm, reason) и этим механизмом не покрыты"
+        )
+
+    marcar_crm = _crm_key(MARCAR_SOURCE_TYPE)
+    missing = [status for status in MARCAR_STATUS_PRIORITY if (marcar_crm, status) not in CODE_STATUS_CATEGORY]
     if missing:
         raise RuntimeError(
-            f"raw_data.crm_status_mapping: для crm={crm!r} нет статусов {missing} "
-            f"(reason='' и salon=''), которые проставляет патч Маркара в step1_load_raw/step1.py "
-            "(MARCAR_STATUS_PRIORITY). Воронка патченых лидов обнулится молча. "
-            "Примените migrations/02_status_mapping_ab_2026-08-05.py --apply --only=A "
-            "либо откатите патч в step1."
+            f"CODE_STATUS_CATEGORY: нет категории для статусов {missing} у crm={marcar_crm!r}. "
+            "Их проставляет патч Маркара в step1_load_raw/step1.py (MARCAR_STATUS_PRIORITY) — "
+            "без категории воронка патченых лидов обнулится молча. Добавьте пару в "
+            "CODE_STATUS_CATEGORY (step3_build_sources/step3.py) либо откатите патч в step1."
         )
-    logger.info("  Marcar status mapping OK: %d статусов патча покрыты crm=%r", len(mapped), crm)
+
+    logger.info(
+        "  Code status categories OK: %d пар (crm, status) заданы кодом, все %d статуса патча Маркара покрыты",
+        len(pairs),
+        len(MARCAR_STATUS_PRIORITY),
+    )
+
+    try:
+        rows = client.query(
+            f"""
+            SELECT crm, status, arraySort(groupUniqArray(category)) AS categories
+            FROM raw_data.crm_status_mapping
+            WHERE (crm, status) IN ({_code_pairs_sql(pairs)})
+            GROUP BY crm, status
+            """
+        ).result_rows
+    except Exception as exc:  # информационный блок не обязан ронять шаг
+        logger.warning("  Code status categories: сверка со справочником пропущена: %s", exc)
+        return
+    in_mapping = {(str(crm), str(status)): list(categories) for crm, status, categories in rows}
+    # Статусы патча Маркара остаются в коде даже при совпадении со справочником:
+    # все четыре обязаны жить одним списком, иначе гард пришлось бы проверять два места.
+    patch_pairs = {(marcar_crm, status) for status in MARCAR_STATUS_PRIORITY}
+    for pair in pairs:
+        code_category = CODE_STATUS_CATEGORY[pair]
+        mapped = in_mapping.get(pair)
+        if mapped is None:
+            logger.info("    %s/%s: справочник молчит, код задаёт %r", pair[0], pair[1], code_category)
+        elif mapped == [code_category] and pair in patch_pairs:
+            logger.info(
+                "    %s/%s: справочник согласен (%r) — дубль по значению, пара остаётся в коде "
+                "вместе с остальными статусами патча",
+                pair[0],
+                pair[1],
+                code_category,
+            )
+        elif mapped == [code_category]:
+            logger.warning(
+                "    %s/%s: справочник уже говорит %r — строку можно снять из CODE_STATUS_CATEGORY",
+                pair[0],
+                pair[1],
+                code_category,
+            )
+        else:
+            logger.info(
+                "    %s/%s: override, справочник %s -> код %r",
+                pair[0],
+                pair[1],
+                mapped,
+                code_category,
+            )
 
 
 def _category_match_expr(
@@ -243,24 +399,30 @@ def _category_match_expr(
     status = f"ifNull({status_expr}, '')"
     reason = f"lower(ifNull({reason_expr}, ''))"
     salon = f"lower(trim(ifNull({salon_expr}, '')))"
+    # CODE_STATUS_CATEGORY_2026-08-06: пары из словаря выкинуты из справочника
+    # (override, а не добавка) и матчатся отдельной веткой по своей категории.
+    override = _code_override_filter()
+    code_pairs_sql = _code_pairs_sql(_code_pairs(categories))
+    code_branch = f"OR ({crm}, {status}) IN ({code_pairs_sql})" if code_pairs_sql else ""
     return f"""
     (
         ({crm}, {status}) IN (
             SELECT crm, status FROM raw_data.crm_status_mapping
-            WHERE category IN ({cats_sql}) AND reason = '' AND salon = ''
+            WHERE category IN ({cats_sql}) AND reason = '' AND salon = ''{override}
         )
         OR ({crm}, {status}, {reason}) IN (
             SELECT crm, status, lower(reason) FROM raw_data.crm_status_mapping
-            WHERE category IN ({cats_sql}) AND reason != '' AND salon = ''
+            WHERE category IN ({cats_sql}) AND reason != '' AND salon = ''{override}
         )
         OR ({crm}, {salon}, {status}) IN (
             SELECT crm, lower(salon), status FROM raw_data.crm_status_mapping
-            WHERE category IN ({cats_sql}) AND reason = '' AND salon != ''
+            WHERE category IN ({cats_sql}) AND reason = '' AND salon != ''{override}
         )
         OR ({crm}, {salon}, {status}, {reason}) IN (
             SELECT crm, lower(salon), status, lower(reason) FROM raw_data.crm_status_mapping
-            WHERE category IN ({cats_sql}) AND reason != '' AND salon != ''
+            WHERE category IN ({cats_sql}) AND reason != '' AND salon != ''{override}
         )
+        {code_branch}
     )
     """
 
@@ -466,20 +628,22 @@ perform_domains AS
     WHERE client_id = 'avto_0415'
       AND ifNull(domain, '') != ''
 ),
+-- CODE_STATUS_CATEGORY_2026-08-06: списки статусов дедупа читают ТОТ ЖЕ источник
+-- истины, что и `_category_match_expr` — иначе патченый статус Маркара считался бы
+-- приездом в воронке, но не в ранжировании дедупа, и строка могла бы не выжить.
+-- Списки по `status` без разреза crm — как в v5 (`config/status_sql.py::_priezd_statuses_in`).
 priezd_statuses AS
 (
     SELECT DISTINCT status
     FROM raw_data.crm_status_mapping
     WHERE category IN ('visit', 'sale', 'credit', 'approved')
-      AND ifNull(status, '') != ''
-),
+      AND ifNull(status, '') != ''{_code_override_filter()}{_code_statuses_union_sql(("visit", "sale", "credit", "approved"))}),
 sale_statuses AS
 (
     SELECT DISTINCT status
     FROM raw_data.crm_status_mapping
     WHERE category = 'sale'
-      AND ifNull(status, '') != ''
-),
+      AND ifNull(status, '') != ''{_code_override_filter()}{_code_statuses_union_sql(("sale",))}),
 lider_mauto_phones AS
 (
     SELECT DISTINCT phone
@@ -1494,9 +1658,9 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     parts: list[str] = []
     shadow = f"ad_analytics.{SOURCE_STORE}_new"
 
-    # MARCAR_STATUS_GUARD_2026-08-05 — до любой тяжёлой работы: рассинхрон
-    # «код step1 ↔ справочник» обнуляет воронку молча, поэтому роняем шаг сразу.
-    check_marcar_status_mapping(client)
+    # CODE_STATUS_CATEGORY_2026-08-06 — до любой тяжёлой работы: статус, который
+    # проставляет патч step1, но у которого нет категории, обнуляет воронку молча.
+    check_code_status_categories(client)
 
     crm_problems = check_crm_mapping_coverage(client)
     if crm_problems:
