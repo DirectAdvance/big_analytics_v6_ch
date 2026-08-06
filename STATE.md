@@ -1,6 +1,15 @@
 # big_analytics_v6_ch — Состояние (handoff)
 
-_Последнее обновление: 2026-08-06 (oleg_programmer: категории статусов — в код, снят блокер GRANT). Полная история — `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-06 (oleg_programmer: SPEC_FALLBACK_V3 — golden sales 52→54, verify PASS). Полная история — `STATE_ARCHIVE.md`._
+
+## 2026-08-06 +05: два провала golden-гейта закрыты — коммит `e363961` (oleg_programmer)
+
+- **Правка 1 (`data_check/verify_big_analytics.py:58`)** — убрана `big_analytics_full_arrival` из `PBI_SOURCE_OBJECTS`: с `ca7174e` `bi_big_analytics_full_arrival` живёт в `LEGACY_BI_VIEWS` и штатно дропается. `REQUIRED_TABLES:27` и `WIDE_COMPAT_VIEWS:119` не тронуты — там сама витрина, она есть.
+- **Правка 2 (новый `spec_fallback.py`, шаг 115 в `pipeline.py` между step11 и step12)** — v5-паритетный пост-проход `apply_spec_fallback_v3` по `big_analytics_full`: пустой `специалист` заполняется из `raw_data.gsheet_sites` по домену БЕЗ окна дат (каскад directologist → direction_main → 'Звонки' при `campaign_code='звонки'` → 'Без специалиста'). Причина дыры: `step3._domain_specialist_expr` матчит только внутри `launch_date…block_date`, у `probeg-cars.ru` / `autocenter93.ru` окна закрылись осенью 2025, а звонки от 09.06 и 22.07 в них не попадают. Гейт `match_priority IN (1,2)` в step3 сознательно НЕ снят (общий для трёх осей, работает до corrections).
+- **Прогон (только хвост, полного прогона не было):** 115 → 145 → (1451, 146, 148). **Заполнено 23 480 строк**, в golden-срез приехал 121 ряд `calls`. **Расход 25 422 804.03 → 25 422 804.03 (0 ₽), продажи 52 → 54**, korr 3207→3234, kval 639→646, priezd 609→614. Итоги по всей витрине не сдвинулись: fact 5 271 953 строки, cost 1 483 199 502.60, prodazhi 8 550.9924 — до и после идентичны; у всех топ-10 специалистов расход не изменился, выросли только продажи/строки (звонки без расхода). `verify_big_analytics.py` — **PASS**, golden `cost=25422804.03 delta=+30.03 sales=54 floor=54`.
+- ⚠️ **Шаг 145 упал на `Dim_AdGroup` (MEMORY_LIMIT_EXCEEDED, 512 МБ `SAFE_QUERY_SETTINGS`)** — артефакт частичного прогона: `big_analytics_unified` читался как физическая `full` ∪ ВЬЮХА `full_arrival` (8 джойнов к Dim). `fact_big_analytics` к тому моменту уже пересобран и подменён. Остаток `build_dims` (Dim_AdGroup/Adjustment/Location/ManagerLogin) и `build_vk_*` не перестраивались — `специалист` в них не участвует, содержимое от прошлого полного прогона валидно; `fact_ml_korrektirovki` (несёт `специалист`) добит отдельно, 12 156 строк, пусто-специалистов 0 и до, и после. При штатном полном прогоне этой памяти не будет (обе оси — физические таблицы).
+- **Не закоммичено:** регистрация шага 115 в `pipeline.py` — файл уже содержит чужой незакоммиченный рефакторинг (шаги 140/144/147, `--include-nightly`), подгребать его нельзя. Правка в рабочем дереве.
+- **Не сделано:** проход по `big_analytics_full_arrival` (визитная ось, 1 319 пустых `специалист` в факте) — v5 делает и его, blast radius по визитным метрикам не мерян. ⚠️ STATE.md ~39.5 КБ — на пороге ротации (Format B: оставить только последнюю запись, остальное в `STATE_ARCHIVE.md`).
 
 ## 2026-08-06 +05: снятие зависимости от прав на `raw_data` — коммит `7cc5bd0` (oleg_programmer)
 
