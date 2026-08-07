@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_settings import DATE_FROM, EXCLUDED_DOMAIN_IDS, RAW_TARGET_TABLES
+from config.ch_settings import DATE_FROM, EXCLUDED_DOMAIN_NAMES, RAW_TARGET_TABLES
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
 
 logger = logging.getLogger("pipeline.step1")
@@ -40,8 +40,27 @@ DIRECT_TOTAL_COST_FACTOR_OVERRIDES = (
 )
 
 
-def _excluded_domain_list() -> str:
-    return ", ".join(str(i) for i in EXCLUDED_DOMAIN_IDS)
+def _excluded_domain_names_sql() -> str:
+    """SQL-литерал списка исключённых доменов ПО ИМЕНИ (не по числовому id — id непереносим
+    между PostgreSQL v5 и ClickHouse v6, см. EXCLUDED_DOMAIN_NAMES_2026-08-06 в config/ch_settings.py).
+    Экранирует одинарную кавычку в имени домена — сейчас EXCLUDED_DOMAIN_NAMES это внутренняя
+    константа без внешнего входа (эксплуатации нет), но экранирование дешевле, чем разбираться
+    с битым SQL, если список когда-нибудь станет конфигурируемым."""
+    return ", ".join("'{}'".format(name.lower().replace("'", "''")) for name in EXCLUDED_DOMAIN_NAMES)
+
+
+def _excluded_domain_filter_sql(domain_expr: str) -> str:
+    """WHERE-условие фильтра по EXCLUDED_DOMAIN_NAMES для указанного SQL-выражения домена.
+
+    Пустой EXCLUDED_DOMAIN_NAMES → возвращает пустую строку (условие не подставляется), а НЕ
+    `NOT IN ()` — в ClickHouse это синтаксическая ошибка. "Опустошить список" — естественный
+    способ временно отключить фильтр, он не должен ронять step1 (EXCLUDED_DOMAIN_NAMES_GUARD_2026-08-06).
+    """
+    if not EXCLUDED_DOMAIN_NAMES:
+        return ""
+    return (
+        f"  AND lowerUTF8(trim(ifNull({domain_expr}, ''))) NOT IN ({_excluded_domain_names_sql()})\n"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -280,7 +299,7 @@ def _direct_source_table(client) -> str:
 
 
 def _raw_leads_select_sql(source: str = "raw_data.leads_all") -> str:
-    excluded = _excluded_domain_list()
+    excluded_domain_clause = _excluded_domain_filter_sql("d.domain")
     return f"""
 SELECT
     -- явный алиас обязателен: с третьим JOIN (mp) анализатор CH называет колонку `l.id`,
@@ -338,8 +357,13 @@ FROM {source} AS l
 LEFT JOIN raw_data.domains AS d ON d.id = l.domain_id
 {_marcar_join_sql("l")}
 WHERE l.deal_type != 'Звонок'
-  AND (l.domain_id NOT IN ({excluded}) OR l.domain_id IS NULL)
-"""
+  -- EXCLUDED_DOMAIN_NAMES_2026-08-06: матч по ИМЕНИ домена (d.domain, уже заджойнен выше),
+  -- не по числовому id (id непереносим между PG v5 и CH v6 — см. config/ch_settings.py).
+  -- ifNull(d.domain, '') естественно пропускает лиды с NULL domain_id (легитимные лиды без
+  -- разрешённого FK — d.domain тоже NULL после LEFT JOIN), без отдельного `OR domain_id IS NULL`.
+  -- EXCLUDED_DOMAIN_NAMES_GUARD_2026-08-06: пустой EXCLUDED_DOMAIN_NAMES → excluded_domain_clause
+  -- пустая строка (условие не подставляется), не `NOT IN ()` (синтаксическая ошибка в ClickHouse).
+{excluded_domain_clause}"""
 
 
 def _leads_source_table(client) -> str:
