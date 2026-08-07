@@ -136,11 +136,113 @@ def build_dims(client) -> dict[str, int]:
             FROM ad_analytics.big_analytics_unified
             WHERE `Date` IS NOT NULL
         """,
+        # DIM_SITE_TIEBREAK_FIX_2026-08-07: old sort_weight was
+        # tuple(toUInt8(class), notEmpty(salon), lengthUTF8(domain)) -- components
+        # 2/3 are CONSTANT within one domain group (lengthUTF8(domain) never
+        # changes for the same domain; notEmpty(salon) is true almost always), so
+        # whenever a domain had >1 distinct fact-row `салон` (etc.) value, argMax
+        # picked an ARBITRARY one (measured live: 414 domains with conflicting
+        # `салон` values in fact rows). Replaced with two deterministic sources:
+        # domains covered by the master directory (raw_data.gsheet_sites) always
+        # win via direct join/aggregation (no tie possible -- duplicates in
+        # gsheet_sites are verified byte-identical, `any()` is safe); only domains
+        # ABSENT from the master directory fall back to fact rows, tie-broken by
+        # a MEANINGFUL weight -- majority attribute-combination, most recent
+        # `Date`, then `domain` itself for full determinism (DIM_SITE_TIEBREAK_FIX
+        # 2 below) -- instead of string length.
+        #
+        # DIM_SITE_COLUMN_AUTHORITY_FIX_2026-08-07 (director rework, patch 2 of
+        # the review): the directory (raw_data.gsheet_sites) is authoritative ONLY
+        # for the 9 attributes it uniquely owns -- салон/город/регион/тип_сайта/
+        # шаблон/статус/проджект/менеджер/id_салона (CANON has no separate source
+        # for these; the sheet IS the source). `направление`, `специалист` and
+        # `Название crm` are NOT among them -- the fact rows carry their OWN
+        # taxonomy for these three, set literally by step3/step6 ETL code
+        # (направление: 'Контекст'/'Комплекс'/'Пиксель'/'Пиксель_атрибуц' --
+        # CANON.md; Название crm: 'Фаиг'/'Плекс'/'Маркар'/'Мега'/... -- step3.py:
+        # 538-546, consumed literally by sales_attribution/build.py:139,159 and
+        # FUNNEL.md:186; специалист: filled by the spec_fallback.py step-115
+        # cascade run BEFORE this step in the pipeline, so by the time Dim_Site is
+        # built big_analytics_unified.специалист is already the final resolved
+        # value). The directory's own `direction`/`directologist`/`crm` columns
+        # hold a DIFFERENT taxonomy (`Авто`/`Внутренний маркетинг`/`Digital`/`PR`
+        # department, and raw CRM software names like `One CRM`/`PLEX`) -- taking
+        # them for these 3 columns was blocker A/B/C of the review: 1594 keys of
+        # `направление` and 1554 keys of `Название crm` were silently replaced by
+        # the wrong taxonomy, and `специалист` got WORSE (3025 -> 3309 empty,
+        # because the sheet's `directologist` field is blank for many domains the
+        # fact-row cascade had already resolved). Fix: fact_direction/
+        # fact_specialist/fact_crm CTEs below compute the FACT-side majority
+        # (non-empty values only) per site_key for these 3 columns and are
+        # COALESCEd in ahead of the directory's own value -- directory value is
+        # used ONLY as a last-resort fallback when the domain has zero non-empty
+        # fact rows for that column (e.g. a catalog domain with no traffic yet).
+        # Measured: специалист empty count returns to the pre-bug baseline 3025
+        # and 284 previously-lost values come back with zero new losses; the 9
+        # directory-owned attributes are byte-for-byte unchanged (0 diff). Branch
+        # 2 (domains the directory does not cover at all) is untouched -- it
+        # already sourced these 3 columns from fact, so it was never part of the
+        # A/B/C bug.
         "Dim_Site": """
             CREATE TABLE ad_analytics.Dim_Site_new
             ENGINE = MergeTree
             ORDER BY site_key
             AS
+            WITH
+            fact_direction AS
+            (
+                SELECT
+                    site_key,
+                    argMax(direction, tuple(cnt, max_date, direction)) AS direction
+                FROM
+                (
+                    SELECT
+                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
+                        `направление` AS direction,
+                        count() AS cnt,
+                        max(`Date`) AS max_date
+                    FROM ad_analytics.big_analytics_unified
+                    WHERE ifNull(domain, '') != '' AND ifNull(`направление`, '') != ''
+                    GROUP BY site_key, direction
+                )
+                GROUP BY site_key
+            ),
+            fact_specialist AS
+            (
+                SELECT
+                    site_key,
+                    argMax(specialist, tuple(cnt, max_date, specialist)) AS specialist
+                FROM
+                (
+                    SELECT
+                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
+                        `специалист` AS specialist,
+                        count() AS cnt,
+                        max(`Date`) AS max_date
+                    FROM ad_analytics.big_analytics_unified
+                    WHERE ifNull(domain, '') != '' AND ifNull(`специалист`, '') != ''
+                    GROUP BY site_key, specialist
+                )
+                GROUP BY site_key
+            ),
+            fact_crm AS
+            (
+                SELECT
+                    site_key,
+                    argMax(crm_name, tuple(cnt, max_date, crm_name)) AS crm_name
+                FROM
+                (
+                    SELECT
+                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
+                        `Название crm` AS crm_name,
+                        count() AS cnt,
+                        max(`Date`) AS max_date
+                    FROM ad_analytics.big_analytics_unified
+                    WHERE ifNull(domain, '') != '' AND ifNull(`Название crm`, '') != ''
+                    GROUP BY site_key, crm_name
+                )
+                GROUP BY site_key
+            )
             SELECT
                 site_key,
                 domain,
@@ -160,21 +262,97 @@ def build_dims(client) -> dict[str, int]:
                 CAST(ifNull(crm_name, ''), 'String') AS `Название crm`
             FROM
             (
+                -- 1) domains covered by the master directory: the 9
+                -- directory-owned attributes always win (no argMax/tie-break
+                -- needed -- dup rows in gsheet_sites are byte-identical
+                -- duplicates, verified live). направление/специалист/Название
+                -- crm come from the FACT majority (fact_direction/
+                -- fact_specialist/fact_crm), falling back to the directory's
+                -- own (differently-taxonomised) value only when the domain has
+                -- no non-empty fact data for that column.
+                SELECT
+                    d.site_key AS site_key,
+                    d.domain AS domain,
+                    d.salon AS salon,
+                    d.city AS city,
+                    d.region AS region,
+                    d.site_type AS site_type,
+                    d.template AS template,
+                    coalesce(nullIf(fd.direction, ''), d.direction) AS direction,
+                    d.site_status AS site_status,
+                    coalesce(nullIf(fs.specialist, ''), d.specialist) AS specialist,
+                    d.project AS project,
+                    d.salon_id AS salon_id,
+                    d.manager AS manager,
+                    coalesce(nullIf(fc.crm_name, ''), d.crm_name) AS crm_name
+                FROM
+                (
+                    SELECT
+                        site_key,
+                        any(domain) AS domain,
+                        any(salon) AS salon,
+                        any(city) AS city,
+                        any(region) AS region,
+                        any(site_type) AS site_type,
+                        any(template) AS template,
+                        any(direction) AS direction,
+                        any(site_status) AS site_status,
+                        any(specialist) AS specialist,
+                        any(project) AS project,
+                        any(salon_id) AS salon_id,
+                        any(manager) AS manager,
+                        any(crm_name) AS crm_name
+                    FROM
+                    (
+                        SELECT
+                            cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
+                            domain,
+                            salon,
+                            city,
+                            region,
+                            site_type,
+                            template,
+                            ifNull(direction, '') AS direction,
+                            status AS site_status,
+                            directologist AS specialist,
+                            project_manager AS project,
+                            client_id AS salon_id,
+                            sales_manager AS manager,
+                            ifNull(crm, '') AS crm_name
+                        FROM raw_data.gsheet_sites
+                        WHERE ifNull(domain, '') != ''
+                    )
+                    GROUP BY site_key
+                ) d
+                LEFT JOIN fact_direction fd ON fd.site_key = d.site_key
+                LEFT JOIN fact_specialist fs ON fs.site_key = d.site_key
+                LEFT JOIN fact_crm fc ON fc.site_key = d.site_key
+
+                UNION ALL
+
+                -- 2) domains fact has but the master directory does not: not
+                -- part of blocker A/B/C (these 3 columns already came from fact
+                -- here) -- unchanged, only the tie-break weight gets a `domain`
+                -- component added (DIM_SITE_TIEBREAK_FIX 2: count()/max(Date)
+                -- alone can still tie when two attribute-combinations of a
+                -- domain have equal frequency and equal max Date; `domain` is
+                -- constant per group so it does not change today's winner, but
+                -- makes the ORDER BY fully deterministic for the general case).
                 SELECT
                     site_key,
-                    argMax(domain, sort_weight) AS domain,
-                    argMax(salon, sort_weight) AS salon,
-                    argMax(city, sort_weight) AS city,
-                    argMax(region, sort_weight) AS region,
-                    argMax(site_type, sort_weight) AS site_type,
-                    argMax(template, sort_weight) AS template,
-                    argMax(direction, sort_weight) AS direction,
-                    argMax(site_status, sort_weight) AS site_status,
-                    argMax(specialist, sort_weight) AS specialist,
-                    argMax(project, sort_weight) AS project,
-                    argMax(salon_id, sort_weight) AS salon_id,
-                    argMax(manager, sort_weight) AS manager,
-                    argMax(crm_name, sort_weight) AS crm_name
+                    argMax(domain, w) AS domain,
+                    argMax(salon, w) AS salon,
+                    argMax(city, w) AS city,
+                    argMax(region, w) AS region,
+                    argMax(site_type, w) AS site_type,
+                    argMax(template, w) AS template,
+                    argMax(direction, w) AS direction,
+                    argMax(site_status, w) AS site_status,
+                    argMax(specialist, w) AS specialist,
+                    argMax(project, w) AS project,
+                    argMax(salon_id, w) AS salon_id,
+                    argMax(manager, w) AS manager,
+                    argMax(crm_name, w) AS crm_name
                 FROM
                 (
                     SELECT
@@ -192,30 +370,16 @@ def build_dims(client) -> dict[str, int]:
                         `id_салона` AS salon_id,
                         `менеджер` AS manager,
                         ifNull(`Название crm`, '') AS crm_name,
-                        tuple(toUInt8(2), notEmpty(ifNull(`салон`, '')), lengthUTF8(ifNull(domain, ''))) AS sort_weight
+                        tuple(count(), max(`Date`), domain) AS w
                     FROM ad_analytics.big_analytics_unified
                     WHERE ifNull(domain, '') != ''
-
-                    UNION ALL
-
-                    SELECT
-                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
-                        domain,
-                        salon,
-                        city,
-                        region,
-                        site_type,
-                        template,
-                        ifNull(direction, '') AS direction,
-                        status AS site_status,
-                        directologist AS specialist,
-                        project_manager AS project,
-                        client_id AS salon_id,
-                        sales_manager AS manager,
-                        ifNull(crm, '') AS crm_name,
-                        tuple(toUInt8(1), notEmpty(ifNull(salon, '')), lengthUTF8(ifNull(domain, ''))) AS sort_weight
-                    FROM raw_data.gsheet_sites
-                    WHERE ifNull(domain, '') != ''
+                      AND lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, ''))) NOT IN (
+                          SELECT DISTINCT lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))
+                          FROM raw_data.gsheet_sites
+                          WHERE ifNull(domain, '') != ''
+                      )
+                    GROUP BY site_key, domain, salon, city, region, site_type, template,
+                             direction, site_status, specialist, project, salon_id, manager, crm_name
                 )
                 GROUP BY site_key
             )
