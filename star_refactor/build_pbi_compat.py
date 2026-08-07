@@ -101,10 +101,13 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             toInt64(round(f.nedozvon)) AS nedozvon,
             f.`RlAdjustmentId` AS `RlAdjustmentId`,
             f.fid,
-            -- PBI v00 historically treats the Clicks field as the v5 "Clicks" column,
-            -- which contains Yandex impressions. Keep this compatibility alias here
-            -- while the CH fact keeps physical Clicks/Impressions semantics.
-            toFloat64(f.`Impressions`) AS `Clicks`,
+            -- PBI_CLICKS_IMPRESSIONS_FIX_2026-08-06: v5's pbi_big_analytics_full projects the real
+            -- f."Clicks" column as-is (COLUMNS_big_analytics_full.md: Clicks=клики, Impressions=показы
+            -- — two distinct fields, never swapped). The previous alias here substituted Impressions
+            -- for Clicks, so SUM(Clicks) in Power BI actually summed показы (643 287 417 instead of
+            -- the real 30 026 838). Fixed to match v5: Clicks stays Clicks, Impressions is its own column.
+            toFloat64(f.`Clicks`) AS `Clicks`,
+            toFloat64(f.`Impressions`) AS `Impressions`,
             f.`План заявки`,
             f.`План приезда`,
             concat(ifNull(f.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`,
@@ -120,9 +123,29 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 f.`направление`
             ) AS `направление`,
             f.`тип_заявки`,
+            -- PBI_SPECIALIST_ROWGRAIN_FIX_2026-08-06: специалист lives on fact_big_analytics row-grain
+            -- (filled by spec_fallback.py cascade, independent of campaign_status/step4), not on any
+            -- Dim_* table -- mirrors v5's f."специалист" direct pass-through in pbi_big_analytics_full.
+            f.`специалист`,
+            -- PBI_SITE_ATTRS_ROWGRAIN_FIX_2026-08-07: same row-grain reasoning as специалист above --
+            -- v5's pbi_big_analytics_full (build_star.py:930-943) passes these 10 attributes straight
+            -- through from the fact row, not from a Dim_Site lookup (site attrs can legitimately vary
+            -- per row over time -- salon renames, template migrations -- so the fact row already holds
+            -- the correct value for THAT row; Dim_Site is a single argMax/master-directory pick per
+            -- domain and disagreed with the fact on 95.2% of the measured mismatches). The `ds` alias
+            -- below stayed JOINed but was never referenced anywhere in this SELECT -- dead join, removed.
+            f.`салон`,
+            f.`город`,
+            f.`регион`,
+            f.`тип_сайта`,
+            f.`шаблон`,
+            f.`статус`,
+            f.`проджект`,
+            f.`менеджер`,
+            f.`id_салона`,
+            f.`Название crm`,
             toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key
         FROM ad_analytics.fact_big_analytics f
-        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
         {where_sql}
     """
 
