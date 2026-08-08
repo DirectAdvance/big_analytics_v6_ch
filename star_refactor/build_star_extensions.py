@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, q, swap_shadow
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, q, swap_shadow, table_exists
 
 log = logging.getLogger("build_star_extensions")
 
@@ -159,16 +159,32 @@ def build_dim_source(client) -> int:
     )
 
 
+WIDE_SOURCED_DIM_BUILDERS = {
+    "Dim_AdNetworkType": build_dim_adnetwork,
+    "Dim_Device": build_dim_device,
+    "Dim_Source": build_dim_source,
+}
+
+
+def _preserve_existing_dim(client, table: str) -> int:
+    if not table_exists(client, "ad_analytics", table):
+        raise RuntimeError(f"ad_analytics.{table} отсутствует, а big_analytics_unified уже снят")
+    rows = count_rows(client, f"ad_analytics.{q(table)}")
+    log.info("  %s preserved rows=%d", table, rows)
+    return rows
+
+
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     client = get_client()
     t0 = time.perf_counter()
-    rows = {
-        "Dim_AdFormat": build_dim_adformat(client),
-        "Dim_AdNetworkType": build_dim_adnetwork(client),
-        "Dim_Device": build_dim_device(client),
-        "Dim_Source": build_dim_source(client),
-    }
+    rows = {"Dim_AdFormat": build_dim_adformat(client)}
+    if table_exists(client, "ad_analytics", "big_analytics_unified"):
+        for table, builder in WIDE_SOURCED_DIM_BUILDERS.items():
+            rows[table] = builder(client)
+    else:
+        for table in WIDE_SOURCED_DIM_BUILDERS:
+            rows[table] = _preserve_existing_dim(client, table)
     details = ", ".join(f"{key}={value:,}" for key, value in rows.items())
     log.info("build_star_extensions завершён за %.1f сек: %s", time.perf_counter() - t0, details)
     return {"rows": sum(rows.values()), "details": details}

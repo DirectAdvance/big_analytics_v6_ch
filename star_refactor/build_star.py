@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -11,7 +12,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
-from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, range_batches, swap_shadow, table_exists
+from config.ch_utils import (
+    SAFE_QUERY_SETTINGS,
+    column_names,
+    count_rows,
+    day_ranges,
+    q,
+    range_batches,
+    swap_shadow,
+    table_engine,
+    table_exists,
+)
 from step3_build_sources.step3 import _metric_expr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,7 +62,68 @@ FACT_BIG_DIMENSION_COLUMNS = {
     "Device",
     "источник",
     "поставщик",
+    "account_login",
+    "Название crm",
+    "тип_заявки",
+    "статус",
+    "cascade_level",
+    "салон",
+    "город",
+    "регион",
+    "тип_сайта",
+    "шаблон",
+    "специалист",
+    "проджект",
+    "менеджер",
+    "id_салона",
+    "направление",
+    "direction",
 }
+
+
+ACCOUNT_KEY_COLUMNS = ["account_login"]
+CRM_STATUS_KEY_COLUMNS = ["Название crm", "тип_заявки", "статус", "cascade_level"]
+SALON_KEY_COLUMNS = [
+    "салон",
+    "город",
+    "регион",
+    "тип_сайта",
+    "шаблон",
+    "специалист",
+    "проджект",
+    "менеджер",
+    "id_салона",
+    "направление",
+]
+
+
+FACT_SWAP_COMPAT_OBJECTS = [
+    "bi_pbi_big_analytics_full",
+    "bi_pbi_import_big_analytics_full",
+    "bi_big_analytics_full_arrival",
+    "pbi_big_analytics_full",
+    "pbi_import_big_analytics_full",
+    "big_analytics_direct",
+    "big_analytics_seo",
+    "big_analytics_pixel",
+    "big_analytics_crop_targeting",
+    "big_analytics_reviews",
+    "big_analytics_unified",
+    "big_analytics_pixel_score",
+    "big_analytics_full_arrival",
+    "big_analytics_full",
+]
+
+
+def _normalized_string_expr(column: str) -> str:
+    return f"lowerUTF8(trim(BOTH ' ' FROM ifNull({q(column)}, '')))"
+
+
+def _dimension_key_sql(columns: list[str], alias: str) -> str:
+    normalized = [_normalized_string_expr(column) for column in columns]
+    has_value = " OR ".join(f"notEmpty({expr})" for expr in normalized)
+    values = ", ".join(normalized)
+    return f"if({has_value}, cityHash64(concatWithSeparator('\\t', {values})), toUInt64(0)) AS {alias}"
 
 
 def _create_fact_empty(client, target: str, select_sql: str) -> None:
@@ -61,7 +133,7 @@ def _create_fact_empty(client, target: str, select_sql: str) -> None:
         CREATE TABLE {target}
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(ifNull(`Date`, toDate('2026-01-01')))
-        ORDER BY (ifNull(`Date`, toDate('2026-01-01')), `атрибуция`, ifNull(domain, ''))
+        ORDER BY (ifNull(`Date`, toDate('2026-01-01')), `атрибуция`, site_key, ifNull(domain, ''))
         AS SELECT {select_sql}
         FROM ad_analytics.big_analytics_unified
         WHERE 0
@@ -70,14 +142,28 @@ def _create_fact_empty(client, target: str, select_sql: str) -> None:
     )
 
 
-def build_fact(client) -> int:
-    source_cols = column_names(client, "ad_analytics", "big_analytics_unified")
+def drop_fact_compat_objects(client) -> None:
+    for name in FACT_SWAP_COMPAT_OBJECTS:
+        engine = table_engine(client, "ad_analytics", name)
+        if engine == "View":
+            client.command(f"DROP VIEW IF EXISTS ad_analytics.{q(name)} SYNC", settings=SAFE_QUERY_SETTINGS)
+        elif engine:
+            client.command(f"DROP TABLE IF EXISTS ad_analytics.{q(name)} SYNC", settings=SAFE_QUERY_SETTINGS)
+
+
+def build_fact_projection(source_cols: list[str]) -> tuple[str, list[str]]:
     cols = [
         col
         for col in source_cols
         if col not in FACT_BIG_DIMENSION_COLUMNS
     ]
     alias_exprs = []
+    if "domain" in source_cols:
+        alias_exprs.append(
+            "if(notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))), "
+            "cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))), toUInt64(0)) "
+            "AS site_key"
+        )
     if "AdNetworkType" in source_cols:
         alias_exprs.append(
             "lowerUTF8(trim(BOTH ' ' FROM ifNull(`AdNetworkType`, ''))) AS ad_network_type_key"
@@ -96,8 +182,20 @@ def build_fact(client) -> int:
             "cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))), toUInt64(0)) "
             "AS manager_login_key"
         )
+    if all(column in source_cols for column in ACCOUNT_KEY_COLUMNS):
+        alias_exprs.append(_dimension_key_sql(ACCOUNT_KEY_COLUMNS, "account_key"))
+    if all(column in source_cols for column in CRM_STATUS_KEY_COLUMNS):
+        alias_exprs.append(_dimension_key_sql(CRM_STATUS_KEY_COLUMNS, "crm_status_key"))
+    if all(column in source_cols for column in SALON_KEY_COLUMNS):
+        alias_exprs.append(_dimension_key_sql(SALON_KEY_COLUMNS, "salon_key"))
     target_cols = cols + [expr.rsplit(" AS ", 1)[1] for expr in alias_exprs]
     select_sql = ", ".join([q(col) for col in cols] + alias_exprs)
+    return select_sql, target_cols
+
+
+def build_fact(client) -> int:
+    source_cols = column_names(client, "ad_analytics", "big_analytics_unified")
+    select_sql, target_cols = build_fact_projection(source_cols)
     cols_sql = ", ".join(q(col) for col in target_cols)
     shadow = "ad_analytics.fact_big_analytics_new"
     _create_fact_empty(client, shadow, select_sql)
@@ -113,12 +211,12 @@ def build_fact(client) -> int:
             settings=SAFE_QUERY_SETTINGS,
         )
         log.info("  fact daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    drop_fact_compat_objects(client)
     swap_shadow(client, "ad_analytics.fact_big_analytics", shadow)
     return count_rows(client, "ad_analytics.fact_big_analytics")
 
 
-def build_dims(client) -> dict[str, int]:
-    ddl = {
+DIM_DDL = {
         "Dim_Date": """
             CREATE TABLE ad_analytics.Dim_Date_new
             ENGINE = MergeTree
@@ -409,24 +507,76 @@ def build_dims(client) -> dict[str, int]:
             ENGINE = MergeTree
             ORDER BY ifNull(AdGroupId, 0)
             AS
+            WITH
+            raw_adgroups AS
+            (
+                SELECT
+                    group_id AS AdGroupId,
+                    argMax(group_name, synced_at) AS AdGroupName,
+                    argMax(campaign_id, synced_at) AS parent_CampaignId
+                FROM raw_data.direct_adgroups
+                WHERE group_id != 0
+                GROUP BY AdGroupId
+            ),
+            fact_adgroups AS
+            (
+                SELECT
+                    `AdGroupId`,
+                    anyLast(`AdGroupName`) AS `AdGroupName`,
+                    anyLast(adgroup_code) AS adgroup_code,
+                    anyLast(`марки авто`) AS `марки авто`,
+                    anyLast(ag_part1) AS ag_part1,
+                    anyLast(ag_part2) AS ag_part2,
+                    anyLast(ag_part3) AS ag_part3,
+                    anyLast(ag_part4) AS ag_part4,
+                    anyLast(ag_part5) AS ag_part5,
+                    anyLast(ag_part6) AS ag_part6,
+                    anyLast(ag_part7) AS ag_part7,
+                    anyLast(`номер группы | название группы`) AS `номер группы | название группы`,
+                    anyLast(`неверный_кодер_new`) AS `неверный_кодер_new`,
+                    anyLast(`CampaignId`) AS parent_CampaignId
+                FROM ad_analytics.big_analytics_unified
+                WHERE `AdGroupId` IS NOT NULL
+                GROUP BY `AdGroupId`
+            )
             SELECT
-                `AdGroupId`,
-                anyLast(`AdGroupName`) AS `AdGroupName`,
-                anyLast(adgroup_code) AS adgroup_code,
-                anyLast(`марки авто`) AS `марки авто`,
-                anyLast(ag_part1) AS ag_part1,
-                anyLast(ag_part2) AS ag_part2,
-                anyLast(ag_part3) AS ag_part3,
-                anyLast(ag_part4) AS ag_part4,
-                anyLast(ag_part5) AS ag_part5,
-                anyLast(ag_part6) AS ag_part6,
-                anyLast(ag_part7) AS ag_part7,
-                anyLast(`номер группы | название группы`) AS `номер группы | название группы`,
-                anyLast(`неверный_кодер_new`) AS `неверный_кодер_new`,
-                anyLast(`CampaignId`) AS parent_CampaignId
-            FROM ad_analytics.big_analytics_unified
-            WHERE `AdGroupId` IS NOT NULL
-            GROUP BY `AdGroupId`
+                r.AdGroupId,
+                coalesce(r.AdGroupName, f.AdGroupName) AS AdGroupName,
+                f.adgroup_code AS adgroup_code,
+                ifNull(f.`марки авто`, '') AS `марки авто`,
+                ifNull(f.ag_part1, '') AS ag_part1,
+                ifNull(f.ag_part2, '') AS ag_part2,
+                ifNull(f.ag_part3, '') AS ag_part3,
+                ifNull(f.ag_part4, '') AS ag_part4,
+                ifNull(f.ag_part5, '') AS ag_part5,
+                ifNull(f.ag_part6, '') AS ag_part6,
+                ifNull(f.ag_part7, '') AS ag_part7,
+                ifNull(f.`номер группы | название группы`, concat(toString(r.AdGroupId), ' | ', ifNull(r.AdGroupName, ''))) AS `номер группы | название группы`,
+                f.`неверный_кодер_new` AS `неверный_кодер_new`,
+                ifNull(r.parent_CampaignId, f.parent_CampaignId) AS parent_CampaignId
+            FROM raw_adgroups r
+            LEFT JOIN fact_adgroups f ON f.AdGroupId = r.AdGroupId
+
+            UNION ALL
+
+            SELECT
+                f.AdGroupId,
+                f.AdGroupName,
+                f.adgroup_code,
+                ifNull(f.`марки авто`, '') AS `марки авто`,
+                ifNull(f.ag_part1, '') AS ag_part1,
+                ifNull(f.ag_part2, '') AS ag_part2,
+                ifNull(f.ag_part3, '') AS ag_part3,
+                ifNull(f.ag_part4, '') AS ag_part4,
+                ifNull(f.ag_part5, '') AS ag_part5,
+                ifNull(f.ag_part6, '') AS ag_part6,
+                ifNull(f.ag_part7, '') AS ag_part7,
+                ifNull(f.`номер группы | название группы`, concat(toString(f.AdGroupId), ' | ', ifNull(f.AdGroupName, ''))) AS `номер группы | название группы`,
+                f.`неверный_кодер_new`,
+                f.parent_CampaignId
+            FROM fact_adgroups f
+            LEFT JOIN raw_adgroups r ON r.AdGroupId = f.AdGroupId
+            WHERE r.AdGroupId = 0
         """,
         "Dim_Adjustment": """
             CREATE TABLE ad_analytics.Dim_Adjustment_new
@@ -486,15 +636,263 @@ def build_dims(client) -> dict[str, int]:
             )
             GROUP BY manager_login_key
         """,
-    }
+        "Dim_Account": f"""
+            CREATE TABLE ad_analytics.Dim_Account_new
+            ENGINE = MergeTree
+            ORDER BY account_key
+            AS
+            SELECT
+                account_key,
+                anyLast(account_login) AS account_login
+            FROM
+            (
+                SELECT
+                    {_dimension_key_sql(ACCOUNT_KEY_COLUMNS, "account_key")},
+                    ifNull(account_login, '') AS account_login
+                FROM ad_analytics.big_analytics_unified
+            )
+            GROUP BY account_key
+        """,
+        "Dim_CRMStatus": f"""
+            CREATE TABLE ad_analytics.Dim_CRMStatus_new
+            ENGINE = MergeTree
+            ORDER BY crm_status_key
+            AS
+            SELECT
+                crm_status_key,
+                anyLast(`Название crm`) AS `Название crm`,
+                anyLast(`тип_заявки`) AS `тип_заявки`,
+                anyLast(`статус`) AS `статус`,
+                anyLast(cascade_level) AS cascade_level
+            FROM
+            (
+                SELECT
+                    {_dimension_key_sql(CRM_STATUS_KEY_COLUMNS, "crm_status_key")},
+                    CAST(ifNull(`Название crm`, ''), 'String') AS `Название crm`,
+                    `тип_заявки`,
+                    `статус`,
+                    cascade_level
+                FROM ad_analytics.big_analytics_unified
+            )
+            GROUP BY crm_status_key
+        """,
+        "Dim_Salon": f"""
+            CREATE TABLE ad_analytics.Dim_Salon_new
+            ENGINE = MergeTree
+            ORDER BY salon_key
+            AS
+            SELECT
+                salon_key,
+                anyLast(`салон`) AS `салон`,
+                anyLast(`город`) AS `город`,
+                anyLast(`регион`) AS `регион`,
+                anyLast(`тип_сайта`) AS `тип_сайта`,
+                anyLast(`шаблон`) AS `шаблон`,
+                anyLast(`специалист`) AS `специалист`,
+                anyLast(`проджект`) AS `проджект`,
+                anyLast(`менеджер`) AS `менеджер`,
+                anyLast(`id_салона`) AS `id_салона`,
+                anyLast(`направление`) AS `направление`
+            FROM
+            (
+                SELECT
+                    {_dimension_key_sql(SALON_KEY_COLUMNS, "salon_key")},
+                    `салон`,
+                    `город`,
+                    `регион`,
+                    `тип_сайта`,
+                    `шаблон`,
+                    `специалист`,
+                    `проджект`,
+                    `менеджер`,
+                    `id_салона`,
+                    `направление`
+                FROM ad_analytics.big_analytics_unified
+            )
+            GROUP BY salon_key
+        """,
+}
+
+
+def build_dim_adgroup(client) -> int:
+    shadow = "ad_analytics.Dim_AdGroup_new"
+    stage = "ad_analytics.Dim_AdGroup_fact_parts_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(f"DROP TABLE IF EXISTS {stage} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {stage}
+        ENGINE = MergeTree
+        ORDER BY AdGroupId
+        AS
+        SELECT
+            toInt64(0) AS AdGroupId,
+            CAST(NULL, 'Nullable(String)') AS AdGroupName,
+            CAST(NULL, 'Nullable(String)') AS adgroup_code,
+            '' AS `марки авто`,
+            '' AS ag_part1,
+            '' AS ag_part2,
+            '' AS ag_part3,
+            '' AS ag_part4,
+            '' AS ag_part5,
+            '' AS ag_part6,
+            '' AS ag_part7,
+            '' AS `номер группы | название группы`,
+            CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
+            toInt64(0) AS parent_CampaignId
+        WHERE 0
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {stage}
+            SELECT
+                AdGroupId,
+                anyLast(AdGroupName) AS AdGroupName,
+                anyLast(adgroup_code) AS adgroup_code,
+                anyLast(`марки авто`) AS `марки авто`,
+                anyLast(ag_part1) AS ag_part1,
+                anyLast(ag_part2) AS ag_part2,
+                anyLast(ag_part3) AS ag_part3,
+                anyLast(ag_part4) AS ag_part4,
+                anyLast(ag_part5) AS ag_part5,
+                anyLast(ag_part6) AS ag_part6,
+                anyLast(ag_part7) AS ag_part7,
+                anyLast(`номер группы | название группы`) AS `номер группы | название группы`,
+                anyLast(`неверный_кодер_new`) AS `неверный_кодер_new`,
+                anyLast(CampaignId) AS parent_CampaignId
+            FROM ad_analytics.big_analytics_sources
+            WHERE Date >= toDate('{lo}')
+              AND Date < toDate('{hi}')
+              AND AdGroupId != 0
+            GROUP BY AdGroupId
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        if idx == len(ranges) or idx % 30 == 0:
+            log.info("  Dim_AdGroup fact batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY ifNull(AdGroupId, 0)
+        AS SELECT * FROM {stage} WHERE 0
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+
+    bucket_count = 64
+    for bucket in range(bucket_count):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            WITH
+            raw_adgroups AS
+            (
+                SELECT
+                    group_id AS AdGroupId,
+                    argMax(group_name, synced_at) AS AdGroupName,
+                    argMax(campaign_id, synced_at) AS parent_CampaignId
+                FROM raw_data.direct_adgroups
+                WHERE group_id != 0
+                  AND modulo(group_id, {bucket_count}) = {bucket}
+                GROUP BY AdGroupId
+            ),
+            fact_adgroups AS
+            (
+                SELECT
+                    AdGroupId,
+                    anyLast(AdGroupName) AS AdGroupName,
+                    anyLast(adgroup_code) AS adgroup_code,
+                    anyLast(`марки авто`) AS `марки авто`,
+                    anyLast(ag_part1) AS ag_part1,
+                    anyLast(ag_part2) AS ag_part2,
+                    anyLast(ag_part3) AS ag_part3,
+                    anyLast(ag_part4) AS ag_part4,
+                    anyLast(ag_part5) AS ag_part5,
+                    anyLast(ag_part6) AS ag_part6,
+                    anyLast(ag_part7) AS ag_part7,
+                    anyLast(`номер группы | название группы`) AS `номер группы | название группы`,
+                    anyLast(`неверный_кодер_new`) AS `неверный_кодер_new`,
+                    anyLast(parent_CampaignId) AS parent_CampaignId
+                FROM {stage}
+                WHERE modulo(AdGroupId, {bucket_count}) = {bucket}
+                GROUP BY AdGroupId
+            )
+            SELECT
+                r.AdGroupId,
+                coalesce(r.AdGroupName, f.AdGroupName) AS AdGroupName,
+                f.adgroup_code AS adgroup_code,
+                ifNull(f.`марки авто`, '') AS `марки авто`,
+                ifNull(f.ag_part1, '') AS ag_part1,
+                ifNull(f.ag_part2, '') AS ag_part2,
+                ifNull(f.ag_part3, '') AS ag_part3,
+                ifNull(f.ag_part4, '') AS ag_part4,
+                ifNull(f.ag_part5, '') AS ag_part5,
+                ifNull(f.ag_part6, '') AS ag_part6,
+                ifNull(f.ag_part7, '') AS ag_part7,
+                ifNull(f.`номер группы | название группы`, concat(toString(r.AdGroupId), ' | ', ifNull(r.AdGroupName, ''))) AS `номер группы | название группы`,
+                f.`неверный_кодер_new` AS `неверный_кодер_new`,
+                ifNull(r.parent_CampaignId, f.parent_CampaignId) AS parent_CampaignId
+            FROM raw_adgroups r
+            LEFT JOIN fact_adgroups f ON f.AdGroupId = r.AdGroupId
+
+            UNION ALL
+
+            SELECT
+                f.AdGroupId,
+                f.AdGroupName,
+                f.adgroup_code,
+                ifNull(f.`марки авто`, '') AS `марки авто`,
+                ifNull(f.ag_part1, '') AS ag_part1,
+                ifNull(f.ag_part2, '') AS ag_part2,
+                ifNull(f.ag_part3, '') AS ag_part3,
+                ifNull(f.ag_part4, '') AS ag_part4,
+                ifNull(f.ag_part5, '') AS ag_part5,
+                ifNull(f.ag_part6, '') AS ag_part6,
+                ifNull(f.ag_part7, '') AS ag_part7,
+                ifNull(f.`номер группы | название группы`, concat(toString(f.AdGroupId), ' | ', ifNull(f.AdGroupName, ''))) AS `номер группы | название группы`,
+                f.`неверный_кодер_new`,
+                f.parent_CampaignId
+            FROM fact_adgroups f
+            LEFT JOIN raw_adgroups r ON r.AdGroupId = f.AdGroupId
+            WHERE r.AdGroupId = 0
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        if bucket == bucket_count - 1 or (bucket + 1) % 16 == 0:
+            log.info("  Dim_AdGroup merge bucket %d/%d", bucket + 1, bucket_count)
+    swap_shadow(client, "ad_analytics.Dim_AdGroup", shadow)
+    client.command(f"DROP TABLE IF EXISTS {stage} SYNC")
+    rows = count_rows(client, "ad_analytics.Dim_AdGroup")
+    log.info("  Dim_AdGroup=%d", rows)
+    return rows
+
+
+def build_dim(client, table: str) -> int:
+    if table not in DIM_DDL:
+        available = ", ".join(sorted(DIM_DDL))
+        raise ValueError(f"Unknown dimension {table!r}. Available: {available}")
+    if table == "Dim_AdGroup":
+        return build_dim_adgroup(client)
+    shadow = f"ad_analytics.{table}_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(DIM_DDL[table], settings=SAFE_QUERY_SETTINGS)
+    swap_shadow(client, f"ad_analytics.{table}", shadow)
+    rows = count_rows(client, f"ad_analytics.{table}")
+    log.info("  %s=%d", table, rows)
+    return rows
+
+
+def build_dims(client, tables: list[str] | None = None) -> dict[str, int]:
     rows: dict[str, int] = {}
-    for table, sql in ddl.items():
-        shadow = f"ad_analytics.{table}_new"
-        client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
-        client.command(sql, settings=SAFE_QUERY_SETTINGS)
-        swap_shadow(client, f"ad_analytics.{table}", shadow)
-        rows[table] = count_rows(client, f"ad_analytics.{table}")
-        log.info("  %s=%d", table, rows[table])
+    for table in (tables or list(DIM_DDL)):
+        rows[table] = build_dim(client, table)
     return rows
 
 
@@ -875,20 +1273,33 @@ def build_vk_dims(client) -> dict[str, int]:
     return rows
 
 
+def build_extension_dims(client) -> dict[str, int]:
+    from star_refactor import build_star_extensions
+
+    return {
+        "Dim_AdFormat": build_star_extensions.build_dim_adformat(client),
+        "Dim_AdNetworkType": build_star_extensions.build_dim_adnetwork(client),
+        "Dim_Device": build_star_extensions.build_dim_device(client),
+        "Dim_Source": build_star_extensions.build_dim_source(client),
+    }
+
+
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     log.info("build_star v6_ch: ClickHouse star tables")
     client = get_client()
     t0 = time.perf_counter()
     if not table_exists(client, "ad_analytics", "big_analytics_unified"):
         raise RuntimeError("ad_analytics.big_analytics_unified отсутствует")
-    fact_rows = build_fact(client)
     dim_rows = build_dims(client)
+    extension_dim_rows = build_extension_dims(client)
     vk_rows = build_vk_ads_fact(client)
     vk_dim_rows = build_vk_dims(client)
     ml_rows = build_ml_korrektirovki_fact(client)
+    fact_rows = build_fact(client)
     parts = [
         f"fact_big_analytics={fact_rows:,}",
         *[f"{k}={v:,}" for k, v in dim_rows.items()],
+        *[f"{k}={v:,}" for k, v in extension_dim_rows.items()],
         f"fact_vk_ads={vk_rows:,}",
         *[f"{k}={v:,}" for k, v in vk_dim_rows.items()],
         f"fact_ml_korrektirovki={ml_rows:,}",
@@ -898,7 +1309,21 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     return {"rows": fact_rows, "details": details}
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--only-dim",
+        action="append",
+        choices=sorted(DIM_DDL),
+        help="Rebuild only the selected dimension. Can be passed more than once.",
+    )
+    args = parser.parse_args(argv)
+    if args.only_dim:
+        client = get_client()
+        rows = build_dims(client, args.only_dim)
+        details = ", ".join(f"{key}={value:,}" for key, value in rows.items())
+        log.info("selected dimensions rebuilt: %s", details)
+        return
     run()
 
 

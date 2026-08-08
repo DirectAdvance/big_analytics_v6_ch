@@ -1,5 +1,33 @@
 # PBI Source Audit
 
+## 2026-08-08 v6_ch account/CRM/salon star cleanup
+
+- `Dim_Account`, `Dim_CRMStatus`, `Dim_Salon` promoted to first-class star dimensions:
+  `Dim_Account=1,226`, `Dim_CRMStatus=206`, `Dim_Salon=4,146`.
+- `fact_big_analytics` now keeps only dimension keys for these groups:
+  `account_key`, `crm_status_key`, `salon_key`. Duplicated text attributes such as
+  `account_login`, `Название crm`, `тип_заявки`, `статус`, `cascade_level`, `салон`,
+  `город`, `регион`, `тип_сайта`, `шаблон`, `специалист`, `проджект`, `менеджер`,
+  `id_салона`, `направление`, `direction` are removed from the physical fact.
+- Power BI/backward compatibility is preserved through `pbi_*`, `bi_*`, and wide
+  compatibility views. `pbi_big_analytics_full`, `big_analytics_full`,
+  `big_analytics_full_arrival`, `big_analytics_pixel_score`, and `big_analytics_unified`
+  restore the old text columns through `Dim_Account`/`Dim_CRMStatus`/`Dim_Salon` joins.
+- Pipeline order was corrected for the narrower fact: `145 build_star` builds required dims
+  before swapping the fact, `1451 build_star_extensions` is idempotent after the wide source is
+  removed, `148 cleanup_wide_intermediates` rebuilds wide compatibility views, then `146
+  build_pbi_compat` builds PBI objects.
+- Verified post-run counts: `fact_big_analytics=5,309,571`, `pbi_big_analytics_full=5,309,571`,
+  `big_analytics_full=5,189,705`, `big_analytics_full_arrival=119,866`,
+  `big_analytics_pixel_score=234,643`, `big_analytics_unified=5,309,571`,
+  `pixel_score=234,643`.
+- `data_check.verify_big_analytics` golden now reads Kuderko `специалист` through `Dim_Salon`
+  and verifies that PBI compatibility still exposes the restored text columns. `step900` passed;
+  the existing `KUDERKO_RAW_INCOMPLETE` warning remains informational while raw Direct history is
+  incomplete for 38 of 67 Kuderko logins.
+- Measured runtime for the clean analytical path from `--from-step 3` is about `54m52s` by summed
+  successful step durations. The debug/recovery wall clock for this migration run was `1h08m43s`.
+
 ## 2026-08-03 v6_ch star safety decision
 
 - `fact_big_analytics` remains the main Power BI fact and is rebuilt from `big_analytics_unified`.

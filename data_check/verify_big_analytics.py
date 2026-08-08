@@ -12,7 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import count_rows, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, table_exists
+from corrections import _KUDERKO_DATE, _KUDERKO_LOGINS  # единственный источник — не дублировать
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("verify_big_analytics")
@@ -29,9 +30,6 @@ REQUIRED_TABLES = [
     "fact_big_analytics",
     "pbi_big_analytics_full",
     "pixel_score",
-    "arp_fact",
-    "arc_fact",
-    "arf_fact",
     "Dim_Criterion",
     "dim_criterion",
 ]
@@ -40,7 +38,6 @@ PBI_SOURCE_OBJECTS = [
     "Dim_AdGroup",
     "Dim_AdNetworkType",
     "Dim_Campaign",
-    "Dim_Criterion",
     "Dim_Date",
     "Dim_Device",
     "Dim_Location",
@@ -51,9 +48,6 @@ PBI_SOURCE_OBJECTS = [
     "Dim_VkAdGroup",
     "Dim_VkAdPlan",
     "Dim_VkBanner",
-    "arc_fact",
-    "arf_fact",
-    "arp_fact",
     "pbi_big_analytics_full",
     # `big_analytics_full_arrival` здесь БЫТЬ НЕ ДОЛЖНО: с ca7174e (2026-08-04)
     # `bi_big_analytics_full_arrival` переведена в `LEGACY_BI_VIEWS`
@@ -99,9 +93,6 @@ PBI_COMPAT_OBJECTS = [
     "pbi_import_big_analytics_full",
     "pbi_import_fact_direct_feed_funnel",
     "pbi_import_region_spend",
-    "arp_fact",
-    "arf_fact",
-    "arc_fact",
 ]
 
 FULL_PHYSICAL_TABLES = [
@@ -124,11 +115,51 @@ WIDE_COMPAT_VIEWS = [
     "big_analytics_unified",
 ]
 
+# GOLDEN_TOL_WIDENED_2026-08-07 (v6 ONLY — распоряжение Семёна, НЕ трогать v5's эталон/допуск).
+# Эталон 25 422 774.00 ±100 был перенесён в v6 из контура v5 при миграции (v5 golden стабилен,
+# дрейф +24 ₽ прогон за прогоном, PASS). В v6 допуск ±100 нестабилен: из 4 последних прогонов
+# golden прошёл только ОДИН (9c33cc1e5196, delta +30.03), три упали (187c0ac48b29 delta +531.85,
+# 78804a3bcf30, a460eeed0b83).
+#
+# Root-cause установлен ФАКТОМ (2026-08-07, KNOWN_ISSUES.md #37) — не дефект ETL/атрибуции v6, а
+# незавершённый бэкфил ВНЕШНЕГО загрузчика (вне репозитория, вне мониторинга raw_data.etl_runs),
+# который на 2026-08-07 всё ещё доливает историю по 38 из 67 логинов `_KUDERKO_LOGINS` в
+# raw_data.yandex_direct_report_rows. Более ранняя гипотеза про «~50 логинов с индивидуальными
+# коэффициентами и 63 аккаунта-призрака» (#33/#35) и про spec_fallback проверена и ОТВЕРГНУТА как
+# причина этого конкретного дрейфа — смежное наблюдение, не источник.
+# ⚠️ Расширение ±100→±1000 — ОБХОД, НЕ ФИКС (решение Семёна: допуск сам по себе не лечит неполноту
+# сырья, откат не нужен). См. `_kuderko_raw_coverage()` ниже и KNOWN_ISSUES.md #37 — ±1000 при этом
+# ОСТАЁТСЯ, но golden понижается до информационного статуса ТОЛЬКО пока сырьё неполно; как только
+# присутствуют все 67 — golden снова блокирует прогон как жёсткий гейт.
 GOLDEN_COST = Decimal("25422774.00")
-GOLDEN_COST_TOL = Decimal("100.00")
+GOLDEN_COST_TOL = Decimal("1000.00")
 GOLDEN_SALES_FLOOR = 54
 GOLDEN_SPECIALIST = "Кудерко Семен"
 GOLDEN_SOURCES = ("direct", "tp8", "tp9", "tp10", "seo", "calls", "direct_unmatched", "direct_zero")
+GOLDEN_FACT_COLUMNS = {"salon_key", "атрибуция", "_source_table", "total_cost", "prodazhi"}
+GOLDEN_SALON_COLUMNS = {"salon_key", "специалист"}
+PBI_RESTORED_TEXT_COLUMNS = {
+    "специалист",
+    "Название crm",
+    "тип_заявки",
+    "статус",
+    "салон",
+    "город",
+    "регион",
+}
+
+
+def _golden_kuderko_sql(source_sql: str) -> str:
+    return f"""
+        SELECT
+            round(sum(f.total_cost), 2) AS rashod,
+            round(sum(f.prodazhi)) AS prodazhi
+        FROM ad_analytics.fact_big_analytics f
+        LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key
+        WHERE dsl.`специалист` = {{specialist:String}}
+          AND f.`атрибуция` = 'По дате заявки'
+          AND f.`_source_table` IN ({source_sql})
+    """
 
 
 def _scalar(client, sql: str):
@@ -158,6 +189,74 @@ def _has_columns(client, table: str, columns: set[str]) -> bool:
     ).result_rows
     existing = {row[0] for row in rows}
     return columns.issubset(existing)
+
+
+def _kuderko_raw_coverage(client) -> tuple[int, int, list[str]]:
+    """Сколько логинов `corrections._KUDERKO_LOGINS` реально есть в сыром источнике.
+
+    Golden Кудерко (`GOLDEN_COST`/`GOLDEN_SALES_FLOOR`) посчитан по ВСЕМ 67 логинам разом.
+    Внешний загрузчик (вне этого репозитория, вне `raw_data.etl_runs`) на 2026-08-07 всё ещё
+    доливает историю по части из них батчами — см. KNOWN_ISSUES.md #37. Пока хотя бы один
+    логин пуст, сравнение факта с эталоном методологически некорректно: это не дефект ETL/
+    атрибуции, а неполнота исходных данных. Возвращает (present, total, missing_logins) —
+    `missing_logins` НЕ обрезан, обрезку делает вызывающий код для компактности лога.
+
+    Нормализация логина ЗЕРКАЛИТ правило-1 (`corrections.specialist_correction_expr`,
+    `corrections.py:174`: `lowerUTF8(trim(ifNull(account_expr, '')))`) — сравнение раньше было
+    точным (`client_login IN (...)`), а `_KUDERKO_LOGINS` уже все в нижнем регистре, так что
+    сегодня оба варианта дают одинаковые 29/67; но без нормализации здесь логин с иным регистром
+    в новом батче пройдёт правило-1, а этот guard ложно посчитает его «отсутствует» (director
+    review, ЗАМЕЧАНИЕ 3).
+
+    ⚠️ «Присутствует» — это ПРОКСИ, не «полностью загружен»: логин может иметь ровно одну строку
+    ВНЕ golden-окна правила-1 (`day < 2026-04-10`, пример-факт: `porg-riga5gvo` — 2 строки только
+    за 2026-06-18) и всё равно засчитается «есть». Так специально: `present_pre_cutoff` в
+    `_kuderko_pre_cutoff_presence()` — отдельный диагностический счётчик именно под этот случай
+    (ЗАМЕЧАНИЕ 4), основной счётчик здесь НЕ фильтруется по дате намеренно (иначе логин без
+    до-апрельских данных в принципе никогда не засчитается «есть», и guard не снимется НИКОГДА —
+    это уже настоящее маскирование, см. KNOWN_ISSUES.md #37).
+    """
+    logins = _KUDERKO_LOGINS
+    total = len(logins)
+    if not table_exists(client, "raw_data", "yandex_direct_report_rows"):
+        return 0, total, list(logins)
+    rows = client.query(
+        """
+        SELECT DISTINCT lowerUTF8(trim(client_login)) AS login
+        FROM raw_data.yandex_direct_report_rows
+        WHERE lowerUTF8(trim(client_login)) IN {logins:Array(String)}
+        """,
+        parameters={"logins": list(logins)},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+    present_logins = {row[0] for row in rows}
+    missing = [login for login in logins if login not in present_logins]
+    return len(present_logins), total, missing
+
+
+def _kuderko_pre_cutoff_presence(client) -> int:
+    """Сколько логинов `_KUDERKO_LOGINS` имеют хотя бы одну строку СТРОГО ДО отсечки правила-1.
+
+    Диагностический ДОПОЛНИТЕЛЬНЫЙ счётчик (director review, ЗАМЕЧАНИЕ 4) — НЕ гейт, НЕ влияет на
+    `golden_raw_incomplete`/`failures`, только логируется. `_kuderko_raw_coverage()` выше считает
+    логин «есть» по ЛЮБОЙ строке, включая строки вне golden-окна (`day < _KUDERKO_DATE`) — значит
+    основной счётчик может дойти до 67/67 и снять guard, хотя под реальным golden-окном сырьё
+    всё ещё неполное. Этот счётчик делает такое расхождение видимым в логе на момент снятия guard'а.
+    """
+    logins = _KUDERKO_LOGINS
+    if not table_exists(client, "raw_data", "yandex_direct_report_rows"):
+        return 0
+    rows = client.query(
+        """
+        SELECT count(DISTINCT lowerUTF8(trim(client_login)))
+        FROM raw_data.yandex_direct_report_rows
+        WHERE lowerUTF8(trim(client_login)) IN {logins:Array(String)}
+          AND day < {cutoff:String}
+        """,
+        parameters={"logins": list(logins), "cutoff": _KUDERKO_DATE},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+    return int(rows[0][0]) if rows else 0
 
 
 def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # noqa: ARG001
@@ -235,21 +334,51 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
             if rows == 0:
                 failures.append(f"empty_wide_compat:{table}")
 
-        golden_cols = {"специалист", "атрибуция", "_source_table", "total_cost", "prodazhi"}
-        if not _has_columns(client, "fact_big_analytics", golden_cols):
+        raw_present, raw_total, raw_missing = _kuderko_raw_coverage(client)
+        raw_present_pre_cutoff = _kuderko_pre_cutoff_presence(client)
+        golden_raw_incomplete = raw_present < raw_total
+        # ЗАМЕЧАНИЕ 4 (director review): диагностический лог, отдельно от гейта выше — показывает,
+        # сколько логинов реально видны ДО отсечки правила-1 (_KUDERKO_DATE), а не просто "есть
+        # хоть какая-то строка". Если раскроется раскол present_any_day > present_pre_cutoff — это
+        # знак, что часть "присутствующих" логинов покрыта строками ВНЕ golden-окна (пример-факт —
+        # porg-riga5gvo, см. docstring _kuderko_pre_cutoff_presence и KNOWN_ISSUES.md #37).
+        log.info(
+            "kuderko_raw_coverage: present_any_day=%d present_pre_cutoff=%d total=%d (cutoff=%s)",
+            raw_present, raw_present_pre_cutoff, raw_total, _KUDERKO_DATE,
+        )
+        if golden_raw_incomplete:
+            log.warning(
+                "KUDERKO_RAW_INCOMPLETE: raw_data.yandex_direct_report_rows содержит %d/%d "
+                "логинов _KUDERKO_LOGINS (пусто %d). Сырьё под golden НЕПОЛНО: внешний загрузчик "
+                "(вне этого репозитория, вне мониторинга raw_data.etl_runs) всё ещё доливает "
+                "историю по недостающим аккаунтам батчами прямо по датам, которые golden считает "
+                "замороженными (факт 2026-08-06: e-20078432 получил январские данные в 16:49 UTC, "
+                "porg-kkhtgf2u — в 17:15 UTC, 44 261 строк / 1 986 682.13 ₽, без дублей по "
+                "бизнес-ключу). Эталон Кудерко посчитан по ВСЕМ 67 логинам разом (средний расход "
+                "на уже загруженный аккаунт ≈907 тыс ₽) — при неполном сырье расхождение по "
+                "расходу/продажам ОЖИДАЕМО и НЕ является регрессией ETL или атрибуции, чинить "
+                "corrections/spec_fallback НЕ НУЖНО (root-cause и цифры — KNOWN_ISSUES.md #37). "
+                "golden ниже понижен до информационного статуса ТОЛЬКО на этот прогон; "
+                "отсутствующие логины (первые 10 из %d): %s",
+                raw_present,
+                raw_total,
+                len(raw_missing),
+                len(raw_missing),
+                ", ".join(raw_missing[:10]),
+            )
+        else:
+            log.info("kuderko_raw_coverage=%d/%d — сырьё полное, golden в обычном режиме", raw_present, raw_total)
+
+        if not _has_columns(client, "fact_big_analytics", GOLDEN_FACT_COLUMNS):
             failures.append("golden_missing_fact_columns")
+        elif not _has_columns(client, "Dim_Salon", GOLDEN_SALON_COLUMNS):
+            failures.append("golden_missing_salon_columns")
+        elif not _has_columns(client, "pbi_big_analytics_full", PBI_RESTORED_TEXT_COLUMNS):
+            failures.append("missing_pbi_restored_text_columns")
         else:
             source_sql = ", ".join(f"'{source}'" for source in GOLDEN_SOURCES)
             rashod, prodazhi = client.query(
-                f"""
-                SELECT
-                    round(sum(total_cost), 2) AS rashod,
-                    round(sum(prodazhi)) AS prodazhi
-                FROM ad_analytics.fact_big_analytics
-                WHERE `специалист` = {{specialist:String}}
-                  AND `атрибуция` = 'По дате заявки'
-                  AND `_source_table` IN ({source_sql})
-                """,
+                _golden_kuderko_sql(source_sql),
                 parameters={"specialist": GOLDEN_SPECIALIST},
             ).result_rows[0]
             rashod = Decimal(str(rashod or "0"))
@@ -263,9 +392,23 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
                 GOLDEN_SALES_FLOOR,
             )
             if abs(cost_delta) > GOLDEN_COST_TOL:
-                failures.append(f"golden_cost_delta={cost_delta}")
+                if golden_raw_incomplete:
+                    log.warning(
+                        "golden_cost_delta=%s ИГНОРИРУЕТСЯ вердиктом: сырьё под golden неполно "
+                        "(%d/%d логинов, см. KUDERKO_RAW_INCOMPLETE выше) — не регрессия ETL",
+                        cost_delta, raw_present, raw_total,
+                    )
+                else:
+                    failures.append(f"golden_cost_delta={cost_delta}")
             if prodazhi < GOLDEN_SALES_FLOOR:
-                failures.append(f"golden_sales={prodazhi}")
+                if golden_raw_incomplete:
+                    log.warning(
+                        "golden_sales=%d ИГНОРИРУЕТСЯ вердиктом: сырьё под golden неполно "
+                        "(%d/%d логинов, см. KUDERKO_RAW_INCOMPLETE выше) — не регрессия ETL",
+                        prodazhi, raw_present, raw_total,
+                    )
+                else:
+                    failures.append(f"golden_sales={prodazhi}")
 
     checks = {
         "raw_yandex_cost_zero": "SELECT if(sum(total_cost) = 0, 1, 0) FROM ad_analytics.raw_yandex",

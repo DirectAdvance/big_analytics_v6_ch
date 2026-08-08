@@ -23,25 +23,24 @@ def _site_key_expr(alias: str = "f") -> str:
 
 
 PBI_SOURCE_OBJECTS = [
+    "Dim_Account",
     "Dim_AdGroup",
     "Dim_AdFormat",
     "Dim_AdNetworkType",
     "Dim_Adjustment",
     "Dim_Campaign",
-    "Dim_Criterion",
     "Dim_Date",
     "Dim_Device",
     "Dim_Location",
     "Dim_ManagerLogin",
     "Dim_PlacementFeed",
+    "Dim_CRMStatus",
+    "Dim_Salon",
     "Dim_Site",
     "Dim_Source",
     "Dim_VkAdGroup",
     "Dim_VkAdPlan",
     "Dim_VkBanner",
-    "arc_fact",
-    "arf_fact",
-    "arp_fact",
     "pbi_big_analytics_full",
     "check_utm_fuck_direct",
     "dim_criterion",
@@ -110,7 +109,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             toFloat64(f.`Impressions`) AS `Impressions`,
             f.`План заявки`,
             f.`План приезда`,
-            concat(ifNull(f.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`,
+            concat(ifNull(da.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`,
             f.domain AS `домен`,
             toInt64(round(f.priedet)) AS priedet,
             f.dohod_do_kredita,
@@ -120,32 +119,25 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             multiIf(
                 f.source_key = 'пиксель_атрибуц', 'Пиксель_атрибуц',
                 f.source_key = 'пиксель', 'Пиксель',
-                f.`направление`
+                dsl.`направление`
             ) AS `направление`,
-            f.`тип_заявки`,
-            -- PBI_SPECIALIST_ROWGRAIN_FIX_2026-08-06: специалист lives on fact_big_analytics row-grain
-            -- (filled by spec_fallback.py cascade, independent of campaign_status/step4), not on any
-            -- Dim_* table -- mirrors v5's f."специалист" direct pass-through in pbi_big_analytics_full.
-            f.`специалист`,
-            -- PBI_SITE_ATTRS_ROWGRAIN_FIX_2026-08-07: same row-grain reasoning as специалист above --
-            -- v5's pbi_big_analytics_full (build_star.py:930-943) passes these 10 attributes straight
-            -- through from the fact row, not from a Dim_Site lookup (site attrs can legitimately vary
-            -- per row over time -- salon renames, template migrations -- so the fact row already holds
-            -- the correct value for THAT row; Dim_Site is a single argMax/master-directory pick per
-            -- domain and disagreed with the fact on 95.2% of the measured mismatches). The `ds` alias
-            -- below stayed JOINed but was never referenced anywhere in this SELECT -- dead join, removed.
-            f.`салон`,
-            f.`город`,
-            f.`регион`,
-            f.`тип_сайта`,
-            f.`шаблон`,
-            f.`статус`,
-            f.`проджект`,
-            f.`менеджер`,
-            f.`id_салона`,
-            f.`Название crm`,
+            dcs.`тип_заявки`,
+            dsl.`специалист`,
+            dsl.`салон`,
+            dsl.`город`,
+            dsl.`регион`,
+            dsl.`тип_сайта`,
+            dsl.`шаблон`,
+            dcs.`статус`,
+            dsl.`проджект`,
+            dsl.`менеджер`,
+            dsl.`id_салона`,
+            dcs.`Название crm`,
             toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key
         FROM ad_analytics.fact_big_analytics f
+        LEFT JOIN ad_analytics.Dim_Account da ON da.account_key = f.account_key
+        LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key
+        LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key
         {where_sql}
     """
 
@@ -318,7 +310,7 @@ def _feed_funnel_pbi_sql(where_sql: str = "") -> str:
             f.placement_feed_key AS placement_feed_key,
             f.campaign_id,
             f.ad_group_id AS adgroup_id,
-            f.domain AS domain,
+            coalesce(nullIf(f.domain, ''), ds.domain) AS domain,
             toFloat64(f.cost) AS total_cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -344,6 +336,7 @@ def _feed_funnel_pbi_sql(where_sql: str = "") -> str:
             'контекст' AS source_key,
             now() AS generated_at
         FROM ad_analytics.fact_direct_feed_funnel f
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
     """
 
@@ -628,7 +621,7 @@ def _arp_fact_sql(where_sql: str = "") -> str:
         FROM ad_analytics.fact_direct_feed_funnel f
         LEFT JOIN ad_analytics.Dim_PlacementFeed pf ON pf.placement_feed_key = f.placement_feed_key
         LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
-        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = {_site_key_expr("f")}
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
     """
 
@@ -877,6 +870,45 @@ def _dim_manager_login_pbi_sql() -> str:
               AND manager_login != ''
         )
         GROUP BY manager_login_key
+    """
+
+
+def _dim_account_pbi_sql() -> str:
+    return """
+        SELECT
+            account_key,
+            account_login
+        FROM ad_analytics.Dim_Account
+    """
+
+
+def _dim_crm_status_pbi_sql() -> str:
+    return """
+        SELECT
+            crm_status_key,
+            `Название crm`,
+            `тип_заявки`,
+            `статус`,
+            cascade_level
+        FROM ad_analytics.Dim_CRMStatus
+    """
+
+
+def _dim_salon_pbi_sql() -> str:
+    return """
+        SELECT
+            salon_key,
+            `салон`,
+            `город`,
+            `регион`,
+            `тип_сайта`,
+            `шаблон`,
+            `специалист`,
+            `проджект`,
+            `менеджер`,
+            `id_салона`,
+            `направление`
+        FROM ad_analytics.Dim_Salon
     """
 
 
@@ -1238,12 +1270,15 @@ def _return_commission_pbi_sql() -> str:
 
 PBI_VIEW_SQL_BUILDERS = {
     "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
+    "Dim_Account": _dim_account_pbi_sql,
     "Dim_Date": _dim_date_pbi_sql,
     "Dim_AdFormat": _dim_ad_format_pbi_sql,
     "Dim_AdNetworkType": _dim_ad_network_type_pbi_sql,
     "Dim_Adjustment": _dim_adjustment_pbi_sql,
     "Dim_Device": _dim_device_pbi_sql,
     "Dim_ManagerLogin": _dim_manager_login_pbi_sql,
+    "Dim_CRMStatus": _dim_crm_status_pbi_sql,
+    "Dim_Salon": _dim_salon_pbi_sql,
     "Dim_Source": _dim_source_pbi_sql,
     "Dim_Campaign": _dim_campaign_pbi_sql,
     "Dim_AdGroup": _dim_adgroup_pbi_sql,
@@ -1293,10 +1328,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         "Dim_PlacementFeed": build_dim_placement_feed(client),
         "pbi_import_fact_direct_feed_funnel": build_pbi_import_direct_feed_funnel(client),
         "pbi_import_region_spend": build_pbi_import_region_spend(client),
-        "arp_fact": build_arp_fact(client),
-        "arf_fact": build_arf_fact(client),
         "Dim_Criterion": build_dim_criterion(client),
-        "arc_fact": build_arc_fact(client),
     }
     rows.update(create_light_aliases(client))
     rows.update(create_bi_views(client))
