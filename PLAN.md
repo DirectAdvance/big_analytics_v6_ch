@@ -396,10 +396,11 @@ CH поддерживает большинство оконных функций
 1. ✅ **Где подключение `clickhouse_avto`?** РЕШЕНО в Этапе 0 (2026-07-28): `load_db('victory_clickhouse')`,
    хост `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`, `config/ch_db.py` написан и проверен.
 
-2. ✅ **Где будет запускаться v6_ch?** РЕШЕНО (2026-07-30): **там же, где лежит сам ClickHouse** —
-   т.е. Yandex Cloud (не Victory VPS — CH там не хостится, только подключение по сети). Нужна
-   отдельная VM/среда исполнения в Yandex Cloud рядом с managed CH, а не расширение Victory.
-   ⚠️ Конфликтует с текущей строкой `PROJECTS.md` («Victory (ClickHouse)») — обновить (см. ниже).
+2. ✅ **Где будет запускаться v6_ch?** ПЕРЕРЕШЕНО (2026-08-10): запуск на **Victory VPS** из
+   `~/big_analytics_v6_ch` через отдельный `~/venv-v6`; dashboard `victoryads.seoadvanced.ru`
+   запускает его с LXC101 через SSH alias `victory` (`server=victory_v6`). ClickHouse остаётся в
+   Yandex Cloud (`rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`). Victory хранит только код,
+   venv и ротируемые логи; raw/mart/dump/cache данные должны оставаться в ClickHouse/Yandex Cloud.
 
 3. **Паттерны CH под специфику проекта** — базовое решение принято 2026-07-30 (см. §3а ниже),
    уточнить в процессе Этапа 1:

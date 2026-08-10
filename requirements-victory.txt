@@ -1,0 +1,11 @@
+certifi==2026.7.22
+charset-normalizer==3.4.9
+clickhouse-connect==0.15.1
+idna==3.18
+lz4==4.4.5
+packaging==26.3
+psycopg2-binary==2.9.12
+pytz==2026.3.post1
+requests==2.32.5
+urllib3==2.6.3
+zstandard==0.25.0

@@ -5,10 +5,15 @@
 
 ## Status
 
-- ETL is migrated to ClickHouse for stages 0-5 and runs manually from Mac.
-- No cron/launchd schedule. No Victory deploy path yet.
+- ETL is migrated to ClickHouse and runs from Victory as
+  `~/venv-v6/bin/python3 ~/big_analytics_v6_ch/pipeline.py`.
+- VictoryAds dashboard `/dashboard/scripts` launches v6 via `server=victory_v6` through SSH alias
+  `victory`; no separate `yandex` SSH host is used.
+- Victory stores only code, `~/venv-v6`, and rotated logs. Data, marts, raw layers, and heavy caches
+  live in Yandex Cloud ClickHouse, not on Victory disk.
+- No cron/launchd schedule for v6 yet; dashboard manual launch is active.
 - Victory `~/big_analytics_v5/` is the old v5 production contour, not this project.
-- Current ClickHouse: Yandex Cloud
+- Current ClickHouse storage: Yandex Cloud
   `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`, DBs `ad_analytics` and `raw_data`.
 - PostgreSQL legacy code is in `archive/postgres_legacy_2026_07_31/` and is not in the pipeline.
 - Latest status, open v5↔v6 deltas, and run ids live in `STATE.md` and `KNOWN_ISSUES.md`.
