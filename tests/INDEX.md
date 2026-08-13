@@ -5,7 +5,7 @@
 > For code structure (who calls what, impact radius) use MCP `code-review-graph`;
 > this index is the fallback when the graph is unavailable.
 
-Files indexed: **13**
+Files indexed: **16**
 
 ## project root
 
@@ -14,6 +14,9 @@ Files indexed: **13**
 | `__init__.py` | 1 |  |
 | `test_pbi_contract_lists.py` | 1 |  |
 | `test_spec_fallback.py` | 1 |  |
+| `test_star_refactor_contracts.py` | 8 |  |
+| `test_status_sql_credit_approved.py` | 1 |  |
+| `test_step13_arrival_markar.py` | 1 |  |
 
 ## `data_check/`
 

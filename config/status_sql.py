@@ -14,10 +14,12 @@ config/status_sql.py — динамическая генерация SQL ква�
   filtr        — 'Фильтр'
   nedozvon     — 'Недозвон'
 
-kval = korr - ne_otvechaet - filtr - nedozvon
+kval берётся из отдельной категории qualified.
 
 credit/approved берутся из БД (category='credit'/'approved').
 """
+
+from __future__ import annotations
 
 from collections import defaultdict
 
@@ -55,9 +57,9 @@ _DEMOTIONS_KEY = '__salon_demotions__'
 # меняешь один, синхронизируй второй. Используются для вычисления «досягаемости»
 # (reach) категории при cross-category demotion-исключении salon-override'ов.
 _STATUS_MERGE_EDGES = (
-    ('approved', 'credit'), ('credit', 'visit'), ('sale', 'visit'),
-    ('sale', 'qualified'), ('visit', 'qualified'), ('qualified', 'correct'),
-    ('visit', 'correct'), ('sale', 'correct'),
+    ('sale', 'approved'), ('approved', 'credit'), ('credit', 'visit'),
+    ('sale', 'visit'), ('sale', 'qualified'), ('visit', 'qualified'),
+    ('qualified', 'correct'), ('visit', 'correct'), ('sale', 'correct'),
 )
 
 
@@ -169,6 +171,7 @@ def _group_by_category(rows):
                         existing.add(s)
 
     # Status-сторона: sale ⊆ approved ⊆ credit ⊆ visit ⊆ qualified ⊆ correct
+    _merge('sale',      'approved')
     _merge('approved', 'credit')    # approved status ⊆ credit status
     _merge('credit',   'visit')     # credit status ⊆ visit status
     _merge('sale',      'visit')

@@ -20,8 +20,9 @@ OR prodazhi>0` и обнуляла только Impressions/Clicks/total_cost. `
      `Date` = eff_arrival_date (v5 step13.py:521):
         GREATEST(COALESCE(<дата приезда Маркара из gsheet>, <дата по правилам CRM>),
                  created_date)
-     Правила CRM (v5 step13.py:444-448): plex/marcar → created_date (у них своей
-     даты визита нет), остальные → COALESCE(arrival_date, created_date).
+     Правила CRM (v5 step13.py:444-448): plex/marcar → created_date, остальные →
+     COALESCE(arrival_date, created_date). Для Маркара gsheet-дата и source-домен
+     имеют приоритет над DB-доменом, если source совпал с авто-доменом в gsheet_sites.
      Воронка — РЕАЛЬНАЯ, считается тем же `step3._metric_expr` (единственное
      определение воронки в проекте: korr/kval/priezd/prodazhi/nekorr/reason-метрики).
 
@@ -38,6 +39,11 @@ OR prodazhi>0` и обнуляла только Impressions/Clicks/total_cost. `
      см. комментарий в `_pixel_branch_sql`).
      Σ priezd / Σ prodazhi ИНВАРИАНТНЫ, дробность сохраняется (Float64 → Decimal,
      округление только у итоговой суммы, НИКАКОГО int-каста).
+
+  4. МАРКАР-ORPHANS (`_marcar_orphan_branch`) — строки gsheet_priezdi_marcar, где
+     ссылка ведёт на ID заявки Маркара, но такого `source_record_id` нет в leads_all.
+     Сайт считает эти приезды по `source`-домену из таблицы приездов; v6 добавляет
+     их как визитные строки без расхода.
 
 ════════════════════════════════════════════════════════════════════════════════
 ИНВАРИАНТЫ (проверять при любой правке)
@@ -153,23 +159,29 @@ multiIf(
 # Общие CTE
 # ══════════════════════════════════════════════════════════════════════════════
 def _marcar_arrivals_cte() -> str:
-    """id карточки Маркара -> дата приезда из гугл-таблицы (порт v5 marcar_arrivals).
+    """id карточки Маркара -> дата приезда и source-домен из гугл-таблицы.
 
     v5 берёт запись с САМОЙ ПОЗДНЕЙ датой визита, при равной дате — самый глубокий
     статус (Продажа > Дошел в КО > Одобрение > Приехал). Здесь это argMax по
-    кортежу (дата, -приоритет), что даёт ту же выборку.
+    кортежу (дата, -приоритет), что даёт ту же выборку. `sheet_domain` нужен для
+    паритета с сайтом: Маркар считает часть строк по source-домену из таблицы
+    приездов, а не по DB-домену заявки.
     """
     return f"""
 marcar_arrivals AS
 (
     SELECT
         lead_record_id,
-        argMax(arrival_date_marcar, tuple(arrival_date_marcar, -prio)) AS arrival_date_marcar
+        argMax(arrival_date_raw, tuple(arrival_date_raw, -prio)) AS arrival_date_marcar,
+        argMax(sheet_domain, tuple(arrival_date_raw, -prio)) AS sheet_domain,
+        argMax(status, tuple(arrival_date_raw, -prio)) AS status
     FROM
     (
         SELECT
             replaceRegexpOne(ifNull(link, ''), '^.+/', '') AS lead_record_id,
-            toDate(parseDateTimeBestEffortOrNull(trim(ifNull(date, '')))) AS arrival_date_marcar,
+            toDate(parseDateTimeBestEffortOrNull(trim(ifNull(date, '')))) AS arrival_date_raw,
+            lower(trim(ifNull(source, ''))) AS sheet_domain,
+            ifNull(status, '') AS status,
             {_MARCAR_PRIO} AS prio
         FROM raw_data.gsheet_priezdi_marcar
         WHERE match(ifNull(link, ''), '^https?://.+/[0-9]+$')
@@ -332,7 +344,12 @@ def _leads_branch_columns() -> dict[str, str]:
 
 def _leads_branch_sql(date_from: str) -> str:
     """Лид-ветка визитной оси: одна строка на (дата визита × разрез витрины)."""
-    metrics = _metric_expr("l.status", "l.reason", "l.source_type", "l.salon")
+    metrics = _metric_expr(
+        "l.status",
+        "l.reason",
+        "l.source_type",
+        "coalesce(nullIf(l.salon, ''), nullIf(gs_ma.salon, ''), gs.salon)",
+    )
     ag_parts = _ag_parts_expr("")
     posev_flag = (
         f"(ifNull(l.utm_source, '') IN ({_POSEV_UTM_SOURCES}) "
@@ -350,7 +367,7 @@ lead_visits AS
 (
     SELECT
         {_eff_arrival_expr("l")} AS eff_arrival_date,
-        l.domain AS domain,
+        coalesce(nullIf(gs_ma.domain, ''), l.domain) AS domain,
         ifNull(l.campaign_id, 0) AS cid,
         ifNull(l.group_id, 0) AS agid,
         ifNull(l.correction_id, 0) AS rl_adjustment_id,
@@ -362,22 +379,22 @@ lead_visits AS
         ifNull(cd.cpc_cpa, '') AS cpc_cpa_raw,
         ifNull(cd.site_quiz, '') AS site_quiz_raw,
         ad.adgroup_code AS adgroup_code,
-        lower(ifNull(coalesce(nullIf(cd.account_login, ''), gs.login_key), '')) AS account_login,
-        ifNull(coalesce(nullIf(cd.manager_login, ''), gs.directologist), '') AS manager_login,
-        ifNull(crm.crm_name, '') AS crm_name,
+        lower(ifNull(coalesce(nullIf(cd.account_login, ''), nullIf(gs_ma.login_key, ''), gs.login_key), '')) AS account_login,
+        ifNull(coalesce(nullIf(cd.manager_login, ''), nullIf(gs_ma.directologist, ''), gs.directologist), '') AS manager_login,
+        multiIf(l.source_type = 'marcar_crm_excel', 'Маркар', ifNull(crm.crm_name, '')) AS crm_name,
         if(ifNull(l.deal_type, '') = '', 'Заявка', l.deal_type) AS `тип_заявки`,
-        gs.status AS `статус`,
-        nullIf(trim(ifNull(gs.directologist, '')), '') AS specialist_raw,
-        gs.site_type AS `тип_сайта`,
-        gs.template AS `шаблон`,
-        coalesce(nullIf(l.salon, ''), gs.salon) AS `салон`,
-        gs.city AS `город`,
-        gs.region AS `регион`,
-        gs.direction AS direction,
+        coalesce(nullIf(gs_ma.status, ''), gs.status) AS `статус`,
+        nullIf(trim(ifNull(coalesce(nullIf(gs_ma.directologist, ''), gs.directologist), '')), '') AS specialist_raw,
+        coalesce(nullIf(gs_ma.site_type, ''), gs.site_type) AS `тип_сайта`,
+        coalesce(nullIf(gs_ma.template, ''), gs.template) AS `шаблон`,
+        coalesce(nullIf(l.salon, ''), nullIf(gs_ma.salon, ''), gs.salon) AS `салон`,
+        coalesce(nullIf(gs_ma.city, ''), gs.city) AS `город`,
+        coalesce(nullIf(gs_ma.region, ''), gs.region) AS `регион`,
+        coalesce(nullIf(gs_ma.direction, ''), gs.direction) AS direction,
         l.fid AS fid,
-        gs.project_manager AS `проджект`,
-        gs.client_id AS `id_салона`,
-        gs.sales_manager AS `менеджер`,
+        coalesce(nullIf(gs_ma.project_manager, ''), gs.project_manager) AS `проджект`,
+        coalesce(nullIf(gs_ma.client_id, ''), gs.client_id) AS `id_салона`,
+        coalesce(nullIf(gs_ma.sales_manager, ''), gs.sales_manager) AS `менеджер`,
         -- utm_campaign/utm_content — НЕ выходные колонки витрины, они входят в ключ
         -- группировки как в v5 (step13.py:654-655). Без них группа склеивает визитные
         -- и невизитные лиды одного дня/домена, и `kol_vo_zayavok` строки визитной оси
@@ -413,16 +430,21 @@ lead_visits AS
     FROM leads_deduped l
     LEFT JOIN marcar_record_ids mi ON mi.id = l.id
     LEFT JOIN marcar_arrivals ma ON ma.lead_record_id = mi.source_record_id
+    LEFT JOIN gs_domain gs_ma
+        ON l.source_type = 'marcar_crm_excel'
+       AND gs_ma.domain_key = ma.sheet_domain
+       AND gs_ma.direction = 'Авто'
     LEFT JOIN camp_dict cd ON cd.cid = l.campaign_id
     LEFT JOIN ag_dict ad ON ad.agid = l.group_id
     LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(l.domain, '')))
-    LEFT JOIN crm_by_domain crm ON crm.domain_key = lower(trim(ifNull(l.domain, '')))
+    LEFT JOIN crm_by_domain crm
+        ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), l.domain), '')))
     WHERE l.created_date IS NOT NULL
       AND l.created_date >= toDate('{date_from}')
       AND ifNull(l.status, '') != ''
       -- пиксельные лиды идут отдельной веткой (дробная атрибуция step11)
       AND ifNull(l.utm_source, '') NOT LIKE 'victory_%'
-      AND {_auto_domains_filter("l.domain")}
+      AND {_auto_domains_filter("coalesce(nullIf(gs_ma.domain, ''), l.domain)")}
 ),
 lead_groups AS
 (
@@ -561,7 +583,12 @@ def _calls_branch_sql(date_from: str) -> str:
     `source_record_id` — оба поля дотягиваются из `raw_data.leads_all` по `id`
     (1:1 по построению step1).
     """
-    metrics = _metric_expr("c.status", "c.reason", "c.source_type", "gs.salon")
+    metrics = _metric_expr(
+        "c.status",
+        "c.reason",
+        "c.source_type",
+        "coalesce(nullIf(gs_ma.salon, ''), gs.salon)",
+    )
     return f"""
 WITH
 {_gs_account_cte()},
@@ -570,21 +597,21 @@ call_visits AS
 (
     SELECT
         {_eff_arrival_expr("c")} AS eff_arrival_date,
-        c.domain AS domain,
-        ifNull(lower(ifNull(gs.login_key, '')), '') AS account_login,
-        ifNull(gs.directologist, '') AS manager_login,
-        ifNull(crm.crm_name, '') AS crm_name,
-        gs.status AS `статус`,
-        nullIf(trim(ifNull(gs.directologist, '')), '') AS specialist_raw,
-        gs.site_type AS `тип_сайта`,
-        gs.template AS `шаблон`,
-        gs.salon AS `салон`,
-        gs.city AS `город`,
-        gs.region AS `регион`,
-        gs.direction AS direction,
-        gs.project_manager AS `проджект`,
-        gs.client_id AS `id_салона`,
-        gs.sales_manager AS `менеджер`,
+        coalesce(nullIf(gs_ma.domain, ''), c.domain) AS domain,
+        ifNull(lower(ifNull(coalesce(nullIf(gs_ma.login_key, ''), gs.login_key), '')), '') AS account_login,
+        ifNull(coalesce(nullIf(gs_ma.directologist, ''), gs.directologist), '') AS manager_login,
+        multiIf(c.source_type = 'marcar_crm_excel', 'Маркар', ifNull(crm.crm_name, '')) AS crm_name,
+        coalesce(nullIf(gs_ma.status, ''), gs.status) AS `статус`,
+        nullIf(trim(ifNull(coalesce(nullIf(gs_ma.directologist, ''), gs.directologist), '')), '') AS specialist_raw,
+        coalesce(nullIf(gs_ma.site_type, ''), gs.site_type) AS `тип_сайта`,
+        coalesce(nullIf(gs_ma.template, ''), gs.template) AS `шаблон`,
+        coalesce(nullIf(gs_ma.salon, ''), gs.salon) AS `салон`,
+        coalesce(nullIf(gs_ma.city, ''), gs.city) AS `город`,
+        coalesce(nullIf(gs_ma.region, ''), gs.region) AS `регион`,
+        coalesce(nullIf(gs_ma.direction, ''), gs.direction) AS direction,
+        coalesce(nullIf(gs_ma.project_manager, ''), gs.project_manager) AS `проджект`,
+        coalesce(nullIf(gs_ma.client_id, ''), gs.client_id) AS `id_салона`,
+        coalesce(nullIf(gs_ma.sales_manager, ''), gs.sales_manager) AS `менеджер`,
         {metrics}
     FROM
     (
@@ -606,12 +633,17 @@ call_visits AS
         ) la ON la.id = rc.id
     ) c
     LEFT JOIN marcar_arrivals ma ON ma.lead_record_id = c.source_record_id
+    LEFT JOIN gs_domain gs_ma
+        ON c.source_type = 'marcar_crm_excel'
+       AND gs_ma.domain_key = ma.sheet_domain
+       AND gs_ma.direction = 'Авто'
     LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(c.domain, '')))
-    LEFT JOIN crm_by_domain crm ON crm.domain_key = lower(trim(ifNull(c.domain, '')))
+    LEFT JOIN crm_by_domain crm
+        ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), '')))
     WHERE c.created_date IS NOT NULL
       AND c.created_date >= toDate('{date_from}')
       AND ifNull(c.status, '') != ''
-      AND {_auto_domains_filter("c.domain")}
+      AND {_auto_domains_filter("coalesce(nullIf(gs_ma.domain, ''), c.domain)")}
 )
 SELECT
     eff_arrival_date,
@@ -652,7 +684,150 @@ HAVING priezd > 0 OR prodazhi > 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Ветка 3 — пиксель (date-shift дробной атрибуции)
+# Ветка 3 — Маркар gsheet-orphans
+# ══════════════════════════════════════════════════════════════════════════════
+def _marcar_orphan_branch_columns() -> dict[str, str]:
+    specialist = specialist_correction_expr(
+        "g.eff_arrival_date", "g.account_login", "g.specialist_raw"
+    )
+    return {
+        "key3": "concat('visit_marcar_orphan|', toString(g.eff_arrival_date), '|', ifNull(g.domain, ''))",
+        "Date": "g.eff_arrival_date",
+        "День недели": _weekday_expr("g.eff_arrival_date"),
+        "week_start": "toStartOfWeek(g.eff_arrival_date, 1)",
+        "domain": "g.domain",
+        "account_login": "g.account_login",
+        "manager_login": "g.manager_login",
+        "Название crm": "'Маркар'",
+        "тип_заявки": "'Заявка'",
+        "kol_vo_zayavok": "g.kol_vo_zayavok",
+        "korr": "g.korr",
+        "kval": "g.kval",
+        "priezd": "g.priezd",
+        "prodazhi": "g.prodazhi",
+        "статус": "g.`статус`",
+        "специалист": specialist,
+        "тип_сайта": "g.`тип_сайта`",
+        "шаблон": "g.`шаблон`",
+        "салон": "g.`салон`",
+        "город": "g.`город`",
+        "регион": "g.`регион`",
+        "direction": "g.direction",
+        "проджект": "g.`проджект`",
+        "id_салона": "g.`id_салона`",
+        "менеджер": "g.`менеджер`",
+        "источник": "'Контекст'",
+        "направление": "'Контекст'",
+        "аккаунт|сайт": "concat(g.account_login, '|', ifNull(g.domain, ''))",
+        "priezd_arrival_date": "toInt64(0)",
+        "prodazhi_arrival_date": "toInt64(0)",
+        "поставщик": "'Яндекс'",
+        "_source_table": "'direct'",
+        "key_pixel_score": "concat(toString(g.eff_arrival_date), '|', ifNull(g.domain, ''), '|Контекст|0')",
+    }
+
+
+def _marcar_orphan_branch_sql(date_from: str) -> str:
+    """Маркар-приезды из gsheet, которых нет в `raw_data.leads_all`.
+
+    MARCAR_GSHEET_ORPHANS_2026-08-13: сайт учитывает часть строк Маркара напрямую
+    из таблицы приездов по `source`-домену. Если `source_record_id` не найден в
+    leads_all, ветки leads/calls такую строку не увидят, поэтому добавляем её здесь
+    как визитную строку без расхода и рекламных campaign/adgroup-разрезов.
+    """
+    return f"""
+WITH
+{_gs_account_cte()},
+-- MARCAR_GSHEET_ORPHANS_2026-08-13
+marcar_sheet_rows AS
+(
+    SELECT
+        replaceRegexpOne(ifNull(link, ''), '^.+/', '') AS lead_record_id,
+        toDate(parseDateTimeBestEffortOrNull(trim(ifNull(date, '')))) AS arrival_date_raw,
+        lower(trim(ifNull(source, ''))) AS sheet_domain,
+        ifNull(status, '') AS lead_status,
+        {_MARCAR_PRIO} AS prio
+    FROM raw_data.gsheet_priezdi_marcar
+    WHERE match(ifNull(link, ''), '^https?://.+/[0-9]+$')
+      AND match(trim(ifNull(date, '')), '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$')
+      AND toDate(parseDateTimeBestEffortOrNull(trim(ifNull(date, '')))) IS NOT NULL
+      AND ifNull(status, '') IN ('Приехал', 'Одобрение', 'Продажа', 'Дошел в КО')
+),
+marcar_sheet_ranked AS
+(
+    SELECT
+        lead_record_id,
+        argMax(arrival_date_raw, tuple(arrival_date_raw, -prio)) AS eff_arrival_date,
+        argMax(sheet_domain, tuple(arrival_date_raw, -prio)) AS sheet_domain,
+        argMax(lead_status, tuple(arrival_date_raw, -prio)) AS lead_status
+    FROM marcar_sheet_rows
+    GROUP BY lead_record_id
+),
+orphan_visits AS
+(
+    SELECT
+        ms.eff_arrival_date AS eff_arrival_date,
+        gs.domain AS domain,
+        ifNull(lower(ifNull(gs.login_key, '')), '') AS account_login,
+        ifNull(gs.directologist, '') AS manager_login,
+        gs.status AS `статус`,
+        nullIf(trim(ifNull(gs.directologist, '')), '') AS specialist_raw,
+        gs.site_type AS `тип_сайта`,
+        gs.template AS `шаблон`,
+        gs.salon AS `салон`,
+        gs.city AS `город`,
+        gs.region AS `регион`,
+        gs.direction AS direction,
+        gs.project_manager AS `проджект`,
+        gs.client_id AS `id_салона`,
+        gs.sales_manager AS `менеджер`,
+        ms.lead_status AS lead_status
+    FROM marcar_sheet_ranked ms
+    INNER JOIN gs_domain gs
+        ON gs.domain_key = ms.sheet_domain
+       AND gs.direction = 'Авто'
+    LEFT JOIN
+    (
+        SELECT DISTINCT ifNull(source_record_id, '') AS source_record_id
+        FROM raw_data.leads_all
+        WHERE source_type = 'marcar_crm_excel'
+          AND ifNull(source_record_id, '') != ''
+    ) la ON la.source_record_id = ms.lead_record_id
+    WHERE ms.eff_arrival_date >= toDate('{date_from}')
+      AND ms.sheet_domain != ''
+      AND la.source_record_id = ''
+)
+SELECT
+    eff_arrival_date,
+    domain,
+    account_login,
+    manager_login,
+    `статус`,
+    specialist_raw,
+    `тип_сайта`,
+    `шаблон`,
+    `салон`,
+    `город`,
+    `регион`,
+    direction,
+    `проджект`,
+    `id_салона`,
+    `менеджер`,
+    toDecimal64(count(), 6) AS kol_vo_zayavok,
+    toDecimal64(count(), 6) AS korr,
+    toDecimal64(count(), 6) AS kval,
+    toDecimal64(count(), 6) AS priezd,
+    toDecimal64(sum(if(lead_status = 'Продажа', 1, 0)), 6) AS prodazhi
+FROM orphan_visits
+GROUP BY
+    eff_arrival_date, domain, account_login, manager_login, `статус`,
+    specialist_raw, `тип_сайта`, `шаблон`, `салон`, `город`, `регион`, direction,
+    `проджект`, `id_салона`, `менеджер`
+"""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Ветка 4 — пиксель (date-shift дробной атрибуции)
 # ══════════════════════════════════════════════════════════════════════════════
 def _pixel_branch_columns() -> dict[str, str]:
     return {
@@ -1007,17 +1182,46 @@ def build_branches(date_from: str = DATE_FROM) -> list[tuple[str, dict[str, str]
     return [
         ("leads", _leads_branch_columns(), _leads_branch_sql(date_from)),
         ("calls", _calls_branch_columns(), _calls_branch_sql(date_from)),
+        ("marcar_orphans", _marcar_orphan_branch_columns(), _marcar_orphan_branch_sql(date_from)),
         ("pixel", _pixel_branch_columns(), _pixel_branch_sql(date_from)),
     ]
+
+
+def _log_stage_timing(
+    client,
+    run_id: str | None,
+    stage: str,
+    started_at: float,
+    rows: int | None = None,
+    details: str | None = None,
+) -> None:
+    duration = round(time.perf_counter() - started_at, 2)
+    logger.info("  timing step13.%s: %.2f сек%s",
+                stage, duration, f" ({details})" if details else "")
+    if not run_id:
+        return
+    try:
+        client.insert(
+            "ad_analytics.data_quality_log",
+            [[run_id, f"step13.{stage}", "OK", rows, duration, details]],
+            column_names=["run_id", "step", "status", "rows_affected", "duration_sec", "details"],
+        )
+    except Exception as exc:  # pragma: no cover - telemetry must not break the mart
+        logger.warning("  не удалось записать timing step13.%s в data_quality_log: %s", stage, exc)
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     logger.info("Шаг 13 v6_ch: big_analytics_full_arrival (реальная визитная ось)")
     client = get_client()
     t0 = time.perf_counter()
+    t_stage = time.perf_counter()
     _create_empty(client, SHADOW)
+    _log_stage_timing(client, run_id, "create_shadow", t_stage)
+    t_stage = time.perf_counter()
     target_cols = set(column_names(client, "ad_analytics", "big_analytics_full"))
+    _log_stage_timing(client, run_id, "load_target_columns", t_stage, rows=len(target_cols))
     details_parts: list[str] = []
+    previous_rows = 0
     for name, columns, inner_sql in build_branches():
         t_branch = time.perf_counter()
         client.command(
@@ -1025,11 +1229,18 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             settings=STEP13_QUERY_SETTINGS,
         )
         rows = count_rows(client, SHADOW)
+        inserted = rows - previous_rows
+        previous_rows = rows
         logger.info("  ветка %s залита за %.1f сек (накопительно строк: %d)",
                     name, time.perf_counter() - t_branch, rows)
+        _log_stage_timing(client, run_id, f"branch.{name}", t_branch, rows=inserted, details=f"cumulative={rows}")
         details_parts.append(f"{name}")
+    t_stage = time.perf_counter()
     swap_shadow(client, TARGET, SHADOW)
+    _log_stage_timing(client, run_id, "swap_shadow", t_stage)
+    t_stage = time.perf_counter()
     rows = count_rows(client, TARGET)
+    _log_stage_timing(client, run_id, "final_rowcount", t_stage, rows=rows)
     logger.info("Шаг 13 v6_ch завершён за %.1f сек: rows=%d", time.perf_counter() - t0, rows)
     return {"rows": rows, "details": f"big_analytics_full_arrival={rows:,} ({'+'.join(details_parts)})"}
 

@@ -68,14 +68,14 @@ big_analytics_full_arrival
 | crmf_excel | arrival_date из БД (заполнен ~100% у "Приехал") |
 | mega_crm_excel | arrival_date из БД (заполнен ~100% у "Приехал") |
 | plex_excel | created_date (Plex не фиксирует дату приезда) |
-| marcar_crm_excel | gsheet_priezdi_marcar по телефону (пока = created_date, см. ограничения) |
+| marcar_crm_excel | gsheet_priezdi_marcar по ID заявки из ссылки; `source`-домен gsheet имеет приоритет над DB-доменом, если найден как Авто-домен |
 
 ## Запуск
 
 ```bash
-cd ~/big_analytics_v5
-~/venv/bin/python3 pipeline.py --only-step=13   # только этот шаг
-~/venv/bin/python3 pipeline.py                  # весь пайплайн (шаг 13 идёт после шага 6)
+cd ~/big_analytics_v6_ch
+~/venv-v6/bin/python3 pipeline.py --only-step=13   # только этот шаг
+~/venv-v6/bin/python3 pipeline.py                  # весь пайплайн
 ```
 
 ## Зависимости (таблицы)
@@ -86,7 +86,7 @@ cd ~/big_analytics_v5
 | local_leads_all | Все лиды включая звонки (постоянная) |
 | local_domains | domain_id → name |
 | local_gsheet_sites | domain → атрибуты (salon, city, direction...) |
-| local_gsheet_priezdi_marcar | Дата приезда Маркар из Google Sheet |
+| local_gsheet_priezdi_marcar | Дата приезда, статус и source-домен Маркар из Google Sheet |
 | local_crm_statuses | Маппинг статусов → priezd/prodazhi |
 
 ## Текущие метрики (26.05.2026)
@@ -113,14 +113,21 @@ cd ~/big_analytics_v5
 
 Фильтр строк матрицы (по салону) передаётся через `TREATAS(VALUES(big_analytics_full[салон]), big_analytics_full_arrival[салон])` — без relationship между таблицами.
 
-## Известные ограничения
+## Текущие особенности
 
-**Маркар:** JOIN по телефону не работает — phone в БД обрезан, в gsheet полные номера.
-Маркар де-факто использует created_date. Задача на исправление открыта.
+**Маркар:** телефонный JOIN не используется: телефоны в CRM/gsheet разного формата.
+Рабочий ключ — ID заявки из `link`; строки gsheet без пары в `raw_data.leads_all`
+добавляются отдельной веткой `marcar_orphans` по `source`-домену. Если `source` не
+является известным Авто-доменом, matched-лиды/звонки остаются на DB-домене заявки.
 
-**Пиксель и Direct:** не включены в эту таблицу.
-Их прiezды есть в big_analytics_full, но там дата = created_date,
-и пиксель считается дважды (задвоение step11).
+**Timing step13:** подстадии пишутся в `ad_analytics.data_quality_log` как
+`step13.<stage>`: создание shadow-таблицы, загрузка целевых колонок, каждая ветка
+`branch.*`, swap и финальный rowcount.
+
+**Пиксель и Direct:** визитная ось не несёт расход/клики/показы. Direct/SEO/посевные
+лиды и звонки считаются через lead/call-ветки по реальной дате визита; дробная
+пиксельная атрибуция переносится отдельной веткой `pixel` с date-shift по долям
+визит-лидов.
 
 **Слайсеры домен/регион/специалист не фильтруют arrival:** TREATAS только по `салон`.
 Остальные фильтры страницы (город, регион, специалист, домен) применяются к `big_analytics_full`,

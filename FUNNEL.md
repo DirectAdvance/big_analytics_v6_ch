@@ -1,14 +1,17 @@
-# FUNNEL.md — воронка заявок (`local_crm_statuses`)
+# FUNNEL.md — воронка заявок (`raw_data.crm_status_mapping`)
 
 > Источник правды по воронке статусов. Вынесено из `CLAUDE.md` (lazy-load).
 > Высокоуровневые инварианты воронки — также в `PROJECT_CHARTER.md` §5.
 
 ---
 
-Источник: `public.local_crm_statuses` (ad_analytics_bi). Колонки: `crm_status`, `lead_status`, `crm_name`, `salon`, `kind`.
+Источник активного ClickHouse-контура: `raw_data.crm_status_mapping`. Локальный
+PostgreSQL-генератор `config/status_sql.py` оставлен как legacy/порт v5 и не является
+источником расчёта `big_analytics_full` в v6.
 
-`kind='status'` → колонка `leads.status`; `kind='reason'` → колонка `leads.reason`.
-`crm_name=''` → все CRM; `crm_name='default'` → маппится в `''` (все CRM); `crm_name='MEGA'/'PLEX'` → конкретный `source_type`.
+Активный код: `step3_build_sources/step3.py::_metric_expr()` и `_category_match_expr()`.
+Ключ CRM получается из `source_type` через `CRM_BY_SOURCE_TYPE`; недостающие категории
+Маркара/PLEX временно задаются кодом в `CODE_STATUS_CATEGORY`.
 
 ## Воронка (май 2026 — рефакторинг status/reason разделение)
 
@@ -26,20 +29,22 @@ kol_vo_zayavok ⊇ korr ⊇ kval ⊇ priezd ⊇ prodazhi
 dohod_do_kredita ⊇ dobro
 ```
 
-Reason-сторона полностью отдельная от status — продажи на стороне reason тоже считаются (`sale ⊆ approved ⊆ credit` через auto-merge внутри reason).
+Reason-сторона полностью отдельная от status — продажи на стороне reason тоже считаются
+(`sale ⊆ approved ⊆ credit` через auto-merge внутри reason). На status-стороне продажи
+также автоматически входят в `approved`, `credit`, `visit`, `qualified`, `correct`.
 
 ## Маппинг метрик
 
 | Метрика | lead_status | kind | Источник |
 |---------|------------|------|----------|
 | **kol_vo_zayavok** | — | — | `status IS NOT NULL` (хардкод) |
-| **korr** | `correct` | `status` | local_crm_statuses |
-| **kval** | `qualified` | `status` | local_crm_statuses |
-| **priezd** | `visit` | `status` | local_crm_statuses |
-| **prodazhi** | `sale` | `status` | local_crm_statuses |
-| **nekorr** | `incorrect` | `status` | local_crm_statuses |
-| **dohod_do_kredita** | `credit` | `reason` | local_crm_statuses |
-| **dobro** | `approved` | `reason` | local_crm_statuses |
+| **korr** | `correct` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **kval** | `qualified` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **priezd** | `visit` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **prodazhi** | `sale` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **nekorr** | `incorrect` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **dohod_do_kredita** | `credit` | `reason` | raw_data.crm_status_mapping |
+| **dobro** | `approved` | `reason` | raw_data.crm_status_mapping |
 
 ## Хардкод (не из таблицы)
 
@@ -50,34 +55,33 @@ Reason-сторона полностью отдельная от status — пр
 | **nedozvon** | `'Недозвон'` | status |
 | **priedet** | `'Приедет'` | status |
 
-`kval` теперь считается **прямо из категории `qualified`** в `local_crm_statuses` (раньше — формула `korr − ne_otvechaet − filtr − nedozvon`).
+`kval` считается **прямо из категории `qualified`** в `raw_data.crm_status_mapping`
+/ `CODE_STATUS_CATEGORY` (раньше в v5 была формула `korr − ne_otvechaet − filtr − nedozvon`).
 
 > ✅ Это **корректная** формула (не регрессия). На golden-срезе Кудерко даёт **kval ≈ 677**
 > (не старые ~1752), стоимость квала ≈ 20 913 ₽ — согласовано с [`GOLDEN_BASELINE.md`](GOLDEN_BASELINE.md)
 > (re-baseline 2026-07-15) и блоком 14 `verify_big_analytics.py`.
 
-## Auto-merge инварианты
+## Auto-merge / category sets
 
-В `_group_by_category()` (config/status_sql.py) автоматически копируются маппинги по цепочке:
+В v6 вложенность воронки задаётся не отдельным SQL-мерджем, а наборами категорий в
+`step3_build_sources/step3.py::_metric_expr()`:
 
 **Status-сторона:**
 ```
-sale  → visit
-sale  → qualified
-visit → qualified
-qualified → correct
-visit → correct
-sale  → correct
+korr    = correct + qualified + visit + sale + credit + approved
+kval    = qualified + visit + sale + credit + approved
+priezd  = visit + sale + credit + approved
+prodazhi = sale
 ```
 
 **Reason-сторона:**
 ```
-sale     → approved
-approved → credit
-sale     → credit (через approved)
+dohod_do_kredita = reason category credit + approved
+dobro            = reason category approved
 ```
 
-Гарантия: `korr ≥ kval ≥ priezd ≥ prodazhi` (status), `credit ≥ approved` (reason).
+Гарантия: `korr ≥ kval ≥ priezd ≥ prodazhi` (status), `dohod_do_kredita ≥ dobro` (reason).
 
 ## Переопределения по CRM/салону
 
@@ -98,25 +102,21 @@ sale     → credit (через approved)
 ## Как добавить новый статус
 
 ```sql
--- Если значение в leads.status — kind='status':
-INSERT INTO public.local_crm_statuses (crm_status, lead_status, crm_name, salon, kind)
-VALUES ('Новый статус', 'visit', '', '', 'status');
-
--- Если значение в leads.reason — kind='reason':
-INSERT INTO public.local_crm_statuses (crm_status, lead_status, crm_name, salon, kind)
-VALUES ('Новая причина', 'visit', '', '', 'reason');
-
--- crm_name='MEGA'/'PLEX' — только для конкретной CRM (kind='status')
--- salon='АЦ Платина' — только для конкретного салона
+-- Канонический путь: добавить строку в ClickHouse-справочник
+-- raw_data.crm_status_mapping (crm, status, reason, salon, category).
+-- Если у pipeline-роли нет GRANT на запись или нужен временный мост,
+-- добавить пару в step3_build_sources/step3.py::CODE_STATUS_CATEGORY
+-- и держать ее там до появления строки в справочнике.
 ```
 
-После INSERT — пайплайн подхватит автоматически при следующем запуске (`load_status_sql()`).
+После изменения справочника или `CODE_STATUS_CATEGORY` следующий запуск подхватит категорию через
+`step3_build_sources/step3.py::_metric_expr()`.
 
 ## Проверка маппингов: crm_mappings_check
 
 Модуль `crm_mappings_check/check.py` запускается автоматически после step12. Шлёт Telegram-отчёт с 3 секциями:
-1. **UNUSED** — маппинги в `local_crm_statuses` без записей в leads
-2. **UNMAPPED status** — статусы в `leads.status` без маппинга в `local_crm_statuses`
+1. **UNUSED** — маппинги в `raw_data.crm_status_mapping` без записей в leads
+2. **UNMAPPED status** — статусы в `leads.status` без маппинга в `raw_data.crm_status_mapping`/`CODE_STATUS_CATEGORY`
 3. **UNMAPPED reason** — значения в `leads.reason` без маппинга
 
 ## История изменений
@@ -135,27 +135,26 @@ VALUES ('Новая причина', 'visit', '', '', 'reason');
 **Проблема:** Маркар ведёт Google Sheet «Маркар Доезды», где фиксирует факт продажи.
 В CRM (`marcar_crm_excel`) у тех же лидов статус остаётся `'Корзина'` — CRM не синхронизирует обратно.
 
-**Решение (step0):** `_patch_marcar_statuses()` патчит `local_leads_all.status = 'Продажа'` из gsheet:
+**Решение:** v6 портирует `_patch_marcar_statuses()` выражением в `step1_load_raw/step1.py`.
+Патч применяет gsheet-статусы `Продажа`, `Дошел в КО`, `Одобрение`, `Приехал`:
 
 ```sql
-UPDATE public.local_leads_all l
-SET status = pm.status
-FROM public.local_gsheet_priezdi_marcar pm
-WHERE pm.link LIKE '%crm.marcar.ru%'
-  AND pm.link ~ '^https?://.+/[0-9]+$'
-  AND pm.status = 'Продажа'
-  AND l.source_record_id = REGEXP_REPLACE(pm.link, '^.+/', '')  -- число после последнего /
-  AND l.source_type = 'marcar_crm_excel'
-  AND l.status IS DISTINCT FROM pm.status
+SELECT
+    lead_record_id,
+    argMin(status, prio) AS status
+FROM raw_data.gsheet_priezdi_marcar
+WHERE link LIKE '%crm.marcar.ru%'
+  AND status IN ('Продажа', 'Дошел в КО', 'Одобрение', 'Приехал')
+GROUP BY lead_record_id
 ```
 
-**Только `'Продажа'`** — другие статусы (Приехал, Одобрение и т.д.) НЕ патчатся.
-Поле `status` в gsheet содержит мусор (даты DD.MM.YYYY в некоторых строках).
+Патч не перезаписывает статус «вниз»: приоритет `Продажа > Дошел в КО > Одобрение > Приехал`.
+Поле `status` в gsheet может содержать мусор, поэтому код берёт только четыре перечисленных статуса.
 
 **Следствие для воронки:**
-- `prodazhi` Маркар включает продажи из gsheet-патча (без этого были бы 0)
-- `priezd` Маркар берётся ТОЛЬКО из CRM-статусов через `local_crm_statuses` — gsheet-патч **не влияет на priezd**
-- После step0, до step1 → корректные статусы попадают в `raw_leads`
+- `prodazhi` Маркар включает продажи из gsheet-патча
+- `priezd` Маркар включает визитные gsheet-статусы из патча и `sale` через auto-merge
+- После step1 → патченые статусы попадают в `ad_analytics.raw_leads` / `raw_calls`
 
 **Маппинг ID:** `link = 'https://crm.marcar.ru/leads/409449'` → `REGEXP_REPLACE(link, '^.+/', '') = '409449'` = `local_leads_all.source_record_id`
 
@@ -163,17 +162,19 @@ WHERE pm.link LIKE '%crm.marcar.ru%'
 
 **Валидация Маркар-продаж:**
 ```sql
--- Сколько Маркар-лидов получили статус Продажа через gsheet-патч
-SELECT COUNT(*) AS marcar_prodazhi_patched
-FROM local_leads_all
-WHERE status = 'Продажа' AND source_type = 'marcar_crm_excel';
+-- Сколько Маркар-лидов получили один из gsheet-статусов через патч
+SELECT status, count() AS marcar_status_patched
+FROM ad_analytics.raw_leads
+WHERE source_type = 'marcar_crm_excel'
+  AND status IN ('Продажа', 'Дошел в КО', 'Одобрение', 'Приехал')
+GROUP BY status;
 
--- Сколько строк в gsheet со статусом Продажа (ожидаем ≈ равно)
-SELECT COUNT(*) AS gsheet_prodazhi
-FROM local_gsheet_priezdi_marcar
+-- Сколько строк в gsheet с полезными статусами
+SELECT status, count() AS gsheet_status_rows
+FROM raw_data.gsheet_priezdi_marcar
 WHERE link LIKE '%crm.marcar.ru%'
-  AND link ~ '^https?://.+/[0-9]+$'
-  AND status = 'Продажа';
+  AND status IN ('Продажа', 'Дошел в КО', 'Одобрение', 'Приехал')
+GROUP BY status;
 ```
 
 **Сверка приездов vs продаж Маркар в big_analytics_full:**

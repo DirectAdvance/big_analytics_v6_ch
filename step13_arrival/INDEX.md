@@ -12,8 +12,8 @@ Files indexed: **6**
 | file | KB | purpose |
 |---|---|---|
 | `CLAUDE.md` | 13 | step13_arrival — CLAUDE.md |
-| `README.md` | 7 | step13_arrival — Воронка по дате визита |
+| `README.md` | 8 | step13_arrival — Воронка по дате визита |
 | `ROLLBACK_mirror_union.md` | 2 | Откат MIRROR+UNION (step13 73-кол зеркало + big_analytics_unified) |
 | `__init__.py` | 1 |  |
 | `build_unified.py` | 1 | Build `big_analytics_unified` in ClickHouse. |
-| `step13.py` | 52 | Step 13 for v6_ch: build the REAL visit axis (`big_analytics_full_arrival`). |
+| `step13.py` | 62 | Step 13 for v6_ch: build the REAL visit axis (`big_analytics_full_arrival`). |
