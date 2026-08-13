@@ -322,27 +322,6 @@ SELECT * FROM leftovers
 """
 
 
-def _direct_pixel_select_cols(cols: list[str]) -> str:
-    fallback = {
-        "статус": "coalesce(nullIf(s.`статус`, ''), gs.status)",
-        "специалист": "coalesce(nullIf(s.`специалист`, ''), gs.directologist)",
-        "тип_сайта": "coalesce(nullIf(s.`тип_сайта`, ''), gs.site_type)",
-        "шаблон": "coalesce(nullIf(s.`шаблон`, ''), gs.template)",
-        "салон": "coalesce(nullIf(s.`салон`, ''), gs.salon)",
-        "город": "coalesce(nullIf(s.`город`, ''), gs.city)",
-        "регион": "coalesce(nullIf(s.`регион`, ''), gs.region)",
-        "direction": "coalesce(nullIf(s.direction, ''), gs.direction)",
-        "проджект": "coalesce(nullIf(s.`проджект`, ''), gs.project_manager)",
-        "id_салона": "coalesce(nullIf(s.`id_салона`, ''), gs.client_id)",
-        "менеджер": "coalesce(nullIf(s.`менеджер`, ''), gs.sales_manager)",
-        "account_login": "coalesce(nullIf(s.account_login, ''), gs.login_key, '')",
-        "manager_login": "coalesce(nullIf(s.manager_login, ''), gs.directologist)",
-        "аккаунт|сайт": "concat(coalesce(nullIf(s.account_login, ''), gs.login_key, ''), '|', ifNull(s.domain, ''))",
-        "key_pixel_score": "CAST(NULL, 'Nullable(String)')",
-    }
-    return ", ".join(f"{fallback.get(col, f's.{q(col)}')} AS {q(col)}" for col in cols)
-
-
 def _rebuild_pixel_score(client) -> int:
     shadow = "ad_analytics.big_analytics_pixel_score_new"
     _create_empty_from_full(client, shadow)
@@ -386,24 +365,6 @@ def _rebuild_full_with_pixel(client) -> int:
             settings=SAFE_QUERY_SETTINGS,
         )
         logger.info("  full pixel daily batch %d/%d inserted: %s -> %s", idx, len(pixel_ranges), lo, hi)
-
-    source_ranges = day_ranges(DATE_FROM)
-    select_cols = _direct_pixel_select_cols(cols)
-    for idx, (lo, hi) in enumerate(source_ranges, start=1):
-        client.command(
-            f"""
-            INSERT INTO {shadow} ({cols_sql})
-            WITH
-            {_gs_account_cte()}
-            SELECT {select_cols}
-            FROM ad_analytics.{SOURCE_STORE} AS s
-            LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(s.domain, '')))
-            WHERE s.`Date` >= toDate('{lo}') AND s.`Date` < toDate('{hi}')
-              AND s._source_table = 'pixel'
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-        logger.info("  full direct pixel daily batch %d/%d inserted: %s -> %s", idx, len(source_ranges), lo, hi)
 
     swap_shadow(client, "ad_analytics.big_analytics_full", shadow)
     return count_rows(client, "ad_analytics.big_analytics_full")

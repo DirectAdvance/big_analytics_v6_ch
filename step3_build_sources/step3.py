@@ -735,9 +735,8 @@ def _ag_parts_expr(prefix: str = "") -> str:
 
 
 def _direct_napravlenie_expr(prefix: str = "yd.") -> str:
-    """`направление` строки Директа: посевные кодеры tp8/tp9/tp10 → 'Комплекс'."""
-    tp = f"ifNull({prefix}tp, '')"
-    return f"if(startsWith({tp}, 'tp8') OR startsWith({tp}, 'tp9') OR startsWith({tp}, 'tp10'), 'Комплекс', 'Контекст')"
+    """`направление` строки Директа: v5/site taxonomy keeps Direct inside `Комплекс`."""
+    return "'Комплекс'"
 
 
 def _direct_source_table_expr(prefix: str = "yd.") -> str:

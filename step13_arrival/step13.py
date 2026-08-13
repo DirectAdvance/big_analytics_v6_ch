@@ -412,8 +412,7 @@ lead_visits AS
         multiIf(
             {posev_flag}, 'Комплекс',
             {seo_flag}, 'Комплекс',
-            {tp_expr} IN ('tp8', 'tp9', 'tp10'), 'Комплекс',
-            'Контекст'
+            'Комплекс'
         ) AS `направление`,
         multiIf(
             {posev_flag}, 'Посевы',
@@ -566,7 +565,7 @@ def _calls_branch_columns() -> dict[str, str]:
         "id_салона": "g.`id_салона`",
         "менеджер": "g.`менеджер`",
         "источник": "'Звонки'",
-        "направление": "'Контекст'",
+        "направление": "'Комплекс'",
         "аккаунт|сайт": "concat(g.account_login, '|', ifNull(g.domain, ''))",
         "priezd_arrival_date": "toInt64(0)",
         "prodazhi_arrival_date": "toInt64(0)",
@@ -717,7 +716,7 @@ def _marcar_orphan_branch_columns() -> dict[str, str]:
         "id_салона": "g.`id_салона`",
         "менеджер": "g.`менеджер`",
         "источник": "'Контекст'",
-        "направление": "'Контекст'",
+        "направление": "'Комплекс'",
         "аккаунт|сайт": "concat(g.account_login, '|', ifNull(g.domain, ''))",
         "priezd_arrival_date": "toInt64(0)",
         "prodazhi_arrival_date": "toInt64(0)",

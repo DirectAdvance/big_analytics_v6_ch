@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import (
-    SAFE_QUERY_SETTINGS,
+    SAFE_QUERY_SETTINGS as BASE_SAFE_QUERY_SETTINGS,
     column_names,
     count_rows,
     day_ranges,
@@ -27,6 +27,11 @@ from step3_build_sources.step3 import _metric_expr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("build_star")
+
+SAFE_QUERY_SETTINGS = {
+    **BASE_SAFE_QUERY_SETTINGS,
+    "max_execution_time": 600,
+}
 
 FACT_BIG_DIMENSION_COLUMNS = {
     "key3",
@@ -717,6 +722,13 @@ DIM_DDL = {
 def build_dim_adgroup(client) -> int:
     shadow = "ad_analytics.Dim_AdGroup_new"
     stage = "ad_analytics.Dim_AdGroup_fact_parts_new"
+    source_table = (
+        "ad_analytics.big_analytics_sources"
+        if table_exists(client, "ad_analytics", "big_analytics_sources")
+        else "ad_analytics.big_analytics_unified"
+    )
+    if source_table.endswith("big_analytics_unified"):
+        log.info("  Dim_AdGroup: big_analytics_sources отсутствует, использую big_analytics_unified")
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
     client.command(f"DROP TABLE IF EXISTS {stage} SYNC")
     client.command(
@@ -765,7 +777,7 @@ def build_dim_adgroup(client) -> int:
                 anyLast(`номер группы | название группы`) AS `номер группы | название группы`,
                 anyLast(`неверный_кодер_new`) AS `неверный_кодер_new`,
                 anyLast(CampaignId) AS parent_CampaignId
-            FROM ad_analytics.big_analytics_sources
+            FROM {source_table}
             WHERE Date >= toDate('{lo}')
               AND Date < toDate('{hi}')
               AND AdGroupId != 0
@@ -874,10 +886,70 @@ def build_dim_adgroup(client) -> int:
     return rows
 
 
+def build_dim_campaign(client, bucket_count: int = 64) -> int:
+    """Build Dim_Campaign in disjoint CampaignId buckets to stay under CH memory cap."""
+    table = "Dim_Campaign"
+    shadow = f"ad_analytics.{table}_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY ifNull(CampaignId, 0)
+        AS
+        SELECT
+            `CampaignId`,
+            anyLast(`CampaignName`) AS `CampaignName`,
+            anyLast(account_login) AS account_login,
+            anyLast(campaign_code) AS campaign_code,
+            anyLast(tp) AS tp,
+            anyLast(cpc_cpa) AS cpc_cpa,
+            anyLast(site_quiz) AS site_quiz,
+            anyLast(campaign_status) AS campaign_status,
+            anyLast(payment_model) AS payment_model,
+            anyLast(`номер кампании | название кампании`) AS `номер кампании | название кампании`
+        FROM ad_analytics.big_analytics_unified
+        WHERE 0 AND `CampaignId` IS NOT NULL
+        GROUP BY `CampaignId`
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    for bucket in range(bucket_count):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            SELECT
+                `CampaignId`,
+                anyLast(`CampaignName`) AS `CampaignName`,
+                anyLast(account_login) AS account_login,
+                anyLast(campaign_code) AS campaign_code,
+                anyLast(tp) AS tp,
+                anyLast(cpc_cpa) AS cpc_cpa,
+                anyLast(site_quiz) AS site_quiz,
+                anyLast(campaign_status) AS campaign_status,
+                anyLast(payment_model) AS payment_model,
+                anyLast(`номер кампании | название кампании`) AS `номер кампании | название кампании`
+            FROM ad_analytics.big_analytics_unified
+            WHERE `CampaignId` IS NOT NULL
+              AND modulo(ifNull(`CampaignId`, 0), {bucket_count}) = {bucket}
+            GROUP BY `CampaignId`
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        if bucket == bucket_count - 1 or (bucket + 1) % 16 == 0:
+            log.info("  Dim_Campaign bucket %d/%d", bucket + 1, bucket_count)
+    swap_shadow(client, "ad_analytics.Dim_Campaign", shadow)
+    rows = count_rows(client, "ad_analytics.Dim_Campaign")
+    log.info("  Dim_Campaign=%d", rows)
+    return rows
+
+
 def build_dim(client, table: str) -> int:
     if table not in DIM_DDL:
         available = ", ".join(sorted(DIM_DDL))
         raise ValueError(f"Unknown dimension {table!r}. Available: {available}")
+    if table == "Dim_Campaign":
+        return build_dim_campaign(client)
     if table == "Dim_AdGroup":
         return build_dim_adgroup(client)
     shadow = f"ad_analytics.{table}_new"

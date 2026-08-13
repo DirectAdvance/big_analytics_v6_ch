@@ -105,7 +105,7 @@ def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
             f"  AND lower(trim(ifNull(c.domain, ''))) NOT IN ({_CROP_DOMAIN_SUBQUERY})"
         )
         istochnik_sql = "'Звонки'"
-        napravlenie_sql = "'Контекст'"
+        napravlenie_sql = "'Комплекс'"
     return f"""
 WITH
 {_gs_account_cte()},
