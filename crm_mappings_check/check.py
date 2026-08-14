@@ -12,12 +12,12 @@ crm_mappings_check/check.py — отчёт о неиспользуемых ма�
 Вызывается из pipeline.py / fast_pipeline.py inline (как step11/step12).
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import time
 from pathlib import Path
-
-import requests
 
 logger = logging.getLogger('pipeline.crm_mappings_check')
 
@@ -110,74 +110,54 @@ ORDER BY ra.cnt DESC;
 """
 
 
-def _send_telegram(text, bot_token, chat_id):
-    """Отправка в Telegram с ротацией прокси (Amsterdam→DE→NL→FR→direct)."""
-    url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
-    chunks = []
-    cur = ''
-    for line in text.split('\n'):
-        if len(cur) + len(line) + 1 > 4000:
-            chunks.append(cur)
-            cur = ''
-        cur += line + '\n'
-    if cur:
-        chunks.append(cur)
-    for c in chunks:
-        sent = False
-        for proxies in _TG_PROXY_VARIANTS:  # TG_PROXY_CHAIN_ROTATION_2026-06-17
-            try:
-                resp = requests.post(
-                    url,
-                    json={'chat_id': chat_id, 'text': c,
-                          'disable_web_page_preview': True},
-                    timeout=15,
-                    proxies=proxies,
-                )
-                if resp.ok:
-                    sent = True
-                    break
-                logger.warning('Telegram %s: %s', resp.status_code, resp.text[:200])
-            except Exception as e:
-                logger.warning('Telegram (proxies=%s): %s', proxies, e)
-        if not sent:
-            logger.warning('Telegram чанк не отправлен')
+def _rows_for_section(items: list[dict], with_statuses: bool = False) -> list[str]:
+    """First 50 unmapped values as a readable phrase — no python-repr quotes on
+    the value, no `cnt=N` debug-style output. Keeps every piece of data
+    (value, its lead count, [statuses: ...]) — wording only."""
+    from notifications.telegram import format_ru_amount, ru_plural
 
-
-def _build_text(unused, unmapped_status, unmapped_reason, run_id):
-    """Отчёт: только UNMAPPED секции (status + reason).
-    UNUSED-маппинги (определены, но не встречаются в leads) намеренно не печатаем
-    в Telegram — пользователь не хочет шума о неиспользуемых маппингах.
-    """
     lines = []
-    lines.append('🧹 Проверка local_crm_statuses ↔ local_leads_all')
-    if run_id:
-        lines.append(f'run_id: {run_id}')
-    lines.append('')
+    for r in items[:50]:
+        cnt = r['cnt']
+        phrase = f'{r["val"]} — {format_ru_amount(cnt)} {ru_plural(cnt, "лид", "лида", "лидов")}'
+        if with_statuses and r.get('statuses'):
+            phrase += f'  [statuses: {r["statuses"]}]'
+        lines.append(phrase)
+    if len(items) > 50:
+        lines.append(f'... ещё {len(items) - 50}')
+    return lines
 
-    # === Unmapped статусы (есть в leads, нет в crm_statuses) ===
-    total_status_leads  = sum(r['cnt'] for r in unmapped_status)
-    total_reason_leads  = sum(r['cnt'] for r in unmapped_reason)
 
-    lines.append('═══ UNMAPPED status в leads (нет в local_crm_statuses) ═══')
-    lines.append(f'Уникальных: {len(unmapped_status)}, лидов без категории: {total_status_leads}')
-    if unmapped_status:
-        for r in unmapped_status[:50]:
-            lines.append(f'  {r["val"]!r}  cnt={r["cnt"]}')
-        if len(unmapped_status) > 50:
-            lines.append(f'  ... ещё {len(unmapped_status) - 50}')
-    lines.append('')
+def build_message(unmapped_status: list[dict], unmapped_reason: list[dict], run_id: str | None):
+    """Verdict-first: unmapped count in the title. UNUSED mappings (defined but
+    never seen in leads) are intentionally not printed — Семён doesn't want
+    noise about unused mappings, only report requested is UNMAPPED."""
+    from notifications.telegram import TelegramMessage, TelegramSection, ru_plural
 
-    lines.append('═══ UNMAPPED reason в leads (нет в local_crm_statuses) ═══')
-    lines.append(f'Уникальных: {len(unmapped_reason)}, лидов без категории: {total_reason_leads}')
-    if unmapped_reason:
-        for r in unmapped_reason[:50]:
-            statuses_str = f'  [statuses: {r["statuses"]}]' if r.get('statuses') else ''
-            lines.append(f'  {r["val"]!r}  cnt={r["cnt"]}{statuses_str}')
-        if len(unmapped_reason) > 50:
-            lines.append(f'  ... ещё {len(unmapped_reason) - 50}')
-    lines.append('')
+    total_status_leads = sum(r['cnt'] for r in unmapped_status)
+    total_reason_leads = sum(r['cnt'] for r in unmapped_reason)
+    total_unmapped = len(unmapped_status) + len(unmapped_reason)
+    if total_unmapped:
+        noun = ru_plural(total_unmapped, 'несопоставленное значение',
+                         'несопоставленных значения', 'несопоставленных значений')
+        title = f'🔴 local_crm_statuses: {total_unmapped} {noun}'
+    else:
+        title = '🟢 local_crm_statuses: несопоставленных значений нет'
 
-    return '\n'.join(lines)
+    return TelegramMessage(
+        title=title,
+        meta=[f'run_id: {run_id}'] if run_id else [],
+        sections=[
+            TelegramSection(
+                f'UNMAPPED status ({len(unmapped_status)} уник., {total_status_leads} лидов)',
+                lines=_rows_for_section(unmapped_status),
+            ),
+            TelegramSection(
+                f'UNMAPPED reason ({len(unmapped_reason)} уник., {total_reason_leads} лидов)',
+                lines=_rows_for_section(unmapped_reason, with_statuses=True),
+            ),
+        ],
+    )
 
 
 def _get_gspread_client():
@@ -293,8 +273,13 @@ def run(conn, run_id=None, **kwargs) -> dict:
     unmapped_status = _query(_UNMAPPED_STATUS_SQL)
     unmapped_reason = _query(_UNMAPPED_REASON_SQL)
 
-    text = _build_text(unused, unmapped_status, unmapped_reason, run_id)
-    _send_telegram(text, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
+    from notifications.telegram import send_notification
+    message = build_message(unmapped_status, unmapped_reason, run_id)
+    # timeout=15 (was silently 10s default post-migration, matches the original
+    # requests.post(..., timeout=15) this replaced).
+    if not send_notification(message, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                             proxy_variants=_TG_PROXY_VARIANTS, timeout=15):
+        logger.warning('crm_mappings_check: Telegram не доставлен ни через один прокси')
 
     sheets_rows = _export_to_sheets(unmapped_reason)
 

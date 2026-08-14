@@ -61,8 +61,8 @@ scp /tmp/cookies.json victory:~/big_analytics_v5/cookies.json
 
 Файл `config/cookies.py` — общий модуль проверки куки:
 - `check_cookies_alive(cookies)` — тестирует Grid API через 2 известных аккаунта
-- `send_tg(text)` — отправляет сообщение в Telegram
-- `send_tg_cookies_dead(step_name)` — уведомление о протухших куках
+- `send_tg(text)` — отправляет сообщение в Telegram (тонкая обёртка над
+  `notifications.telegram.send_html`, с 2026-08-14)
 
 **Поведение при протухших куках:**
 - **step7** (статусы кампаний): `_build_sessions()` возвращает `[]` → TG + return, старые данные сохраняются

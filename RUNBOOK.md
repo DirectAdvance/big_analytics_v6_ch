@@ -34,8 +34,15 @@ ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 config/ch_db.py"
 # Один шаг.
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/pipeline.py --only-step=145
 
-# Ночной ClickHouse pipeline.
+# Ночной ClickHouse pipeline (foreground, без редиректа — traceback идёт в терминал).
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/step_cron_night/pipeline_night.py
+
+# Ночной pipeline под cron/nohup — редирект ОБЯЗАТЕЛЕН, иначе полный traceback
+# FAIL-шага (logger.exception) нигде не остаётся: Telegram шлёт только факт
+# (VERDICT_FIRST_FACT_ONLY), не текст исключения. Нет v6 cron-записи ещё — это
+# заготовка на момент, когда её заведут.
+nohup ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/step_cron_night/pipeline_night.py \
+  > ~/big_analytics_v6_ch/logs/pipeline_night_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 ```
 
 Долгий локальный запуск вести через `nohup` с логом:

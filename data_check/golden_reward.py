@@ -603,36 +603,43 @@ def run_scorer() -> dict:
 
 # ── Telegram-сводка (опц.) ────────────────────────────────────────────────────
 
+def build_message(r: dict):
+    """Verdict-first golden_reward summary: PASS/HARD FAIL + reward + sub-scores."""
+    from notifications.telegram import TelegramMessage, TelegramSection, format_ru_amount
+
+    title = f"{'🔴 HARD FAIL' if r['hard_fail'] else '🟢 PASS'} — reward={r['reward']}"
+    cost_status = 'OK' if r['cost_ok'] else 'FAIL'
+    sales_status = 'OK' if r['sales_ok'] else f"SLACK={r['sales_slack']}"
+
+    return TelegramMessage(
+        title=title,
+        meta=[r['ts'], f"src={r.get('data_source', '?')}"],
+        sections=[
+            TelegramSection('Метрики', rows=[
+                ('cost', f"{format_ru_amount(r['cost'])} (Δ={format_ru_amount(r['cost_dist'])} ₽) {cost_status}"),
+                ('sales', f"{r['sales']} (floor>={r['sales_floor']}) {sales_status}"),
+                ('violations', f"{r['n_violations']}/11"),
+            ]),
+        ],
+    )
+
+
 def _send_telegram_summary(r: dict) -> None:
     """Краткий Telegram-пинг с reward и ключевыми sub-scores."""
     try:
-        import requests
         from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS
+        from notifications.telegram import send_notification
     except Exception as exc:
         logger.warning('Telegram: не удалось загрузить креды: %s', exc)
         return
 
-    fail_mark = 'HARD FAIL' if r['hard_fail'] else 'PASS'
-    cost_status = 'OK' if r['cost_ok'] else 'FAIL'
-    sales_status = 'OK' if r['sales_ok'] else f"SLACK={r['sales_slack']}"
-    text = (
-        f"golden_reward | {r['ts']}\n"
-        f"{fail_mark} | reward={r['reward']}\n"
-        f"cost={r['cost']:.2f} (delta={r['cost_dist']:+.4f}r) {cost_status}\n"
-        f"sales={r['sales']} (floor>={r['sales_floor']}) {sales_status}\n"
-        f"violations={r['n_violations']}/11\n"
-        f"src={r.get('data_source','?')}"
-    )
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': text}
-    for proxies in TELEGRAM_PROXY_VARIANTS:
-        try:
-            resp = requests.post(url, json=payload, proxies=proxies, timeout=30)
-            if resp.ok and resp.json().get('ok'):
-                logger.info('Telegram доставлено (proxies=%s)', proxies)
-                return
-        except Exception as exc:
-            logger.debug('Telegram (proxies=%s): %s', proxies, exc)
+    # timeout=30 (was silently 10s default post-migration, matches the original
+    # requests.post(..., timeout=30) this replaced).
+    if send_notification(build_message(r), bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                         proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=30):
+        logger.info('Telegram доставлено')
+    else:
+        logger.debug('Telegram не доставлено ни через один прокси')
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

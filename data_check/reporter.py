@@ -8,12 +8,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-import requests
-
 logger = logging.getLogger(__name__)
 
 
 def format_report(results: dict) -> str:
+    from notifications.telegram import format_ru_amount
+
     lines = []
     today = datetime.now().strftime('%d.%m.%Y %H:%M')
     lines.append(f'🔍 Data Integrity Check — {today}')
@@ -36,8 +36,7 @@ def format_report(results: dict) -> str:
     # Spending
     spend = results.get('spending', {})
     for r in spend.get('spend_no_leads_7d', []):
-        cost = r['total_cost']
-        critical.append(f'· {r["проджект"]} — расход {cost:,.0f}₽, лидов 0 за 7 дней')
+        critical.append(f'· {r["проджект"]} — расход {format_ru_amount(r["total_cost"])} ₽, лидов 0 за 7 дней')
 
     # Funnel violations
     funnel = results.get('funnel', {})
@@ -98,7 +97,8 @@ def format_report(results: dict) -> str:
 def send_telegram(report: str, bot_token: str, chat_id: str,
                   proxy: str | None = None,
                   proxy_variants: list | None = None) -> None:
-    """Отправка в Telegram с ротацией прокси (Amsterdam→DE→NL→FR→direct).
+    """`report` is a plain-text digest (no HTML markup) — one sender for the
+    project: `notifications.telegram.send_html` (sanitize + chunk + proxy retry).
 
     proxy_variants — цепочка [{https:...}, ..., None], предпочтительный способ.
     proxy — одиночный прокси (backward-compat, используется если proxy_variants не задан).
@@ -106,49 +106,9 @@ def send_telegram(report: str, bot_token: str, chat_id: str,
     # TG_PROXY_CHAIN_ROTATION_2026-06-17
     if proxy_variants is None:
         proxy_variants = [{'https': proxy, 'http': proxy}] if proxy else [None]
-    url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
-    chunks = _split_chunks(report)
-    for chunk in chunks:
-        sent = False
-        for proxies in proxy_variants:
-            try:
-                resp = requests.post(
-                    url,
-                    json={'chat_id': chat_id, 'text': chunk},
-                    proxies=proxies,
-                    timeout=30,
-                )
-                if resp.ok:
-                    sent = True
-                    break
-                logger.warning('Telegram send failed (proxies=%s): %s', proxies, resp.text)
-            except Exception as e:
-                logger.warning('Telegram (proxies=%s): %s', proxies, e)
-        if not sent:
-            logger.warning('Telegram chunk не доставлен ни через один прокси')
-
-
-def _split_chunks(text: str, limit: int = 4096) -> list[str]:
-    if not text:
-        return []
-    if len(text) <= limit:
-        return [text]
-    chunks, buf, buf_len = [], [], 0
-    for line in text.split('\n'):
-        line_len = len(line) + 1
-        if buf_len + line_len > limit and buf:
-            chunks.append('\n'.join(buf))
-            buf, buf_len = [], 0
-        if line_len > limit:
-            # flush buf first, then hard-split the oversized line
-            if buf:
-                chunks.append('\n'.join(buf))
-                buf, buf_len = [], 0
-            for i in range(0, len(line), limit):
-                chunks.append(line[i:i+limit])
-            continue
-        buf.append(line)
-        buf_len += line_len
-    if buf:
-        chunks.append('\n'.join(buf))
-    return chunks
+    from notifications.telegram import send_html
+    # timeout=30 (was silently 10s default post-migration) — this report can run
+    # long chunked sends; restoring the original per-request timeout, not the
+    # shared default other (short) senders use.
+    if not send_html(report, bot_token=bot_token, chat_id=chat_id, proxy_variants=proxy_variants, timeout=30):
+        logger.warning('Telegram report не доставлен ни через один прокси')

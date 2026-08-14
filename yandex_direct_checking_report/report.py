@@ -3,7 +3,7 @@ yandex_direct_checking_report/report.py — независимый отчёт с
 
 Назначение:
     Полная перезаливка таблицы `public.yandex_direct_checking_report` в БД
-    `ad_analytics_bi` (Victory VPS). Расходы по аккаунтам, помесячно, без НДС.
+    `ad_analytics_bi` (Victory VPS). Расходы по аккаунтам, помесячно, с НДС.
 
 Источник аккаунтов:
     public.local_gsheet_sites
@@ -15,7 +15,7 @@ API:
     POST https://api.direct.yandex.com/json/v5/reports
     ReportType=CAMPAIGN_PERFORMANCE_REPORT, FieldNames=['Month','Cost']
     Группировка по месяцу — на стороне API; локально только агрегируем по аккаунту.
-    Заголовки: IncludeVAT=NO (без НДС), returnMoneyInMicros=false (рубли, не микрорубли).
+    Заголовки: IncludeVAT=YES (с НДС), returnMoneyInMicros=false (рубли, не микрорубли).
 
 Токены:
     Агентские (4 шт.), берутся из .secret/.env через loader.load_yandex_direct().
@@ -338,23 +338,23 @@ def insert_rows(conn, rows: list[tuple]) -> None:
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 def _send_telegram(text: str) -> None:
-    """Отправка в Telegram с ротацией прокси (Amsterdam→DE→NL→FR→direct)."""
+    """Pre-built HTML report (fixed-width `<code>` table) — one sender for the
+    project: `notifications.telegram.send_html` (sanitize + chunk + proxy retry)."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.warning('Telegram не настроен, пропускаем отправку')
         return
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'parse_mode': 'HTML'}
-    for proxies in TELEGRAM_PROXY_VARIANTS:  # TG_PROXY_CHAIN_ROTATION_2026-06-17
-        try:
-            r = requests.post(url, json=payload, proxies=proxies, timeout=30)
-            if r.status_code == 200:
-                logger.info('Telegram отправлен (proxies=%s)', proxies)
-                return
-            logger.warning('Telegram ошибка: %s %s', r.status_code, r.text[:200])
-            return
-        except Exception as e:
-            logger.warning('Telegram исключение (proxies=%s): %s', proxies, e)
-            continue
+    from notifications.telegram import send_html
+    # timeout=30 (was silently 10s default post-migration, matches the original
+    # requests.post(..., timeout=30) this replaced).
+    # collapse_whitespace=False (WHITESPACE_IS_CONTENT_2026-08-14): the failed-
+    # accounts bullet list ('  • login (domain)') uses a leading 2-space indent
+    # as layout; the big table is separately safe inside multi-line <code>
+    # regardless, since that's only skipped-normalize either way.
+    if send_html(text, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=30, collapse_whitespace=False):
+        logger.info('Telegram отправлен')
+    else:
+        logger.warning('Telegram не доставлен ни через один прокси')
 
 
 def _n(val: float) -> str:
@@ -408,8 +408,9 @@ def run_comparison(conn, failed_list: list[tuple[str, str]] | None = None) -> fl
     lines.append('</code>')
 
     text = header + '\n'.join(lines) + failed_section
-    if len(text) > 4090:
-        text = text[:4087] + '...'
+    # No more hard truncate-at-4090: send_html splits >4096-char messages into
+    # several Telegram messages (tag-balanced <code> reopened per chunk) instead
+    # of silently dropping table rows past the old length cutoff.
 
     logger.info('Сверка: %d расхождений, %d аккаунтов', len(rows), len(accounts_set))
     _send_telegram(text)

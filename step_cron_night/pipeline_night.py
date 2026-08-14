@@ -16,6 +16,8 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
 from config.ch_db import get_client  # noqa: E402
+from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS  # noqa: E402
+from notifications.telegram import build_pipeline_error_message, render_html, send_html  # noqa: E402
 from pipeline import ensure_quality_log, log_step  # noqa: E402
 
 logging.basicConfig(
@@ -53,26 +55,11 @@ LEGACY_PG_NOT_IN_NIGHT = {
 
 
 def _send_tg(text: str) -> None:
-    try:
-        import requests
-
-        from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS
-
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-        proxies_chain = [p for p in TELEGRAM_PROXY_VARIANTS if p is not None] + [None]
-        for proxies in proxies_chain:
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json=payload,
-                    timeout=10,
-                    proxies=proxies,
-                )
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("TG send failed proxies=%s: %s", proxies, exc)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("TG import/send error: %s", exc)
+    """`text` is pre-built HTML (`build_pipeline_error_message`/local report lines) —
+    goes through `send_html`, the one sender+sanitize path for this project."""
+    if not send_html(text, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                     proxy_variants=TELEGRAM_PROXY_VARIANTS):
+        logger.error("TG send failed on all proxies")
 
 
 def _fmt_dur(seconds: float) -> str:
@@ -108,7 +95,18 @@ def run_step(client, run_id: str, step_num: int, module_path: str, label: str, s
         log_step(client, run_id, label, "FAIL", None, elapsed, details)
         logger.exception("Night step %s FAIL за %.1f сек", step_num, elapsed)
         if send_tg:
-            _send_tg(f"❌ <b>big_analytics_v6 night</b>\n{label} FAIL\n{details[:1000]}")
+            # VERDICT_FIRST_FACT_ONLY_2026-08-14 (ported from big_analytics_v5 bd192a2):
+            # Telegram gets the fact only — which step stopped the run — never the
+            # exception message/traceback. Full traceback: logger.exception above —
+            # only lands in a file if THIS run was launched with `> log 2>&1`
+            # (RUNBOOK.md "Ночной pipeline под cron/nohup" example); a bare foreground
+            # run has no log file, only the terminal. No v6 night cron entry exists
+            # yet — whoever schedules it must use the redirect form. Exception text
+            # (until then): data_quality_log.details for this run_id.
+            msg = build_pipeline_error_message(
+                pipeline_name="big_analytics_v6 night", run_id=run_id, failed_step=label,
+            )
+            _send_tg(render_html(msg))
         return False, elapsed, details
 
 
@@ -161,7 +159,10 @@ def main(argv: list[str] | None = None) -> int:
     lines.append("")
     for label, ok, elapsed, details in results:
         icon = "✅" if ok else "❌"
-        tail = f" — {details[:160]}" if details else ""
+        # VERDICT_FIRST_FACT_ONLY_2026-08-14: `details` on a FAIL row is the raw
+        # exception text (see run_step) — keep it out of the summary too; OK rows
+        # keep their informational details (row counts etc.) unchanged.
+        tail = f" — {details[:160]}" if details and ok else ""
         lines.append(f"{icon} {label}: {_fmt_dur(elapsed)}{tail}")
     lines.append("")
     lines.append("⚠️ Есть ошибки" if failed else "✅ Всё прошло успешно")

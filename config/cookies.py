@@ -162,37 +162,19 @@ def check_all_cookies_strict(cookies: dict) -> list[str]:
 
 
 def send_tg(text: str) -> None:
-    """Отправляет произвольное сообщение в Telegram с ротацией прокси (Amsterdam→DE→NL→FR→direct)."""
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    for proxies in TELEGRAM_PROXY_VARIANTS:  # TG_PROXY_CHAIN_ROTATION_2026-06-17
-        try:
-            r = requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': text},
-                              proxies=proxies, timeout=15)
-            if r.status_code == 200:
-                return
-        except Exception:
-            pass
-    logger.error('TG_SEND_FAIL_2026-07-03: все proxy-варианты отказали, сообщение потеряно')
+    """Отправляет `text` (готовый HTML-фрагмент, напр. с `<b>`/`<code>`) в Telegram.
 
-
-def send_tg_cookies_dead(step_name: str) -> None:
-    """Отправляет уведомление в Telegram о протухших куках с ротацией прокси."""
-    text = (
-        f'\U0001f36a Куки Яндекс.Директ протухли\n'
-        f'Шаг: {step_name}\n'
-        f'Шаг пропущен, старые данные сохранены.\n'
-        f'Обнови cookies.json на сервере.'
-    )
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    for proxies in TELEGRAM_PROXY_VARIANTS:  # TG_PROXY_CHAIN_ROTATION_2026-06-17
-        try:
-            r = requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': text},
-                              proxies=proxies, timeout=15)
-            if r.status_code == 200:
-                return
-        except Exception:
-            pass
-    logger.error('TG_SEND_FAIL_2026-07-03: все proxy-варианты отказали (cookies_dead), сообщение потеряно')
+    Транспорт/санитайз — целиком в `notifications.telegram.send_html` (один
+    sender на проект); эта функция остаётся тонкой обёрткой ради обратной
+    совместимости сигнатуры `text -> None`, которую использует
+    `ensure_cookies_alive_or_stop(send_tg=...)` и внешние импортёры.
+    """
+    from notifications.telegram import send_html
+    # timeout=15 (was silently 10s default post-migration, matches the original
+    # requests.post(..., timeout=15) this replaced).
+    if not send_html(text, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                     proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=15):
+        logger.error('TG_SEND_FAIL_2026-07-03: все proxy-варианты отказали, сообщение потеряно')
 
 
 # ── Общий guard живости кук (check-first self-healing) ─────────────────────────
@@ -253,7 +235,8 @@ def ensure_cookies_alive_or_stop(pipeline_name: str = 'big_analytics_v5',
             cookies = json.load(f)
     except Exception as e:
         logger.error('ensure_cookies: не удалось прочитать cookies.json (%s): %s', path, e)
-        send_tg(f'❌ {pipeline_name}: не удалось прочитать cookies.json\n{e}')
+        # VERDICT_FIRST_FACT_ONLY: fact only, exception text stays in the log above.
+        send_tg(f'❌ {pipeline_name}: не удалось прочитать cookies.json')
         raise
 
     # ── 2. Проверяем нашей проверкой ─────────────────────────────────────────

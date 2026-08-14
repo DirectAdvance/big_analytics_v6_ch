@@ -194,8 +194,7 @@ LEFT JOIN prev USING (month, источник)
 
 
 # ─── Telegram-алерт ──────────────────────────────────────────────────────────
-
-_TG_LIMIT = 4096  # лимит Telegram на одно сообщение
+# Chunking (>4096 симв.) — на стороне notifications.telegram.send_html, не здесь.
 
 # FUNNEL_DRIFT_MSG_CLARITY_2026-07-12: сколько последних месяцев показывать в TG-алерте.
 # Полная история остаётся в data_funnel_drift_log (дашборд); «Итого» ниже считается по ВСЕМ месяцам.
@@ -251,10 +250,11 @@ def _aggregate_seo(rows: list[dict]) -> list[dict]:
 
 
 def _fmt_cost(val) -> str:
-    """Форматирует стоимость: None / 0 → '—', иначе {:,.0f} ₽."""
+    """Форматирует стоимость: None → '—', иначе RU-формат (NNBSP тысячи) + ₽."""
     if val is None:
         return '—'
-    return f'{val:,.0f} ₽'
+    from notifications.telegram import format_ru_amount
+    return f'{format_ru_amount(val)} ₽'
 
 
 def _cost_arrow(curr, prev) -> str:
@@ -268,24 +268,6 @@ def _cost_arrow(curr, prev) -> str:
     return '='
 
 
-def _split_chunks(text: str, limit: int = _TG_LIMIT) -> list[str]:
-    """Разбивает длинный текст на куски по границе строк, не превышая limit символов."""
-    if len(text) <= limit:
-        return [text]
-    chunks = []
-    buf = []
-    buf_len = 0
-    for line in text.split('\n'):
-        line_len = len(line) + 1  # +1 для \n
-        if buf_len + line_len > limit and buf:
-            chunks.append('\n'.join(buf))
-            buf = []
-            buf_len = 0
-        buf.append(line)
-        buf_len += line_len
-    if buf:
-        chunks.append('\n'.join(buf))
-    return chunks
 
 
 def _send_drift_alert(rows: list[dict]) -> None:
@@ -305,7 +287,7 @@ def _send_drift_alert(rows: list[dict]) -> None:
 
     try:
         from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS
-        import requests
+        from notifications.telegram import format_ru_amount, send_html
     except ImportError as e:
         logger.warning('funnel_drift: не удалось импортировать зависимости для TG: %s', e)
         return
@@ -374,8 +356,8 @@ def _send_drift_alert(rows: list[dict]) -> None:
 
             # расход (всегда — полная картина)
             sign = '+' if dc > 0 else ''
-            dc_str = f'({sign}{dc:,.0f} ₽)' if abs(dc) > 0.005 else '(=)'
-            parts.append(f'расход {c_prv:,.0f}→{c_cur:,.0f} {dc_str}')
+            dc_str = f'({sign}{format_ru_amount(dc)} ₽)' if abs(dc) > 0.005 else '(=)'
+            parts.append(f'расход {format_ru_amount(c_prv)}→{format_ru_amount(c_cur)} {dc_str}')
 
             # заявки
             sign = '+' if dz > 0 else ''
@@ -428,38 +410,19 @@ def _send_drift_alert(rows: list[dict]) -> None:
     )
 
     text = '\n'.join(lines)
-    chunks = _split_chunks(text)
-
-    def _send_one(msg: str) -> bool:
-        """Ротация Amsterdam→DE→NL→FR→direct."""
-        for proxies in TELEGRAM_PROXY_VARIANTS:  # TG_PROXY_CHAIN_ROTATION_2026-06-17
-            try:
-                resp = requests.post(
-                    f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-                    json={
-                        'chat_id': TELEGRAM_CHAT_ID,
-                        'text': msg,
-                        'parse_mode': 'HTML',
-                    },
-                    timeout=15,
-                    proxies=proxies,
-                )
-                if resp.status_code == 200:
-                    return True
-                logger.warning('funnel_drift: Telegram API %d — %s', resp.status_code, resp.text[:200])
-            except Exception as e:
-                logger.warning('funnel_drift: Telegram недоступен (proxies=%s): %s', proxies, e)
-        return False
-
-    sent = 0
-    for chunk in chunks:
-        if _send_one(chunk):
-            sent += 1
-        else:
-            logger.error('funnel_drift: не удалось отправить чанк %d/%d', sent + 1, len(chunks))
-            break
-    if sent == len(chunks):
-        logger.info('funnel_drift: алерт отправлен в Telegram (%d сообщений)', sent)
+    # Pre-built HTML report (not a gate) — one sender+chunker: send_html handles
+    # >4096-char splitting with tag-balanced <code>/<b> reopening across chunks,
+    # so nothing here needs to truncate or hand-split the table.
+    # collapse_whitespace=False (WHITESPACE_IS_CONTENT_2026-08-14): the 2/4-space
+    # month→source→metric hierarchy above IS the layout — default sanitizing
+    # flattened it to one space per line, director-caught round 3.
+    # timeout=15 (was silently 10s default post-migration, matches the original
+    # requests.post(..., timeout=15) this replaced).
+    if send_html(text, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                proxy_variants=TELEGRAM_PROXY_VARIANTS, collapse_whitespace=False, timeout=15):
+        logger.info('funnel_drift: алерт отправлен в Telegram')
+    else:
+        logger.error('funnel_drift: не удалось отправить алерт в Telegram')
 
 
 # ─── Получение дельты из БД ───────────────────────────────────────────────────

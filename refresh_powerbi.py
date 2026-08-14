@@ -38,6 +38,7 @@ if str(_SECRET_DIR) not in sys.path:
 from loader import load_powerbi, load_db  # type: ignore  # noqa: E402
 
 from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS  # noqa: E402
+from notifications.telegram import TelegramMessage, TelegramSection, send_notification  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,31 +58,54 @@ CANONICAL_PG_HOST = 'analytics-marketing.ru'
 CANONICAL_PG_DATABASE = 'ad_analytics_bi'
 
 
-def _send_telegram(text: str) -> None:
-    """Отправка в Telegram: direct first, proxy fallback.
+# TG_DIRECT_FIRST_2026-06-15: local SOCKS proxies on Mac are often down, and for
+# Power BI refresh that is not a refresh error — so direct goes first, proxies
+# are fallback (the reverse of the proxy-first order most other senders use).
+_TG_PROXY_CHAIN = [None] + [p for p in TELEGRAM_PROXY_VARIANTS if p is not None]
 
-    Локальные SOCKS-прокси на Mac часто не подняты. Для Power BI refresh это не
-    ошибка самого refresh, поэтому не шумим warning на каждый отказ прокси.
-    """
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    payload = json.dumps({
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': text,
-        'parse_mode': 'HTML',
-    }).encode()
-    proxy_chain = [None] + [p for p in TELEGRAM_PROXY_VARIANTS if p is not None]
-    last_error = None
-    for proxies in proxy_chain:
-        try:
-            r = requests.post(url, data=payload,
-                              headers={'Content-Type': 'application/json'},
-                              proxies=proxies, timeout=10)
-            if r.status_code == 200:
-                return
-            last_error = f'HTTP {r.status_code}: {r.text[:200]}'
-        except Exception as e:
-            last_error = str(e)
-    logger.warning('Telegram send failed after %d attempts: %s', len(proxy_chain), last_error)
+
+def _notify(message: TelegramMessage) -> None:
+    """The one sender: `notifications.telegram.send_notification` (proxy order
+    above is this file's business rule, passed in — not duplicated transport)."""
+    if not send_notification(message, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                             proxy_variants=_TG_PROXY_CHAIN):
+        logger.warning('Telegram send failed after %d attempts', len(_TG_PROXY_CHAIN))
+
+
+def build_poll_timeout_message() -> TelegramMessage:
+    return TelegramMessage(
+        title='⚠️ Power BI: не удалось получить статус обновления (таймаут опроса)')
+
+
+def build_refresh_done_message(elapsed_seconds: int) -> TelegramMessage:
+    return TelegramMessage(
+        title=f'✅ Power BI: обновление завершено ({elapsed_seconds // 60} мин {elapsed_seconds % 60} сек)')
+
+
+def build_refresh_failed_message(status: str, request_id: str) -> TelegramMessage:
+    """Status + requestId are actionable; the vendor's free-form error text is
+    not — it stays out of Telegram and lives with the traceback (logged in full
+    by the caller via `logger.error` right before this is built)."""
+    return TelegramMessage(
+        title=f'❌ Power BI: обновление завершилось со статусом {status}',
+        sections=[TelegramSection('Детали', rows=[
+            ('requestId', request_id or '—'),
+            ('Полный текст ошибки', 'в логе refresh_powerbi на Victory'),
+        ])],
+    )
+
+
+def build_wait_timeout_message() -> TelegramMessage:
+    return TelegramMessage(title='⚠️ Power BI: таймаут ожидания обновления (60 мин)')
+
+
+def build_run_failed_message() -> TelegramMessage:
+    """VERDICT_FIRST_FACT_ONLY_2026-08-14: fact only, never the exception
+    text/traceback — `logger.error` right before the call site logs it."""
+    return TelegramMessage(
+        title='🔴 refresh_powerbi: остановлен ошибкой',
+        summary='Подробности — в логе refresh_powerbi на Victory.',
+    )
 
 
 def _load_powerbi_config() -> dict:
@@ -397,7 +421,7 @@ def refresh_powerbi(tables: list[str] | None = None) -> None:
         except Exception as e:
             logger.warning('Power BI: ошибка опроса статуса: %s', e)
             if time.time() - start > poll_timeout:
-                _send_telegram('⚠️ Power BI: не удалось получить статус обновления (таймаут опроса)')
+                _notify(build_poll_timeout_message())
                 return
             continue
 
@@ -409,7 +433,7 @@ def refresh_powerbi(tables: list[str] | None = None) -> None:
 
         if status == 'Completed':
             elapsed = int(time.time() - start)
-            _send_telegram(f'✅ Power BI: обновление завершено ({elapsed // 60} мин {elapsed % 60} сек)')
+            _notify(build_refresh_done_message(elapsed))
             return
         if status in ('Failed', 'Cancelled', 'Disabled'):
             error = items[0].get('serviceExceptionJson', '')
@@ -418,14 +442,11 @@ def refresh_powerbi(tables: list[str] | None = None) -> None:
                 'Power BI: обновление завершилось со статусом %s (requestId=%s): %s',
                 status, request_id, error or '<нет serviceExceptionJson>',
             )
-            _send_telegram(
-                f'❌ Power BI: обновление завершилось со статусом <b>{status}</b>\n'
-                f'<code>{error[:300]}</code>'
-            )
+            _notify(build_refresh_failed_message(status, request_id))
             raise RuntimeError(f'Power BI refresh {status}')
 
         if time.time() - start > poll_timeout:
-            _send_telegram('⚠️ Power BI: таймаут ожидания обновления (60 мин)')
+            _notify(build_wait_timeout_message())
             return
 
 
@@ -433,6 +454,6 @@ if __name__ == '__main__':
     try:
         refresh_powerbi(tables=_ALL_TABLES)
     except Exception as e:
-        logger.error('refresh_powerbi завершился с ошибкой: %s', e)
-        _send_telegram(f'❌ refresh_powerbi: ошибка\n<code>{e}</code>')
+        logger.error('refresh_powerbi завершился с ошибкой: %s', e, exc_info=True)
+        _notify(build_run_failed_message())
         sys.exit(1)

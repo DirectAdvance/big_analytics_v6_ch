@@ -24,6 +24,8 @@ watch_pipeline.py — хвостит /tmp/fast_pipeline.log, детектиру�
 WATCH_PIPELINE_2026-06-18
 """
 
+from __future__ import annotations
+
 import re
 import sys
 import time
@@ -33,22 +35,21 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS
+from notifications.telegram import format_ru_amount, ru_plural, send_html
 
 
 def _send_tg(text: str) -> None:
-    import requests as _req
-    for proxies in TELEGRAM_PROXY_VARIANTS:
-        try:
-            r = _req.post(
-                f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-                json={'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
-                timeout=10,
-                proxies=proxies,
-            )
-            if r.status_code == 200:
-                return
-        except Exception as e:
-            print(f'[watch] TG send failed (proxies={proxies}): {e}', flush=True)
+    """`text` is pre-built HTML from `_make_message` (`<b>...</b>` fragments) —
+    goes through `send_html`'s `sanitize_telegram_html`, the one render/sanitize
+    path shared by every sender in this project.
+
+    collapse_whitespace=False (WHITESPACE_IS_CONTENT_2026-08-14): `_make_message`'s
+    `'OK  '` / `'  {rows}'` column gaps are the layout, not accidental HTML
+    whitespace — default sanitizing flattened them to one space, director-caught
+    round 3."""
+    if not send_html(text, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+                     proxy_variants=TELEGRAM_PROXY_VARIANTS, collapse_whitespace=False):
+        print(f'[watch] TG send failed on all proxies: {text[:80]}', flush=True)
 
 
 # ── Паттерны детектирования ────────────────────────────────────────────────────
@@ -136,6 +137,15 @@ def _fmt_sec(sec_str: str) -> str:
         return sec_str + 'с'
 
 
+def _fmt_rows(rows_str: str) -> str:
+    """'5,231' / '5231' → '5 231 строка/строки/строк' (NNBSP thousands, RU plural)."""
+    try:
+        n = int(rows_str.replace(',', ''))
+    except (ValueError, AttributeError):
+        return f'{rows_str} строк'
+    return f'{format_ru_amount(n)} {ru_plural(n, "строка", "строки", "строк")}'
+
+
 def _make_message(label: str, line: str) -> str | None:
     """Строит TG-текст для детектированного маркера."""
 
@@ -146,7 +156,7 @@ def _make_message(label: str, line: str) -> str | None:
             return None
         num = int(m.group(1))
         dur = _fmt_sec(m.group(2))
-        rows = f'  {m.group(3)} строк' if m.group(3) else ''
+        rows = f'  {_fmt_rows(m.group(3))}' if m.group(3) else ''
         name = STEP_NAMES.get(num, f'step{num}')
         return f'OK  <b>{name}</b> — {dur}{rows}'
 
@@ -162,9 +172,9 @@ def _make_message(label: str, line: str) -> str | None:
 
     if label == 'step12':
         m = re.search(r'step12: ([\d]+) строк за ([\d.]+) сек', line)
-        rows = m.group(1) if m else '?'
+        rows = _fmt_rows(m.group(1)) if m else '? строк'
         dur = _fmt_sec(m.group(2)) if m else '?'
-        return f'OK  <b>step12 proverka</b> — {dur}  {rows} строк'
+        return f'OK  <b>step12 proverka</b> — {dur}  {rows}'
 
     if label == 'step13_rebuild':
         m = re.search(r'за ([\d.]+) сек', line)
