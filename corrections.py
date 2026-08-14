@@ -827,6 +827,14 @@ def _stage6_labels() -> str:
         f"multiIf({managers} s.`менеджер`), s.`менеджер`)"
     )
 
+    perform_direction_expr = (
+        "CAST(if("
+        "ifNull(s.`салон`, '') = 'Перформ РФ' OR ifNull(s.`id_салона`, '') = 'avto_0415', "
+        "'Перформ', "
+        "s.`направление`"
+        "), 'String')"
+    )
+
     # ── специалист: правила по аккаунту (v5 rules 1..1д) + fallback v3 ────────
     account_rules = specialist_correction_expr("s.`Date`", "s.account_login", "s.`специалист`")
     fallback = (
@@ -843,6 +851,7 @@ def _stage6_labels() -> str:
         "регион": region_expr,
         "менеджер": manager_expr,
         "специалист": fallback,
+        "направление": perform_direction_expr,
     }
     parts = []
     for idx, field in enumerate(_BACKFILL_FIELDS):

@@ -268,6 +268,23 @@ lower(trim(ifNull({domain_expr}, ''))) IN (
 """
 
 
+def _non_perform_full_domain_filter(domain_expr: str) -> str:
+    """Не даём общей лидовой ветке создавать визитную ось для Perform-доменов.
+
+    В `Dim_Site.направление` берётся majority из факта, поэтому техническое поле
+    `direction` здесь ещё может быть `Комплекс`. Надёжный признак Perform-домена
+    для v6 — уже собранная заявочная ось `big_analytics_full`.
+    """
+    return f"""
+lower(trim(ifNull({domain_expr}, ''))) NOT IN (
+    SELECT lower(trim(ifNull(domain, '')))
+    FROM ad_analytics.big_analytics_full
+    WHERE ifNull(domain, '') != ''
+      AND ifNull(`направление`, '') = 'Перформ'
+)
+"""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Ветка 1 — лиды
 # ══════════════════════════════════════════════════════════════════════════════
@@ -444,6 +461,7 @@ lead_visits AS
       -- пиксельные лиды идут отдельной веткой (дробная атрибуция step11)
       AND ifNull(l.utm_source, '') NOT LIKE 'victory_%'
       AND {_auto_domains_filter("coalesce(nullIf(gs_ma.domain, ''), l.domain)")}
+      AND {_non_perform_full_domain_filter("coalesce(nullIf(gs_ma.domain, ''), l.domain)")}
 ),
 lead_groups AS
 (
@@ -513,7 +531,7 @@ SELECT
     if(`источник` = 'SEO', '', site_quiz_raw) AS site_quiz,
     {ag_parts}
 FROM lead_groups
-WHERE priezd > 0 OR prodazhi > 0
+WHERE (priezd > 0 OR prodazhi > 0)
 """
 
 
@@ -1143,6 +1161,105 @@ HAVING round(priezd_shifted, 6) > 0 OR round(prodazhi_shifted, 6) > 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Ветка 4 — посевы Перформа как proxy-визиты из заявочной оси
+# ══════════════════════════════════════════════════════════════════════════════
+def _perform_posevy_proxy_columns() -> dict[str, str]:
+    """BA5/site parity: tp8/tp9 Перформа имеют визитную ось с proxy Date из BAF.
+
+    В CH Step13 основная lead-ветка строится из raw leads и не видит claim-axis
+    перекраску `источник='Посевы_*'` для perform-доменов. Для этих строк сайт/v5
+    добавляет lightweight visit-axis proxy из `big_analytics_full`: расход/клики
+    обнулены, заявки/квал не дублируются, priezd/prodazhi переносятся как есть.
+    """
+    return {
+        "key3": "concat('visit_perform_posevy|', g._source_table, '|', g.key3)",
+        "Date": "g.`Date`",
+        "День недели": _weekday_expr("g.`Date`"),
+        "week_start": "toStartOfWeek(g.`Date`, 1)",
+        "CampaignId": "g.`CampaignId`",
+        "CampaignName": "g.`CampaignName`",
+        "AdGroupId": "g.`AdGroupId`",
+        "AdGroupName": "g.`AdGroupName`",
+        "AdNetworkType": "g.`AdNetworkType`",
+        "Device": "g.`Device`",
+        "Impressions": "toDecimal64(0, 6)",
+        "Clicks": "toDecimal64(0, 6)",
+        "total_cost": "toDecimal64(0, 6)",
+        "domain": "g.domain",
+        "RlAdjustmentId": "g.`RlAdjustmentId`",
+        "RlAdjustmentId_total": "g.`RlAdjustmentId_total`",
+        "campaign_code": "g.campaign_code",
+        "tp": "g.tp",
+        "cpc_cpa": "g.cpc_cpa",
+        "site_quiz": "g.site_quiz",
+        "adgroup_code": "g.adgroup_code",
+        "account_login": "g.account_login",
+        "manager_login": "g.manager_login",
+        "ag_part1": "g.ag_part1",
+        "ag_part2": "g.ag_part2",
+        "ag_part3": "g.ag_part3",
+        "ag_part4": "g.ag_part4",
+        "ag_part5": "g.ag_part5",
+        "ag_part6": "g.ag_part6",
+        "ag_part7": "g.ag_part7",
+        "марки авто": "g.`марки авто`",
+        "Название crm": "g.`Название crm`",
+        "тип_заявки": "g.`тип_заявки`",
+        "kol_vo_zayavok": "toDecimal64(0, 6)",
+        "korr": "toDecimal64(0, 6)",
+        "kval": "toDecimal64(0, 6)",
+        "priezd": "g.priezd",
+        "prodazhi": "g.prodazhi",
+        "nekorr": "toDecimal64(0, 6)",
+        "ne_otvechaet": "toDecimal64(0, 6)",
+        "filtr": "toDecimal64(0, 6)",
+        "nedozvon": "toDecimal64(0, 6)",
+        "priedet": "toDecimal64(0, 6)",
+        "dohod_do_kredita": "toInt64(0)",
+        "dobro": "toInt64(0)",
+        "статус": "g.`статус`",
+        "специалист": "g.`специалист`",
+        "тип_сайта": "g.`тип_сайта`",
+        "шаблон": "g.`шаблон`",
+        "салон": "g.`салон`",
+        "город": "g.`город`",
+        "регион": "g.`регион`",
+        "direction": "g.direction",
+        "неверный_кодер_new": "g.`неверный_кодер_new`",
+        "fid": "g.fid",
+        "проджект": "g.`проджект`",
+        "id_салона": "g.`id_салона`",
+        "менеджер": "g.`менеджер`",
+        "источник": "g.`источник`",
+        "направление": "g.`направление`",
+        "номер кампании | название кампании": "g.`номер кампании | название кампании`",
+        "номер группы | название группы": "g.`номер группы | название группы`",
+        "План заявки": "g.`План заявки`",
+        "План приезда": "g.`План приезда`",
+        "аккаунт|сайт": "g.`аккаунт|сайт`",
+        "priezd_arrival_date": "toInt64(0)",
+        "prodazhi_arrival_date": "toInt64(0)",
+        "поставщик": "g.`поставщик`",
+        "_source_table": "g._source_table",
+        "cascade_level": "g.cascade_level",
+        "campaign_status": "g.campaign_status",
+        "payment_model": "g.payment_model",
+        "key_pixel_score": "g.key_pixel_score",
+    }
+
+
+def _perform_posevy_proxy_sql(date_from: str) -> str:
+    return f"""
+SELECT *
+FROM ad_analytics.big_analytics_full
+WHERE `Date` >= toDate('{date_from}')
+  AND `направление` = 'Перформ'
+  AND `источник` IN ('Посевы_Telegram', 'Посевы_Max', 'Посевы_Telegram+Max')
+  AND (priezd > 0 OR prodazhi > 0)
+"""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Сборка
 # ══════════════════════════════════════════════════════════════════════════════
 def _branch_insert_sql(shadow: str, columns: dict[str, str], inner_sql: str, target_cols: set[str]) -> str:
@@ -1182,6 +1299,7 @@ def build_branches(date_from: str = DATE_FROM) -> list[tuple[str, dict[str, str]
         ("leads", _leads_branch_columns(), _leads_branch_sql(date_from)),
         ("calls", _calls_branch_columns(), _calls_branch_sql(date_from)),
         ("marcar_orphans", _marcar_orphan_branch_columns(), _marcar_orphan_branch_sql(date_from)),
+        ("perform_posevy_proxy", _perform_posevy_proxy_columns(), _perform_posevy_proxy_sql(date_from)),
         ("pixel", _pixel_branch_columns(), _pixel_branch_sql(date_from)),
     ]
 

@@ -88,6 +88,43 @@ def _excluded_domain_filter_sql(domain_expr: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 MARCAR_SOURCE_TYPE = "marcar_crm_excel"
 
+_PERFORM_SOURCE_NAMES = (
+    "LeadVDL Perform Южный Обход",
+    "LeadVDL Perform Автопарк Южный",
+    "LeadVDL Perform Кубань Драйв",
+    "LeadVDL Perform АвтоМаркет",
+    "LeadVDL Perform Нижний Центр Авто",
+    "LeadVDL Perform Нави Кар",
+    "LeadV Perform Автопарк Южный",
+    "LeadV Perform Южный Обход",
+    "LeadV Perform Нижний Центр Авто",
+    "LeadV Perform АвтоМаркет",
+    "LeadV Perform Нави Кар",
+    "LeadV Perform Кубань Драйв",
+)
+
+_PERFORM_CRMF_EXTRA_SOURCE_NAMES = (
+    "LeadVDL 2 Эйс Авто",
+    "LeadV 2 Эйс Авто",
+    "LeadV ПБ Эйс Авто",
+    "LeadV ПБО Эйс Авто",
+    "LeadVDLS Эйс Авто",
+    "LeadVDL Лидер",
+    "LeadV Лидер",
+    "LeadVDL 2 Лидер",
+    "LeadVDL 2 Лидер Авто НСК",
+    "LeadV ACB Лидер Авто НСК",
+    "LeadV Лидер Авто НСК",
+    "LeadVDL 3 Лидер Авто НСК",
+    "LeadVDLS Лидер Авто НСК",
+    "LeadПБ Лидер Авто НСК",
+)
+
+_PERFORM_MAUTO_SOURCE_NAMES = (
+    "LeadV Перформ Лидер",
+    "LeadV Перформ КТ Лидер",
+)
+
 # Иерархия статусов Маркара (0 = высший). Копия v5 `_MARCAR_STATUS_PRIORITY` (v5 step0.py:1145).
 MARCAR_STATUS_PRIORITY: dict[str, int] = {
     "Продажа": 0,
@@ -144,6 +181,29 @@ def _marcar_patched_status_expr(lead_alias: str, join_alias: str = "mp") -> str:
         {lead_alias}.status
     )
 """
+
+
+def _quoted_csv(values: tuple[str, ...]) -> str:
+    return ", ".join("'{}'".format(value.replace("'", "''")) for value in values)
+
+
+def _perform_phone_norm_expr(expr: str) -> str:
+    return f"right(replaceRegexpAll(ifNull({expr}, ''), '[^0-9]', ''), 10)"
+
+
+def _perform_cohort_condition(alias: str, *, include_extra: bool) -> str:
+    crmf_names = _PERFORM_SOURCE_NAMES + (_PERFORM_CRMF_EXTRA_SOURCE_NAMES if include_extra else ())
+    return (
+        f"(({alias}.source_type = 'crmf_excel' AND {alias}.source_name IN ({_quoted_csv(crmf_names)})) "
+        f"OR ({alias}.source_type = 'mauto_excel' AND {alias}.source_name IN ({_quoted_csv(_PERFORM_MAUTO_SOURCE_NAMES)}))"
+        + (
+            f" OR ({alias}.source_type IN ('plex_excel', 'genzes_excel') "
+            f"AND positionCaseInsensitive(ifNull({alias}.utm_source, ''), 'perform') > 0)"
+            if include_extra
+            else ""
+        )
+        + ")"
+    )
 
 
 def _drop_and_create(client, table: str, create_sql: str) -> None:
@@ -450,15 +510,212 @@ def _replace_raw_domains_view(client) -> int:
 
 def _raw_perform_leads_sql() -> str:
     table = RAW_TARGET_TABLES["raw_perform_leads"]
+    excluded_domain_clause = _excluded_domain_filter_sql("ifNull(nullIf(pl.domain, ''), d.domain)")
+    phone_norm_pl = _perform_phone_norm_expr("pl.phone")
+    phone_norm_la = _perform_phone_norm_expr("la.phone")
+    phone_norm_l = _perform_phone_norm_expr("l.phone")
+    status_expr = "coalesce(nullIf(trim(ifNull(m.status, '')), ''), 'без статуса')"
     return f"""
 CREATE TABLE {table}
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(ifNull(created_date, toDate('{DATE_FROM}')))
 ORDER BY (ifNull(created_date, toDate('{DATE_FROM}')), ifNull(domain_id, 0), key3)
 AS
-SELECT *
-FROM ({_raw_leads_select_sql()})
-WHERE 0
+WITH
+crm_status_ranked AS
+(
+    SELECT
+        status,
+        argMin(category, multiIf(crm IN ('crmf', 'mauto'), 1, crm IN ('', 'default'), 2, 3)) AS category
+    FROM raw_data.crm_status_mapping
+    WHERE ifNull(status, '') != ''
+      AND ifNull(salon, '') = ''
+    GROUP BY status
+),
+sale_statuses AS
+(
+    SELECT DISTINCT status
+    FROM raw_data.crm_status_mapping
+    WHERE category = 'sale'
+      AND ifNull(status, '') != ''
+      AND ifNull(salon, '') = ''
+),
+matched AS
+(
+    SELECT
+        {phone_norm_la} AS phone_norm,
+        argMin(
+            ifNull(la.status, ''),
+            tuple(
+                multiIf(
+                    cs.category = 'sale', 1,
+                    cs.category = 'visit', 2,
+                    cs.category = 'qualified', 3,
+                    cs.category = 'correct', 4,
+                    cs.category = 'incorrect', 5,
+                    6
+                ),
+                -toUnixTimestamp(toDateTime(ifNull(la.created_date, toDate('1970-01-01')))),
+                la.id
+            )
+        ) AS status
+    FROM raw_data.leads_all AS la
+    LEFT JOIN crm_status_ranked AS cs ON cs.status = ifNull(la.status, '')
+    WHERE {phone_norm_la} != ''
+      AND {_perform_cohort_condition("la", include_extra=True)}
+    GROUP BY phone_norm
+),
+perform_phones AS
+(
+    SELECT DISTINCT {phone_norm_pl} AS phone_norm
+    FROM raw_data.perform_leads AS pl
+    WHERE {phone_norm_pl} != ''
+),
+branch_b_conflict_phones AS
+(
+    SELECT {phone_norm_l} AS phone_norm
+    FROM raw_data.leads_all AS l
+    WHERE {phone_norm_l} != ''
+      AND {_perform_cohort_condition("l", include_extra=False)}
+    GROUP BY phone_norm
+    HAVING countIf(ifNull(l.status, '') IN (SELECT status FROM sale_statuses)) > 0
+       AND countIf(ifNull(l.status, '') NOT IN (SELECT status FROM sale_statuses)) > 0
+       AND uniqExact(ifNull(l.source_name, '')) > 1
+),
+perform_vk_phones AS
+(
+    SELECT DISTINCT {phone_norm_l} AS phone_norm
+    FROM raw_data.leads_all AS l
+    WHERE {phone_norm_l} != ''
+      AND l.source_type = 'crmf_excel'
+      AND ifNull(l.utm_source, '') = 'vkads'
+      AND ifNull(l.utm_campaign, '') = 'victory'
+)
+SELECT
+    id, created_date, arrival_date, domain_id, domain, deal_type, status,
+    source_type, campaign_id, group_id, correction_id, utm_source, utm_medium,
+    utm_campaign, utm_content, utm_term, phone, yclid, is_copy_for_removal,
+    reason, salon, fid, key3, key3_arrival_date
+FROM
+(
+    SELECT a.*,
+        row_number() OVER (
+            PARTITION BY a._phone_norm
+            ORDER BY
+                (1 - a._is_sale),
+                if(a.arrival_date IS NOT NULL, 0, 1),
+                a.created_date,
+                ifNull(a.domain_id, 0),
+                a.id
+        ) AS _rn,
+        min(ifNull(a.domain_id, 0)) OVER (PARTITION BY a._phone_norm) AS _dmin,
+        max(ifNull(a.domain_id, 0)) OVER (PARTITION BY a._phone_norm) AS _dmax,
+        max(a._is_sale) OVER (PARTITION BY a._phone_norm) AS _hassale
+    FROM
+    (
+        SELECT
+            pl.id AS id,
+            pl.created_date,
+            pl.arrival_date,
+            CAST(coalesce(d.id, pl.domain_id), 'Nullable(Int64)') AS domain_id,
+            ifNull(nullIf(pl.domain, ''), d.domain) AS domain,
+            pl.deal_type,
+            {status_expr} AS status,
+            pl.source_type,
+            pl.campaign_id,
+            pl.group_id,
+            pl.correction_id,
+            pl.utm_source,
+            pl.utm_medium,
+            pl.utm_campaign,
+            pl.utm_content,
+            pl.utm_term,
+            pl.phone,
+            pl.yclid,
+            pl.is_copy_for_removal,
+            pl.reason,
+            pl.salon,
+            nullIf(extract(ifNull(pl.utm_content, ''), 'fid:([^|]+)'), '') AS fid,
+            lower(concat(
+                ifNull(toString(pl.created_date), ''), '|',
+                toString(ifNull(pl.campaign_id, 0)),
+                if(match(ifNull(pl.utm_campaign, ''), '(?i)tp[67]'), '|0', concat('|', toString(ifNull(pl.group_id, 0)))), '|',
+                multiIf(
+                    position(ifNull(pl.utm_content, ''), 'dev:mobile') > 0, 'mobile',
+                    position(ifNull(pl.utm_content, ''), 'dev:desktop') > 0, 'desktop',
+                    position(ifNull(pl.utm_content, ''), 'dev:tablet') > 0, 'tablet',
+                    position(ifNull(pl.utm_content, ''), 'dev:smart_tv') > 0, 'smart_tv',
+                    '0'
+                ), '|',
+                toString(ifNull(pl.correction_id, 0))
+            )) AS key3,
+            if(pl.arrival_date IS NULL, NULL, lower(concat(
+                ifNull(toString(pl.arrival_date), ''), '|',
+                toString(ifNull(pl.campaign_id, 0)),
+                if(match(ifNull(pl.utm_campaign, ''), '(?i)tp[67]'), '|0', concat('|', toString(ifNull(pl.group_id, 0)))), '|',
+                multiIf(
+                    position(ifNull(pl.utm_content, ''), 'dev:mobile') > 0, 'mobile',
+                    position(ifNull(pl.utm_content, ''), 'dev:desktop') > 0, 'desktop',
+                    position(ifNull(pl.utm_content, ''), 'dev:tablet') > 0, 'tablet',
+                    position(ifNull(pl.utm_content, ''), 'dev:smart_tv') > 0, 'smart_tv',
+                    '0'
+                ), '|',
+                toString(ifNull(pl.correction_id, 0))
+            ))) AS key3_arrival_date,
+            {phone_norm_pl} AS _phone_norm,
+            if({status_expr} IN (SELECT status FROM sale_statuses), 1, 0) AS _is_sale
+        FROM raw_data.perform_leads AS pl
+        LEFT JOIN raw_data.domains AS d ON lowerUTF8(trim(d.domain)) = lowerUTF8(trim(pl.domain))
+        LEFT JOIN matched AS m ON m.phone_norm = {phone_norm_pl}
+        WHERE (pl.deal_type IS NULL OR pl.deal_type != 'Звонок')
+          AND {phone_norm_pl} NOT IN (SELECT phone_norm FROM perform_vk_phones)
+{excluded_domain_clause}
+    ) AS a
+) AS dd
+WHERE NOT (_phone_norm != '' AND _dmin != _dmax AND _hassale = 1 AND _rn > 1)
+UNION ALL
+SELECT
+    l.id,
+    l.created_date,
+    CAST(NULL, 'Nullable(Date)') AS arrival_date,
+    CAST(d_perf.id, 'Nullable(Int64)') AS domain_id,
+    d_perf.domain AS domain,
+    CAST(NULL, 'Nullable(String)') AS deal_type,
+    l.status,
+    'perform_api' AS source_type,
+    CAST(NULL, 'Nullable(Int64)') AS campaign_id,
+    CAST(NULL, 'Nullable(Int64)') AS group_id,
+    CAST(NULL, 'Nullable(Int64)') AS correction_id,
+    CAST(NULL, 'Nullable(String)') AS utm_source,
+    CAST(NULL, 'Nullable(String)') AS utm_medium,
+    CAST(NULL, 'Nullable(String)') AS utm_campaign,
+    CAST(NULL, 'Nullable(String)') AS utm_content,
+    CAST(NULL, 'Nullable(String)') AS utm_term,
+    l.phone,
+    CAST(NULL, 'Nullable(String)') AS yclid,
+    l.is_copy_for_removal,
+    l.reason,
+    l.salon,
+    CAST(NULL, 'Nullable(String)') AS fid,
+    '' AS key3,
+    CAST(NULL, 'Nullable(String)') AS key3_arrival_date
+FROM raw_data.leads_all AS l
+CROSS JOIN
+(
+    SELECT id, domain
+    FROM raw_data.domains
+    WHERE domain = 'cars-rus.ru'
+    LIMIT 1
+) AS d_perf
+WHERE (l.deal_type IS NULL OR l.deal_type != 'Звонок')
+  AND ifNull(l.phone, '') != ''
+  AND {_perform_cohort_condition("l", include_extra=False)}
+  AND {phone_norm_l} NOT IN (SELECT phone_norm FROM perform_phones)
+  AND {phone_norm_l} NOT IN (SELECT phone_norm FROM perform_vk_phones)
+  AND NOT (
+      ifNull(l.status, '') IN (SELECT status FROM sale_statuses)
+      AND {phone_norm_l} IN (SELECT phone_norm FROM branch_b_conflict_phones)
+  )
 """
 
 

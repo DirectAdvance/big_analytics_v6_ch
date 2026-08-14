@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config.ch_db import get_client
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, q, replace_view, swap_shadow
+from config.ch_db import get_client, load_db
+from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, replace_view, swap_shadow
 from step1_load_raw.step1 import MARCAR_SOURCE_TYPE, MARCAR_STATUS_PRIORITY
 
 logger = logging.getLogger("pipeline.step3")
@@ -27,9 +27,9 @@ SOURCE_STORE = "big_analytics_sources"
 LEADS_DEDUPED_STAGE = "_step3_leads_deduped"
 DIRECT_SOURCE_TYPES = ("direct", "tp8", "tp9", "tp10")
 
-# source_type (raw_leads/raw_calls) -> ключ `crm` в raw_data.crm_status_mapping.
-# Сверено с живой БД 2026-08-05: raw_leads / raw_data.leads_all / raw_calls дают ровно эти
-# source_type, crm_status_mapping — ровно эти 8 значений crm. Маркер: CRM_MAP_RIVENDELL_2026-08-05.
+# source_type (raw_leads/raw_calls/raw_perform_leads) -> ключ `crm` в raw_data.crm_status_mapping.
+# Сверено с живой БД 2026-08-05: raw_leads / raw_data.leads_all / raw_calls дают базовые
+# source_type, crm_status_mapping — 8 значений crm. Маркер: CRM_MAP_RIVENDELL_2026-08-05.
 CRM_BY_SOURCE_TYPE = {
     "crmf_excel": "crmf",
     "genzes_excel": "genzes",
@@ -37,6 +37,7 @@ CRM_BY_SOURCE_TYPE = {
     "mauto_excel": "mauto",
     "mega_crm_excel": "mega",
     "plex_excel": "plex",
+    "perform_api": "rivendell",
     "redauto_excel": "redauto",
     "rivendell_excel": "rivendell",
 }
@@ -147,6 +148,8 @@ def check_crm_mapping_coverage(client) -> list[str]:
                 SELECT source_type, count() AS n FROM ad_analytics.raw_leads GROUP BY source_type
                 UNION ALL
                 SELECT source_type, count() AS n FROM ad_analytics.raw_calls GROUP BY source_type
+                UNION ALL
+                SELECT source_type, count() AS n FROM ad_analytics.raw_perform_leads GROUP BY source_type
             )
             GROUP BY source_type
             ORDER BY n DESC
@@ -241,6 +244,34 @@ CODE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
     ("plex", "Отказ клиента"): "qualified",
 }
 
+# PERFORM_STATUS_PARITY_2026-08-14: сайт/v5 считает perform_api по default-ветке
+# local_crm_statuses, а не по неполному raw_data.crm_status_mapping.crm='rivendell'.
+# В ClickHouse default-CRM нет, поэтому задаём source_type-specific override только
+# для perform_api, не меняя реальные rivendell_excel строки.
+CODE_SOURCE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
+    ("perform_api", "В работе"): "qualified",
+    ("perform_api", "В салоне"): "visit",
+    ("perform_api", "В салоне не отмечен"): "visit",
+    ("perform_api", "Дубль"): "incorrect",
+    ("perform_api", "Корзина"): "incorrect",
+    ("perform_api", "Купил"): "sale",
+    ("perform_api", "Не отвечает"): "correct",
+    ("perform_api", "Недозвон"): "correct",
+    ("perform_api", "Некорректные данные"): "incorrect",
+    ("perform_api", "Новая"): "qualified",
+    ("perform_api", "Отказ"): "correct",
+    ("perform_api", "Отказ клиента"): "qualified",
+    ("perform_api", "Перезвонить"): "qualified",
+    ("perform_api", "Перезвонить срочно"): "qualified",
+    ("perform_api", "Повтор"): "incorrect",
+    ("perform_api", "Приедет"): "qualified",
+    ("perform_api", "Приехал"): "visit",
+    ("perform_api", "Продажа в кредит"): "sale",
+    ("perform_api", "Уточнить по дате"): "qualified",
+    ("perform_api", "Фильтр"): "correct",
+    ("perform_api", "Хлам"): "incorrect",
+}
+
 # Категории status-стороны. 'credit'/'approved' сознательно вне списка — см. выше.
 _CODE_STATUS_SIDE_CATEGORIES = frozenset({"correct", "qualified", "visit", "sale", "incorrect"})
 
@@ -256,6 +287,19 @@ def _code_pairs(categories: tuple[str, ...] | None = None) -> list[tuple[str, st
 
 def _code_pairs_sql(pairs: list[tuple[str, str]]) -> str:
     return ", ".join(f"('{crm}', '{status}')" for crm, status in pairs)
+
+
+def _code_source_pairs(categories: tuple[str, ...] | None = None) -> list[tuple[str, str]]:
+    """Пары (source_type, status) из `CODE_SOURCE_STATUS_CATEGORY`; None = все."""
+    return sorted(
+        pair
+        for pair, category in CODE_SOURCE_STATUS_CATEGORY.items()
+        if categories is None or category in categories
+    )
+
+
+def _code_source_pairs_sql(pairs: list[tuple[str, str]]) -> str:
+    return ", ".join(f"('{source_type}', '{status}')" for source_type, status in pairs)
 
 
 def _code_override_filter() -> str:
@@ -316,13 +360,26 @@ def check_code_status_categories(client) -> None:
         )
 
     bad_categories = sorted(
-        {category for category in CODE_STATUS_CATEGORY.values() if category not in _CODE_STATUS_SIDE_CATEGORIES}
+        {
+            category
+            for category in [*CODE_STATUS_CATEGORY.values(), *CODE_SOURCE_STATUS_CATEGORY.values()]
+            if category not in _CODE_STATUS_SIDE_CATEGORIES
+        }
     )
     if bad_categories:
         raise RuntimeError(
             f"CODE_STATUS_CATEGORY: категории {bad_categories} вне status-стороны "
             f"{sorted(_CODE_STATUS_SIDE_CATEGORIES)}. Reason-метрики (dohod_do_kredita/dobro) "
             "читают справочник по (crm, reason) и этим механизмом не покрыты"
+        )
+
+    unknown_source_types = sorted(
+        {source_type for source_type, _status in _code_source_pairs() if source_type not in CRM_BY_SOURCE_TYPE}
+    )
+    if unknown_source_types:
+        raise RuntimeError(
+            f"CODE_SOURCE_STATUS_CATEGORY: source_type {unknown_source_types} отсутствуют в "
+            "CRM_BY_SOURCE_TYPE — override никогда не сработает"
         )
 
     marcar_crm = _crm_key(MARCAR_SOURCE_TYPE)
@@ -336,8 +393,10 @@ def check_code_status_categories(client) -> None:
         )
 
     logger.info(
-        "  Code status categories OK: %d пар (crm, status) заданы кодом, все %d статуса патча Маркара покрыты",
+        "  Code status categories OK: %d пар (crm, status) и %d пар (source_type, status) заданы кодом, "
+        "все %d статуса патча Маркара покрыты",
         len(pairs),
+        len(CODE_SOURCE_STATUS_CATEGORY),
         len(MARCAR_STATUS_PRIORITY),
     )
 
@@ -397,6 +456,7 @@ def _category_match_expr(
     cats_sql = ", ".join(f"'{category}'" for category in categories)
     crm = _crm_expr(source_type_expr)
     status = f"ifNull({status_expr}, '')"
+    source_type = f"ifNull({source_type_expr}, '')"
     reason = f"lower(ifNull({reason_expr}, ''))"
     salon = f"lower(trim(ifNull({salon_expr}, '')))"
     # CODE_STATUS_CATEGORY_2026-08-06: пары из словаря выкинуты из справочника
@@ -404,6 +464,10 @@ def _category_match_expr(
     override = _code_override_filter()
     code_pairs_sql = _code_pairs_sql(_code_pairs(categories))
     code_branch = f"OR ({crm}, {status}) IN ({code_pairs_sql})" if code_pairs_sql else ""
+    code_source_pairs_sql = _code_source_pairs_sql(_code_source_pairs(categories))
+    code_source_branch = (
+        f"OR ({source_type}, {status}) IN ({code_source_pairs_sql})" if code_source_pairs_sql else ""
+    )
     return f"""
     (
         ({crm}, {status}) IN (
@@ -423,6 +487,7 @@ def _category_match_expr(
             WHERE category IN ({cats_sql}) AND reason != '' AND salon != ''{override}
         )
         {code_branch}
+        {code_source_branch}
     )
     """
 
@@ -749,6 +814,16 @@ def _direct_source_table_expr(prefix: str = "yd.") -> str:
     )
 
 
+def _direct_source_expr(prefix: str = "yd.") -> str:
+    """`источник` строки Директа для посевных tp-кампаний."""
+    tp = f"ifNull({prefix}tp, '')"
+    return (
+        f"if(startsWith({tp}, 'tp8'), 'Посевы_Telegram', "
+        f"if(startsWith({tp}, 'tp9'), 'Посевы_Max', "
+        f"if(startsWith({tp}, 'tp10'), 'Посевы_Telegram+Max', 'Контекст')))"
+    )
+
+
 # Универс посевов — общее определение для ветки crop и для гейта посевной активности
 # (POSEVY_MIXED_DOMAIN_ROUTING_FIX ниже). Два разных списка utm молча разошлись бы.
 _CROP_UTM_FILTER = """
@@ -757,6 +832,24 @@ _CROP_UTM_FILTER = """
     OR ifNull(utm_medium, '') IN ('posev','paid_social')
 )
 """
+
+
+def _perform_vk_filter(prefix: str = "") -> str:
+    """Перформ-заявки из VK Ads: в BA5/site живут отдельным источником `VK Ads`."""
+    p = prefix
+    return (
+        f"ifNull({p}source_type, '') = 'crmf_excel' "
+        f"AND ifNull({p}utm_source, '') = 'vkads' "
+        f"AND ifNull({p}utm_campaign, '') = 'victory'"
+    )
+
+
+def _crop_source_filter() -> str:
+    return f"""
+{_CROP_UTM_FILTER.strip()}
+AND NOT ({_perform_vk_filter()})
+"""
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # POSEVY_MIXED_DOMAIN_ROUTING_FIX (порт v5 step6_build_full/step6.py:741-775)
@@ -1065,7 +1158,7 @@ SELECT
     {_gs_pick_expr("project_manager")} AS `проджект`,
     {_gs_pick_expr("client_id")} AS `id_салона`,
     {_gs_pick_expr("sales_manager")} AS `менеджер`,
-    'Контекст' AS `источник`,
+    {_direct_source_expr("yd.")} AS `источник`,
     {_direct_napravlenie_expr("yd.")} AS `направление`,
     concat(toString(yd.`CampaignId`), '|', ifNull(yd.`CampaignName`, '')) AS `номер кампании | название кампании`,
     concat(toString(yd.`AdGroupId`), '|', ifNull(yd.`AdGroupName`, '')) AS `номер группы | название группы`,
@@ -1297,7 +1390,7 @@ WHERE 0
 
 def _build_crop_sql() -> str:
     return _build_lead_source_sql(
-        "big_analytics_crop_targeting", _CROP_UTM_FILTER, "Посевы", "Комплекс", "Посевы"
+        "big_analytics_crop_targeting", _crop_source_filter(), "Посевы", "Комплекс", "Посевы"
     )
 
 
@@ -1510,6 +1603,7 @@ def _build_direct_cascade_sql(lo: str, hi: str) -> str:
         "account_login": account_login,
         "manager_login": "coalesce(nullIf(ca.manager_login, ''), gs.directologist)",
         "неверный_кодер_new": "if(ifNull(ca.campaign_code, '') = '', 'неверный кодер', NULL)",
+        "источник": _direct_source_expr("ca."),
         "направление": _direct_napravlenie_expr("ca."),
         "номер кампании | название кампании": "concat(toString(ca.`CampaignId`), '|', ifNull(ca.`CampaignName`, ''))",
         "номер группы | название группы": "concat(toString(ca.`AdGroupId`), '|', ifNull(ca.`AdGroupName`, ''))",
@@ -1577,7 +1671,7 @@ def _build_direct_zero_sql(lo: str, hi: str) -> str:
 
 def _build_crop_sql_batched(lead_date_filter: str = "") -> str:
     return _build_lead_source_sql(
-        "big_analytics_crop_targeting", _CROP_UTM_FILTER, "Посевы", "Комплекс", "Посевы", lead_date_filter
+        "big_analytics_crop_targeting", _crop_source_filter(), "Посевы", "Комплекс", "Посевы", lead_date_filter
     )
 
 
@@ -1644,8 +1738,232 @@ def recreate_source_views(client) -> None:
     replace_view(
         client,
         "ad_analytics.big_analytics_reviews",
-        f"SELECT * FROM ad_analytics.{SOURCE_STORE} WHERE _source_table = 'reviews'",
+        f"SELECT * FROM ad_analytics.{SOURCE_STORE} WHERE _source_table IN ('reviews', 'direct_account_reviews')",
     )
+
+
+def _fetch_reviews_rows_from_postgres(columns: list[str]) -> list[tuple]:
+    """Small BA5 parity bridge: weekly reviews raw still lives in Victory PostgreSQL."""
+    try:
+        import psycopg2
+        import psycopg2.extras
+    except ImportError as exc:  # pragma: no cover - environment guard
+        raise RuntimeError("psycopg2 is required to import direct_account_reviews") from exc
+
+    pg = load_db("victory")
+    query = """
+        WITH gs AS (
+            SELECT
+                LOWER(TRIM(salon)) AS salon_key,
+                MAX(project_manager) FILTER (WHERE NULLIF(TRIM(project_manager), '') IS NOT NULL) AS project_manager,
+                MAX(client_id) FILTER (WHERE NULLIF(TRIM(client_id), '') IS NOT NULL) AS client_id,
+                MAX(sales_manager) FILTER (WHERE NULLIF(TRIM(sales_manager), '') IS NOT NULL) AS sales_manager
+            FROM public.local_gsheet_sites
+            WHERE NULLIF(TRIM(salon), '') IS NOT NULL
+            GROUP BY LOWER(TRIM(salon))
+        )
+        SELECT
+            ''::text AS key3,
+            r."Date"::date AS "Date",
+            CASE EXTRACT(ISODOW FROM r."Date")
+                WHEN 1 THEN '1_Понедельник' WHEN 2 THEN '2_Вторник' WHEN 3 THEN '3_Среда'
+                WHEN 4 THEN '4_Четверг'    WHEN 5 THEN '5_Пятница'  WHEN 6 THEN '6_Суббота'
+                WHEN 7 THEN '7_Воскресенье'
+            END::text AS "День недели",
+            DATE_TRUNC('week', r."Date")::date AS week_start,
+            COALESCE(r."CampaignId", 0)::bigint AS "CampaignId",
+            r."CampaignName"::text AS "CampaignName",
+            COALESCE(r."AdGroupId", 0)::bigint AS "AdGroupId",
+            r."AdGroupName"::text AS "AdGroupName",
+            CASE r."AdNetworkType" WHEN 'SEARCH' THEN 'Отзывы' ELSE r."AdNetworkType" END::text AS "AdNetworkType",
+            r."Device"::text AS "Device",
+            COALESCE(r."Impressions", 0)::numeric AS "Impressions",
+            COALESCE(r."Clicks", 0)::numeric AS "Clicks",
+            COALESCE(r."Cost", 0)::numeric AS total_cost,
+            d.сайт::text AS domain,
+            COALESCE(r."RlAdjustmentId", 0)::bigint AS "RlAdjustmentId",
+            'отзывы'::text AS "RlAdjustmentId_total",
+            NULL::text AS campaign_code,
+            ''::text AS tp,
+            ''::text AS cpc_cpa,
+            ''::text AS site_quiz,
+            NULL::text AS adgroup_code,
+            COALESCE(r.login, '')::text AS account_login,
+            'отзывы'::text AS manager_login,
+            ''::text AS ag_part1,
+            ''::text AS ag_part2,
+            ''::text AS ag_part3,
+            ''::text AS ag_part4,
+            ''::text AS ag_part5,
+            ''::text AS ag_part6,
+            ''::text AS ag_part7,
+            ''::text AS "марки авто",
+            'отзывы'::text AS "Название crm",
+            'Отзывы'::text AS "тип_заявки",
+            0::numeric AS kol_vo_zayavok,
+            0::numeric AS korr,
+            0::numeric AS kval,
+            0::numeric AS priezd,
+            0::numeric AS prodazhi,
+            0::numeric AS nekorr,
+            0::numeric AS ne_otvechaet,
+            0::numeric AS filtr,
+            0::numeric AS nedozvon,
+            0::numeric AS priedet,
+            0::bigint AS dohod_do_kredita,
+            0::bigint AS dobro,
+            NULL::text AS "статус",
+            'Караваев Михаил'::text AS "специалист",
+            'отзывы'::text AS "тип_сайта",
+            'отзывы'::text AS "шаблон",
+            d.салон::text AS "салон",
+            d.город::text AS "город",
+            NULL::text AS "регион",
+            'Авто'::text AS direction,
+            NULL::text AS "неверный_кодер_new",
+            NULL::text AS fid,
+            NULLIF(TRIM(gs.project_manager), '')::text AS "проджект",
+            NULLIF(TRIM(gs.client_id), '')::text AS "id_салона",
+            NULLIF(TRIM(gs.sales_manager), '')::text AS "менеджер",
+            'Контекст'::text AS "источник",
+            'Отзывы'::text AS "направление",
+            COALESCE(r."CampaignId"::text, '') || '|' || COALESCE(r."CampaignName", '') AS "номер кампании | название кампании",
+            COALESCE(r."AdGroupId"::text, '') || '|' || COALESCE(r."AdGroupName", '') AS "номер группы | название группы",
+            NULL::integer AS "План заявки",
+            NULL::integer AS "План приезда",
+            COALESCE(r.login, '') || '|' || COALESCE(d.сайт, '') AS "аккаунт|сайт",
+            NULL::bigint AS priezd_arrival_date,
+            NULL::bigint AS prodazhi_arrival_date,
+            'Яндекс'::text AS "поставщик",
+            'direct_account_reviews'::text AS _source_table,
+            NULL::text AS cascade_level,
+            NULL::text AS campaign_status,
+            NULL::text AS payment_model
+        FROM yandex_direct_raw.yandex_direct_reports_reviews r
+        LEFT JOIN yandex_direct_raw.yandex_direct_account_reviews d ON d.аккаунт = r.login
+        LEFT JOIN gs ON gs.salon_key = LOWER(TRIM(d.салон))
+        WHERE r."Date" >= DATE '2026-01-01'
+        ORDER BY r."Date", r.login, r."CampaignId", r."AdGroupId"
+    """
+    conn = None
+    try:
+        conn = psycopg2.connect(
+            host=pg["host"],
+            port=pg["port"],
+            dbname=pg["database"],
+            user=pg["user"],
+            password=pg["password"],
+            connect_timeout=20,
+        )
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(query)
+        rows = cur.fetchall()
+        return [tuple(row[col] for col in columns) for row in rows]
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _insert_reviews_from_postgres(client, target_table: str) -> int:
+    columns = column_names(client, "ad_analytics", target_table.rsplit(".", 1)[-1])
+    rows = _fetch_reviews_rows_from_postgres(columns)
+    if not rows:
+        return 0
+    client.insert(target_table, rows, column_names=columns)
+    return len(rows)
+
+
+def _perform_vk_insert_sql(target_table: str) -> str:
+    columns = _lead_source_columns("'VK Ads'", "'Перформ'", "ВК Реклама", "'vk_perform'")
+    overrides = {
+        "key3": "concat('vk_perform|', ifNull(l.salon, ''), '|', toString(l.created_date), '|', toString(l.id))",
+        "CampaignId": "CAST(NULL, 'Nullable(Int64)')",
+        "CampaignName": "'victory'",
+        "AdGroupId": "CAST(NULL, 'Nullable(Int64)')",
+        "AdGroupName": "CAST(NULL, 'Nullable(String)')",
+        "AdNetworkType": "CAST(NULL, 'Nullable(String)')",
+        "Device": "CAST(NULL, 'Nullable(String)')",
+        "domain": "pvs.domain",
+        "RlAdjustmentId": "CAST(NULL, 'Nullable(Int64)')",
+        "RlAdjustmentId_total": "CAST(NULL, 'Nullable(String)')",
+        "campaign_code": "CAST(NULL, 'Nullable(String)')",
+        "tp": "CAST(NULL, 'Nullable(String)')",
+        "cpc_cpa": "CAST(NULL, 'Nullable(String)')",
+        "site_quiz": "CAST(NULL, 'Nullable(String)')",
+        "adgroup_code": "CAST(NULL, 'Nullable(String)')",
+        "account_login": "pvs.login_key",
+        "manager_login": "CAST(NULL, 'Nullable(String)')",
+        "ag_part1": "CAST(NULL, 'Nullable(String)')",
+        "ag_part2": "CAST(NULL, 'Nullable(String)')",
+        "ag_part3": "CAST(NULL, 'Nullable(String)')",
+        "ag_part4": "CAST(NULL, 'Nullable(String)')",
+        "ag_part5": "CAST(NULL, 'Nullable(String)')",
+        "ag_part6": "CAST(NULL, 'Nullable(String)')",
+        "ag_part7": "CAST(NULL, 'Nullable(String)')",
+        "Название crm": "'crmf'",
+        "тип_заявки": "'Заявки'",
+        "статус": "CAST(NULL, 'Nullable(String)')",
+        "специалист": "CAST(NULL, 'Nullable(String)')",
+        "тип_сайта": "CAST(NULL, 'Nullable(String)')",
+        "шаблон": "CAST(NULL, 'Nullable(String)')",
+        "салон": "coalesce(nullIf(l.salon, ''), 'Перформ РФ')",
+        "город": "CAST(NULL, 'Nullable(String)')",
+        "регион": "CAST(NULL, 'Nullable(String)')",
+        "direction": "'Авто'",
+        "fid": "CAST(NULL, 'Nullable(String)')",
+        "проджект": "CAST(NULL, 'Nullable(String)')",
+        "id_салона": "'avto_0415'",
+        "менеджер": "CAST(NULL, 'Nullable(String)')",
+        "номер кампании | название кампании": "'victory'",
+        "номер группы | название группы": "CAST(NULL, 'Nullable(String)')",
+        "аккаунт|сайт": "concat(ifNull(pvs.login_key, ''), '|', ifNull(pvs.domain, ''))",
+        "поставщик": "'ВК Реклама'",
+    }
+    columns = [(alias, overrides.get(alias, expr)) for alias, expr in columns]
+    select_list = ",\n    ".join(f"{expr} AS {q(alias)}" for alias, expr in columns)
+    return f"""
+INSERT INTO {target_table}
+WITH
+lead_scored AS
+(
+    SELECT
+        l.*,
+        {_metric_expr("l.status", "l.reason", "l.source_type", "l.salon")}
+    FROM ad_analytics.raw_leads AS l
+    WHERE {_perform_vk_filter("l.")}
+      AND (l.deal_type IS NULL OR l.deal_type != 'Звонок')
+      AND ifNull(l.created_date, toDate('1970-01-01')) >= toDate('2026-01-01')
+),
+perform_vk_site AS
+(
+    SELECT
+        lowerUTF8(trim(ifNull(domain, ''))) AS domain,
+        login_key
+    FROM raw_data.gsheet_sites
+    WHERE client_id = 'avto_0415'
+      AND niche = 'Авто'
+      AND ifNull(domain, '') != ''
+    ORDER BY lowerUTF8(trim(ifNull(domain, '')))
+    LIMIT 1
+)
+SELECT
+    {select_list}
+FROM lead_scored AS l
+CROSS JOIN perform_vk_site AS pvs
+"""
+
+
+def _insert_perform_vk_from_raw_leads(client, target_table: str) -> tuple[object, int]:
+    client = _command_with_retry(
+        client,
+        _perform_vk_insert_sql(target_table),
+        label="perform_vk insert",
+        settings=STEP3_QUERY_SETTINGS,
+    )
+    rows = client.query(
+        f"SELECT count() FROM {target_table} WHERE _source_table = 'vk_perform'"
+    ).result_rows[0][0]
+    return client, int(rows)
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
@@ -1733,6 +2051,16 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             )
         parts.append(f"{table}=inserted")
         logger.info("  %s inserted за %.1f сек", table, time.perf_counter() - t_table)
+
+    t_perform_vk = time.perf_counter()
+    client, perform_vk_rows = _insert_perform_vk_from_raw_leads(client, shadow)
+    parts.append(f"vk_perform={perform_vk_rows:,}")
+    logger.info("  vk_perform inserted за %.1f сек: %s rows", time.perf_counter() - t_perform_vk, f"{perform_vk_rows:,}")
+
+    t_reviews = time.perf_counter()
+    reviews_rows = _insert_reviews_from_postgres(client, shadow)
+    parts.append(f"reviews={reviews_rows:,}")
+    logger.info("  reviews inserted from PostgreSQL за %.1f сек: %s rows", time.perf_counter() - t_reviews, f"{reviews_rows:,}")
 
     _swap_shadow(client, SOURCE_STORE)
     recreate_source_views(client)
