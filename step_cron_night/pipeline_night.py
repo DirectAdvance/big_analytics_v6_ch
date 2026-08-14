@@ -1,156 +1,177 @@
 #!/usr/bin/env python3
-"""
-pipeline_night.py — ночной пайплайн big_analytics_v5
+"""Night ClickHouse pipeline for big_analytics_v6_ch."""
 
-Запускается в 03:00 МСК (00:00 UTC) через cron.
-Выполняет тяжёлые API-шаги последовательно:
-  1. metrika_yandex        — grants доступа к счётчикам Метрики (~3 мин)
-  2. step13_utm_audit      — UTM-аудит групп (~2 ч)
-  3. korrektirovki         — корректировки ставок (~25 мин)
-  4. 404_errors            — ошибки 404 (~1 мин)
-  5. recheck_404           — HTTP-перепроверка URL из 404_errors, удаление живых (~15-30 мин)
-  6. ml_korrektirovki_rebuild — пересборка fact_ml_korrektirovki (~1 мин)
+from __future__ import annotations
 
-Отзывы (direct_account_reviews/pipeline.py) запускаются отдельно раз в неделю
-(пн 02:00 МСК / вс 21:00 UTC) — данные меняются медленно, ежедневный запуск избыточен.
-
-По завершении — Telegram-уведомление с итогами каждого шага.
-Лог: /tmp/pipeline_night.log
-"""
-
-import subprocess
+import argparse
+import importlib
+import logging
 import sys
 import time
-import logging
+import uuid
 from datetime import datetime
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
+
+from config.ch_db import get_client  # noqa: E402
+from pipeline import ensure_quality_log, log_step  # noqa: E402
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%H:%M:%S',
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
 )
-logger = logging.getLogger('pipeline_night')
+logger = logging.getLogger("pipeline_night")
 
-# Корень big_analytics_v5 (на уровень выше step_cron_night/)
-BASE_DIR = Path(__file__).parent.parent.resolve()
-PYTHON = sys.executable
-_NIGHT = BASE_DIR / 'step_cron_night'
 
-STEPS = [
-    ('metrika_yandex',           _NIGHT / 'metrika_yandex.py'),
-    ('step13_utm_audit',         _NIGHT / 'step13_utm_direct_audit' / 'run.py'),
-    ('korrektirovki',            _NIGHT / 'korrektirovki' / 'run.py'),
-    ('404_errors',               _NIGHT / '404_errors' / '404_errors.py'),
-    # RECHECK_404_2026-07-27: HTTP-перепроверка URL из 404_errors — удаляем те, что снова живые.
-    # Порядок load→recheck осознан: если чистить ДО загрузки, инкремент вернёт удалённое обратно.
-    ('recheck_404',              _NIGHT / '404_errors' / 'recheck_404.py'),
-    # ML_KORREKTIROVKI_FACT_2026-07-27: пересборка fact_ml_korrektirovki ПОСЛЕ шага korrektirovki
-    # (yandex_direct_korrektirovki только что обновлена) × fact_big_analytics (от последнего pipeline.py).
-    ('ml_korrektirovki_rebuild', _NIGHT / 'build_ml_korrektirovki_night.py'),
+NIGHT_STEPS = [
+    (101, "step_cron_night.metrika_yandex", "night_metrika_yandex"),
+    (102, "step_cron_night.step13_utm_direct_audit.run", "night_check_utm"),
+    (103, "step_cron_night.korrektirovki.run", "night_korrektirovki"),
+    (104, "step_cron_night.404_errors.404_errors", "night_404_errors"),
+    (105, "step_cron_night.404_errors.recheck_404", "night_recheck_404"),
+    (106, "step_cron_night.build_ml_korrektirovki_night", "night_ml_korrektirovki"),
+    (114, "step14_minus_snapshot.step14", "night_minus_snapshot"),
 ]
 
-TIMEOUTS = {
-    'metrika_yandex':          30 * 60,
-    'step13_utm_audit':         4 * 3600,
-    'korrektirovki':           90 * 60,
-    '404_errors':              15 * 60,
-    'recheck_404':             45 * 60,   # ~15-30 мин на ~5K URL; 45 мин с запасом
-    'ml_korrektirovki_rebuild': 10 * 60,  # ~секунды–минуты; 10 мин с запасом
+LEGACY_PG_NOT_IN_NIGHT = {
+    "archive/postgres_legacy_2026_07_31/step_cron_night/direct_account_reviews/pipeline.py": (
+        "weekly v5 job; CH live-fetch not ported yet"
+    ),
+    "archive/postgres_legacy_2026_07_31/step_cron_night/report_placement/run.py": (
+        "weekly v5 job; v6 currently builds bi_arp_fact from fact_direct_feed_funnel"
+    ),
+    "archive/postgres_legacy_2026_07_31/step_cron_night/build_spend_daily.py": (
+        "v6 spend builders are root pipeline steps 141-143/1431-1432"
+    ),
+    "archive/postgres_legacy_2026_07_31/step_cron_night/revoke_metrika_grants.py": (
+        "grant revoke API job is not ported to raw_data-first v6"
+    ),
 }
 
 
 def _send_tg(text: str) -> None:
     try:
-        sys.path.insert(0, str(BASE_DIR))
-        from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY
         import requests
-        proxy_variants = [{'https': TELEGRAM_PROXY}] if TELEGRAM_PROXY else []
-        for proxies in proxy_variants + [None]:
+
+        from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS
+
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+        proxies_chain = [p for p in TELEGRAM_PROXY_VARIANTS if p is not None] + [None]
+        for proxies in proxies_chain:
             try:
                 requests.post(
-                    f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-                    json={'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json=payload,
                     timeout=10,
                     proxies=proxies,
                 )
                 return
-            except Exception as e:
-                logger.warning('TG (proxies=%s): %s', proxies, e)
-    except Exception as e:
-        logger.error('TG import error: %s', e)
-
-
-def run_step(name: str, script: Path) -> tuple[bool, float]:
-    logger.info('▶ %s', name)
-    t0 = time.perf_counter()
-    timeout = TIMEOUTS.get(name, 2 * 3600)
-    try:
-        result = subprocess.run(
-            [PYTHON, str(script)],
-            cwd=str(BASE_DIR),
-            timeout=timeout,
-        )
-        elapsed = time.perf_counter() - t0
-        ok = result.returncode == 0
-        logger.info('%s %s — %.0fs', '✅' if ok else '❌', name, elapsed)
-        return ok, elapsed
-    except subprocess.TimeoutExpired:
-        elapsed = time.perf_counter() - t0
-        logger.error('TIMEOUT %s (%.0fs)', name, elapsed)
-        return False, elapsed
-    except Exception as e:
-        elapsed = time.perf_counter() - t0
-        logger.error('ERROR %s: %s', name, e)
-        return False, elapsed
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("TG send failed proxies=%s: %s", proxies, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("TG import/send error: %s", exc)
 
 
 def _fmt_dur(seconds: float) -> str:
     h, rem = divmod(int(seconds), 3600)
     m, s = divmod(rem, 60)
     if h:
-        return f'{h}ч {m}м'
-    return f'{m}м {s}с'
+        return f"{h}ч {m}м"
+    return f"{m}м {s}с"
 
 
-def main() -> None:
+def _selected_steps(only_step: int | None) -> list[tuple[int, str, str]]:
+    if only_step is None:
+        return NIGHT_STEPS
+    return [item for item in NIGHT_STEPS if item[0] == only_step]
+
+
+def run_step(client, run_id: str, step_num: int, module_path: str, label: str, send_tg: bool) -> tuple[bool, float, str]:
+    logger.info("━" * 60)
+    logger.info("Night step %s: %s", step_num, module_path)
+    t0 = time.perf_counter()
+    try:
+        mod = importlib.import_module(module_path)
+        result = mod.run(conn=None, run_id=run_id)
+        elapsed = time.perf_counter() - t0
+        rows = result.get("rows") if isinstance(result, dict) else None
+        details = result.get("details") if isinstance(result, dict) else None
+        log_step(client, run_id, label, "OK", rows, elapsed, details)
+        logger.info("Night step %s OK за %.1f сек: %s", step_num, elapsed, details)
+        return True, elapsed, details or ""
+    except Exception as exc:  # noqa: BLE001
+        elapsed = time.perf_counter() - t0
+        details = str(exc)
+        log_step(client, run_id, label, "FAIL", None, elapsed, details)
+        logger.exception("Night step %s FAIL за %.1f сек", step_num, elapsed)
+        if send_tg:
+            _send_tg(f"❌ <b>big_analytics_v6 night</b>\n{label} FAIL\n{details[:1000]}")
+        return False, elapsed, details
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--only-step", type=int)
+    parser.add_argument("--no-tg", action="store_true")
+    parser.add_argument("--list-steps", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.list_steps:
+        for step_num, module_path, label in NIGHT_STEPS:
+            print(f"{step_num}\t{label}\t{module_path}")
+        print("legacy_pg_not_in_night:")
+        for path, reason in LEGACY_PG_NOT_IN_NIGHT.items():
+            print(f"- {path}: {reason}")
+        return 0
+
+    steps = _selected_steps(args.only_step)
+    if not steps:
+        raise SystemExit(f"Night step not found: {args.only_step}")
+
+    run_id = uuid.uuid4().hex[:12]
     started = datetime.now()
-    logger.info('=== pipeline_night START %s ===', started.strftime('%Y-%m-%d %H:%M'))
-    _send_tg(
-        f'🌙 <b>pipeline_night</b> запущен\n'
-        f'{started.strftime("%Y-%m-%d %H:%M")}'
-    )
+    client = get_client()
+    ensure_quality_log(client)
 
-    results: list[tuple[str, bool, float]] = []
-    for name, script in STEPS:
-        ok, elapsed = run_step(name, script)
-        results.append((name, ok, elapsed))
+    logger.info("big_analytics_v6_ch night pipeline start run_id=%s", run_id)
+    if not args.no_tg:
+        _send_tg(
+            f"🌙 <b>big_analytics_v6 night</b> запущен\n"
+            f"{started.strftime('%Y-%m-%d %H:%M')}\n"
+            f"run_id={run_id}"
+        )
+
+    results: list[tuple[str, bool, float, str]] = []
+    failed = False
+    for step_num, module_path, label in steps:
+        ok, elapsed, details = run_step(client, run_id, step_num, module_path, label, send_tg=not args.no_tg)
+        results.append((label, ok, elapsed, details))
+        if not ok:
+            failed = True
+            break
 
     finished = datetime.now()
     total = (finished - started).total_seconds()
-
-    lines = ['🌙 <b>pipeline_night</b> завершён']
-    lines.append(
-        f'{started.strftime("%Y-%m-%d")} '
-        f'{started.strftime("%H:%M")}→{finished.strftime("%H:%M")}'
-    )
-    lines.append('')
-    for name, ok, elapsed in results:
-        icon = '✅' if ok else '❌'
-        lines.append(f'{icon} {name}: {_fmt_dur(elapsed)}')
-
-    failed = [n for n, ok, _ in results if not ok]
-    lines.append('')
-    if failed:
-        lines.append(f'⚠️ Ошибки: {", ".join(failed)}')
-    else:
-        lines.append('✅ Всё прошло успешно')
-    lines.append(f'⏱ Итого: {_fmt_dur(total)}')
-
-    report = '\n'.join(lines)
-    logger.info('\n%s', report)
-    _send_tg(report)
+    lines = ["🌙 <b>big_analytics_v6 night</b> завершён"]
+    lines.append(f"{started.strftime('%Y-%m-%d')} {started.strftime('%H:%M')}→{finished.strftime('%H:%M')}")
+    lines.append(f"run_id={run_id}")
+    lines.append("")
+    for label, ok, elapsed, details in results:
+        icon = "✅" if ok else "❌"
+        tail = f" — {details[:160]}" if details else ""
+        lines.append(f"{icon} {label}: {_fmt_dur(elapsed)}{tail}")
+    lines.append("")
+    lines.append("⚠️ Есть ошибки" if failed else "✅ Всё прошло успешно")
+    lines.append(f"⏱ Итого: {_fmt_dur(total)}")
+    report = "\n".join(lines)
+    logger.info("\n%s", report)
+    if not args.no_tg:
+        _send_tg(report)
+    return 1 if failed else 0
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    raise SystemExit(main())

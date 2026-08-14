@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow
+from corrections import specialist_correction_expr
 from step3_build_sources.step3 import SOURCE_STORE, _gs_account_cte
 
 logger = logging.getLogger("pipeline.step11")
@@ -50,6 +51,11 @@ def _weekday_expr(date_expr: str) -> str:
 
 
 def _insert_weighted_pixel_sql(target: str, lo: str, hi: str) -> str:
+    attributed_specialist_expr = specialist_correction_expr(
+        "p.`Date`",
+        "ifNull(ca.account_login, '')",
+        "coalesce(nullIf(ca.`специалист`, ''), gs_pix.directologist)",
+    )
     return f"""
 INSERT INTO {target}
 WITH
@@ -204,7 +210,7 @@ attributed AS
         toInt64(0) AS dohod_do_kredita,
         toInt64(0) AS dobro,
         coalesce(nullIf(ca.`статус`, ''), gs_pix.status) AS `статус`,
-        coalesce(nullIf(ca.`специалист`, ''), gs_pix.directologist) AS `специалист`,
+        {attributed_specialist_expr} AS `специалист`,
         coalesce(nullIf(ca.`тип_сайта`, ''), gs_pix.site_type) AS `тип_сайта`,
         coalesce(nullIf(ca.`шаблон`, ''), gs_pix.template) AS `шаблон`,
         coalesce(nullIf(ca.`салон`, ''), nullIf(p.`салон`, ''), gs_pix.salon) AS `салон`,

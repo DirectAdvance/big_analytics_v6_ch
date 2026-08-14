@@ -1761,6 +1761,19 @@ def _fetch_reviews_rows_from_postgres(columns: list[str]) -> list[tuple]:
             FROM public.local_gsheet_sites
             WHERE NULLIF(TRIM(salon), '') IS NOT NULL
             GROUP BY LOWER(TRIM(salon))
+        ),
+        reviews AS (
+            SELECT
+                r.*,
+                COALESCE(
+                    NULLIF(TRIM(d.сайт), ''),
+                    'reviews-' || REPLACE(LOWER(TRIM(COALESCE(r.login, 'unknown'))), '_', '-') || '.local'
+                ) AS review_domain,
+                d.салон,
+                d.город
+            FROM yandex_direct_raw.yandex_direct_reports_reviews r
+            LEFT JOIN yandex_direct_raw.yandex_direct_account_reviews d ON d.аккаунт = r.login
+            WHERE r."Date" >= DATE '2026-01-01'
         )
         SELECT
             ''::text AS key3,
@@ -1780,7 +1793,7 @@ def _fetch_reviews_rows_from_postgres(columns: list[str]) -> list[tuple]:
             COALESCE(r."Impressions", 0)::numeric AS "Impressions",
             COALESCE(r."Clicks", 0)::numeric AS "Clicks",
             COALESCE(r."Cost", 0)::numeric AS total_cost,
-            d.сайт::text AS domain,
+            r.review_domain::text AS domain,
             COALESCE(r."RlAdjustmentId", 0)::bigint AS "RlAdjustmentId",
             'отзывы'::text AS "RlAdjustmentId_total",
             NULL::text AS campaign_code,
@@ -1816,8 +1829,8 @@ def _fetch_reviews_rows_from_postgres(columns: list[str]) -> list[tuple]:
             'Караваев Михаил'::text AS "специалист",
             'отзывы'::text AS "тип_сайта",
             'отзывы'::text AS "шаблон",
-            d.салон::text AS "салон",
-            d.город::text AS "город",
+            r.салон::text AS "салон",
+            r.город::text AS "город",
             NULL::text AS "регион",
             'Авто'::text AS direction,
             NULL::text AS "неверный_кодер_new",
@@ -1831,7 +1844,7 @@ def _fetch_reviews_rows_from_postgres(columns: list[str]) -> list[tuple]:
             COALESCE(r."AdGroupId"::text, '') || '|' || COALESCE(r."AdGroupName", '') AS "номер группы | название группы",
             NULL::integer AS "План заявки",
             NULL::integer AS "План приезда",
-            COALESCE(r.login, '') || '|' || COALESCE(d.сайт, '') AS "аккаунт|сайт",
+            COALESCE(r.login, '') || '|' || COALESCE(r.review_domain, '') AS "аккаунт|сайт",
             NULL::bigint AS priezd_arrival_date,
             NULL::bigint AS prodazhi_arrival_date,
             'Яндекс'::text AS "поставщик",
@@ -1839,10 +1852,8 @@ def _fetch_reviews_rows_from_postgres(columns: list[str]) -> list[tuple]:
             NULL::text AS cascade_level,
             NULL::text AS campaign_status,
             NULL::text AS payment_model
-        FROM yandex_direct_raw.yandex_direct_reports_reviews r
-        LEFT JOIN yandex_direct_raw.yandex_direct_account_reviews d ON d.аккаунт = r.login
-        LEFT JOIN gs ON gs.salon_key = LOWER(TRIM(d.салон))
-        WHERE r."Date" >= DATE '2026-01-01'
+        FROM reviews r
+        LEFT JOIN gs ON gs.salon_key = LOWER(TRIM(r.салон))
         ORDER BY r."Date", r.login, r."CampaignId", r."AdGroupId"
     """
     conn = None
