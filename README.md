@@ -1,8 +1,10 @@
-# big_analytics_v6_ch — Пайплайн аналитики (форк big_analytics_v5, миграция на ClickHouse)
+# big_analytics_v6_ch — ClickHouse-пайплайн аналитики
 
-> ⚠️ Код пока идентичен `big_analytics_v5` и работает на PostgreSQL (та же прод-БД `ad_analytics_bi`
-> @ Victory) — CH-миграция ещё не выполнена, см. [`PLAN.md`](PLAN.md). v6_ch не задеплоен на Victory
-> отдельно от v5 (путь `/home/semen_vi/big_analytics_v5` ниже — это код v5, для справки).
+`big_analytics_v6_ch` — локальный Mac-контур миграции `big_analytics_v5` на ClickHouse.
+Он запускается вручную из этого репозитория и пишет в Yandex Cloud ClickHouse:
+`raw_data` — сырьё, `ad_analytics` — рабочие таблицы и витрины. Victory
+`~/big_analytics_v5/` — это отдельный production-контур v5 на PostgreSQL; команды v5
+не являются командами запуска v6.
 
 ## Запуск
 
@@ -17,27 +19,23 @@ python3 pipeline.py --only-step=0     # только один шаг
 
 ## Шаги пайплайна
 
-**Шаг 0 — Синхронизация локальных копий** (`step0_sync_local`)
-Копирует данные из `ad_analytics` (источник, только чтение) в `ad_analytics_bi` (целевая БД).
-- `leads_local` — лиды с JOIN domains: инкрементально по `updated_at` (UPSERT)
-- `yandex_local` — статистика Яндекс.Директ: инкрементально (UPSERT)
-- Остальные справочники (аккаунты, бренды, домены, seo и др.) — полная замена (TRUNCATE + INSERT)
-
-После завершения шага 0 автоматически запускаются фоновые потоки:
-- получение статусов кампаний (шаг 4)
-- история изменений Директа (шаг 9)
+**Шаг 0 — ClickHouse preflight** (`step0_sync_local`)
+Ничего не копирует из PostgreSQL/v5. Проверяет, что в ClickHouse уже есть обязательные
+`raw_data.*` источники и CH-managed manual inputs в `ad_analytics.*`. Если источник
+отсутствует или критически пустой, пайплайн падает до тяжёлых downstream-шагов.
 
 ---
 
-**Шаг 1 — Загрузка в RAW** (`step1_load_raw`)
-Перекладывает данные из локальных копий в UNLOGGED RAW-таблицы.
-RAW-таблицы не журналируются — быстрая запись на время сборки.
+**Шаг 1 — RAW в ClickHouse** (`step1_load_raw`)
+Пересоздаёт `ad_analytics.raw_yandex`, `raw_leads`, `raw_calls`, `raw_domains`,
+`raw_perform_leads` из `raw_data.*` через ClickHouse `MergeTree`/`VIEW`-слой.
+Это не PostgreSQL `UNLOGGED`.
 
 ---
 
-**Шаг 2 — Индексы на RAW** (`step2_indexes`)
-Создаёт индексы на RAW-таблицах и запускает `ANALYZE`.
-Готовит данные для быстрой сборки источников.
+**Шаг 2 — ClickHouse prepare** (`step2_indexes`)
+В v6 не создаёт PostgreSQL-индексы и не запускает `ANALYZE`; шаг оставлен как
+совместимый подготовительный этап для ClickHouse RAW-слоя.
 
 ---
 
@@ -78,9 +76,9 @@ UNION ALL всех источников → `big_analytics_full`.
 ---
 
 **Шаг 7 — Финализация** (`step7_finalize`)
-- Переводит RAW-таблицы из UNLOGGED → LOGGED
-- `VACUUM ANALYZE` на основных таблицах
-- Создаёт финальные индексы на `big_analytics_full`
+Финализирует ClickHouse-таблицы и служебные проверки. PostgreSQL-операции
+`UNLOGGED → LOGGED`, `VACUUM ANALYZE` и btree-индексы относятся к v5/legacy, не к
+активному v6 ClickHouse-контуру.
 
 ---
 
@@ -123,30 +121,17 @@ UNION ALL всех источников → `big_analytics_full`.
 > ⚠️ В корне `pipeline.py` **шаг 13 = `step13_arrival`**. Папка `step13_utm_direct_audit`
 > с UTM-аудитом живёт в `step_cron_night/` и относится к **ночному** пайплайну.
 
-## Статус star-cutover (актуально на 2026-06-11) — ✅ ЗАВЕРШЁН, схема консолидирована в `public`
+## Статус star-cutover
 
-Миграция с денормализованной (`big_analytics_full`) на **star-схему** ЗАВЕРШЕНА.
-⚠️ Звезда **консолидирована в схему `public` (2026-06-10)** — отдельной схемы `star` БОЛЬШЕ НЕТ
-(`build_star.build_schema()` — no-op). Полный план/эталоны — [`STAR_REFACTOR_BRIEF.md`](STAR_REFACTOR_BRIEF.md).
+В v6 star-слой строится в ClickHouse шагом `star_refactor.build_star` (`pipeline.py`
+step 145). Актуальные инварианты и открытые расхождения v5↔v6 см. в
+[`GOLDEN_BASELINE.md`](GOLDEN_BASELINE.md), [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) и
+[`RAW_DIFF_FINDINGS.md`](RAW_DIFF_FINDINGS.md).
 
-**Звезда в схеме `public`** (БД `ad_analytics_bi`, факты проверены 2026-06-11):
-- `public.fact_big_analytics` — лёгкий факт (ключи + меры + `атрибуция`), ~3.82M строк (vs unified 5.46 ГБ).
-- `public.arp_fact` — **VIEW** над `analytics_report_placement` (не TABLE; чистая проекция, −3.4 ГБ).
-- Conformed измерения: `public."Dim_Site"` (по `domain`), `public."Dim_Campaign"` (по `CampaignId`,
-  16 461 строк, cs/pm заполнены у 5905), `public."Dim_AdGroup"` (по `AdGroupId`), `public."Dim_Date"` (по `Date`).
-- Без потерь: расход/продажи совпали 1:1 с golden (25 422 774.00 / 47, проверено 2026-06-11).
-- PBI-модель перепубликована пользователем на `public.fact_big_analytics` + dim. Если в TMDL остался
-  `Schema="star"` → refresh упадёт «key didnt match» (см. [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) #15).
-
-**Ещё на старой архитектуре (живой прод, НЕ тронут):**
-- `big_analytics_full` / `big_analytics_full_arrival` / `big_analytics_unified` (источник правды
-  пайплайна) и `analytics_report_placement` — материализуются по-прежнему.
-- **Пайплайн НЕ переключён на star:** `pipeline.py` / `fast_pipeline.py` /
-  `refresh_powerbi.py` (`_ALL_TABLES`) пока собирают и обновляют старые денормализованные витрины.
-  Интеграция star в пайплайн делается после приёмки PBI-модели.
-
-> Эта секция — навигационная. Детали (колонки факта, связи, перенацеливание полей) —
-> только в [`STAR_REFACTOR_BRIEF.md`](STAR_REFACTOR_BRIEF.md), не дублировать.
+Активные выходы v6 находятся в ClickHouse `ad_analytics`: `fact_big_analytics`,
+`big_analytics_full`, `big_analytics_full_arrival`, `big_analytics_unified`,
+`Dim_*`, spend/feed/PBI-compat витрины. Секция исторического PostgreSQL `public.*`
+из v5 оставлена в legacy-доках и не является инструкцией для v6.
 
 ## Таблицы результата
 
@@ -158,24 +143,9 @@ UNION ALL всех источников → `big_analytics_full`.
 
 ## Отдельные витрины
 
-`direct_feed_funnel/` — воронка Яндекс.Директа по фидам.
-
-Запуск:
-
-```bash
-cd /home/semen_vi/big_analytics_v5
-/home/semen_vi/venv/bin/python3 -m direct_feed_funnel.pipeline
-```
-
-Итоговая таблица: `public.fact_direct_feed_funnel`.
-Ключ соединения расходов и лидов: `Date|CampaignId|AdGroupId|feed_key`, для `tp6`/`tp7` — `Date|CampaignId|feed_key`.
-Реальный URL фида берётся отдельным cookie/web-api шагом:
-`python3 -m direct_feed_funnel.fetch_feed_urls_cookie --all-logins --apply`.
-В витрине доступны `feed_url` и `feed_url_key`; `feed_url_key` — последняя часть URL с `.xml`.
-При появлении новых фидов порядок такой: сначала `fetch_feed_urls_cookie --all-logins --apply`,
-затем `python3 -m direct_feed_funnel.pipeline`, затем копирование
-`public.fact_direct_feed_funnel` на localhost для Power BI. Большой `pipeline_powerbi.py`
-сам URL фидов сейчас не обновляет.
+`direct_feed_funnel/` — ClickHouse-витрина фидовой воронки. Активный шаг:
+`direct_feed_funnel.build`, вызывается из корневого `pipeline.py` как step 144.
+Старые v5 helper-скрипты перенесены в `archive/postgres_legacy_2026_07_31/`.
 Подробности: [`direct_feed_funnel/README.md`](direct_feed_funnel/README.md).
 
 ## Статусы прогона

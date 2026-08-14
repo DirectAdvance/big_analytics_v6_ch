@@ -8,31 +8,34 @@
 
 ## Block C: Исключение доменов
 
-### config/settings.py — EXCLUDED_DOMAIN_IDS
+### config/ch_settings.py — EXCLUDED_DOMAIN_NAMES (v6_ch, фильтр по ИМЕНИ)
 
 ```python
-EXCLUDED_DOMAIN_IDS = (1645, 883)
-# 1645 = priezd shared key3 (общий ключ, данные искажают статистику)
-# 883  = victory-crm.ru (не является клиентом)
+EXCLUDED_DOMAIN_NAMES = ("victory-crm.ru",)
+# victory-crm.ru — тестовый домен, не является клиентом
 ```
 
-Фильтр применяется в `step1_load_raw` при копировании лидов из источника:
-строки с `domain_id IN EXCLUDED_DOMAIN_IDS` не попадают в `raw_leads`.
+⚠️ **Не по числовому `domain_id`.** `domain_id` непереносим между PostgreSQL (v5) и ClickHouse
+(v6) — своя нумерация в каждой системе. Раньше здесь был буквально скопированный из v5
+`EXCLUDED_DOMAIN_IDS = (1645, 883)`, который в CH ошибочно исключал реальных клиентов
+(`multiautos-23.ru`, `rt-avtomarket-geely.ru`) и пропускал реальный мусор (`victory-crm.ru`,
+id=17478 в CH) — 170 084 строки мусора молча текли в `raw_leads`/`raw_perform_leads`. Разбор,
+замеры до/после и открытый вопрос по identity `1645` — `KNOWN_ISSUES.md` #33.
 
-### step3_build_sources/step3.py — фильтр расходов victory-crm.ru
+Фильтр применяется в `step1_load_raw/step1.py::_raw_leads_select_sql` при сборке `raw_leads`
+(и `raw_perform_leads`, которая строится через ту же функцию): `LEFT JOIN raw_data.domains AS d`
++ `lowerUTF8(trim(ifNull(d.domain, ''))) NOT IN (...)`. Пустой `EXCLUDED_DOMAIN_NAMES` не подставляет
+условие вовсе (guard в `_excluded_domain_names_sql`), а не превращается в синтаксически битый
+`NOT IN ()`.
 
-В CTE `base_join` добавлен WHERE-фильтр:
-```sql
-WHERE LOWER(TRIM(gs."domain")) != 'victory-crm.ru' OR gs."domain" IS NULL
-```
-`EXCLUDED_DOMAIN_IDS` фильтрует только лиды, но не расходы из yandex_direct.
+### Расходы Директа (`raw_yandex`) — `EXCLUDED_DOMAIN_NAMES` их НЕ фильтрует
 
-### Колонка local_domains.name (важно!)
-
-В таблице `local_domains` колонка с именем домена — **`name`**, не `domain`.
-```sql
-SELECT id FROM local_domains WHERE name ILIKE '%victory-crm.ru%';
-```
+⚠️ **Отличие от v5:** в v5 `step3_build_sources/step3.py` (CTE `base_join`) есть отдельный
+WHERE-фильтр `LOWER(TRIM(gs."domain")) != 'victory-crm.ru'` для расходов. В `step3_build_sources/
+step3.py` v6_ch (проверено `grep` по всему дереву, 2026-08-06) такого фильтра **нет** — расходы
+victory-crm.ru по кампаниям Директа (если такие есть) в v6_ch ничем не отсекаются на стороне
+step3. Не подтверждать наличие этого фильтра без перепроверки кода — это открытый разрыв паритета
+с v5, не перенесённая по факту механика.
 
 ---
 

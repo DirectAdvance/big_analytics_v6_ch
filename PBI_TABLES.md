@@ -1,7 +1,13 @@
-# Таблицы, которые читает Power BI — справочник
+# PBI_TABLES.md — Power BI source tables
 
-> **Назначение файла.** Однозначный справочник: какие именно таблицы PostgreSQL
-> подтягивает Power BI как источник данных. Чтобы к вопросу «а что грузится в PBI?»
+> ⚠️ **Статус v6_ch:** большая часть этого файла ниже — legacy/v5 PostgreSQL-справочник
+> Power BI-источников. В v6_ch активный слой строится в ClickHouse `ad_analytics`,
+> а публикация/refresh Power BI должна проверяться отдельно по текущему `refresh_powerbi.py`,
+> TMDL/PBIP и фактическим таблицам. Не использовать старые упоминания `pipeline_powerbi.py`
+> и Victory как команду запуска v6.
+>
+> **Назначение legacy-раздела.** Исторически фиксировал, какие именно таблицы PostgreSQL
+> подтягивал Power BI как источник данных, чтобы к вопросу «а что грузится в PBI?»
 > больше не возвращаться.
 >
 > **Authoritative-источник списка** — массив `_ALL_TABLES` в
@@ -10,7 +16,7 @@
 > ([`pipeline_powerbi.py`](pipeline_powerbi.py) → `refresh_powerbi(tables=_ALL_TABLES)`).
 > Если список в коде изменится — обновить и этот файл.
 
-**Факты в БД проверены:** 2026-06-04 (read-only, `ad_analytics_bi` на Victory `103.88.240.90`, роль `bi_analytic`).
+**Факты legacy/v5 в БД проверены:** 2026-06-04 (read-only, `ad_analytics_bi` на Victory `103.88.240.90`, роль `bi_analytic`).
 
 ---
 

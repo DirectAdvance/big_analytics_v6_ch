@@ -1,6 +1,34 @@
 # big_analytics_v6_ch — Состояние (handoff)
 
-_Последнее обновление: 2026-08-07 (oleg_programmer — Dim_Site rework по вердикту director
+_Последнее обновление: 2026-08-10 (Codex — полный прогон pipeline, сверка v5↔v6, актуализация
+активных MD). Полная история → `STATE_ARCHIVE.md`._
+
+## 2026-08-10 +05: полный pipeline OK, v5↔v6 compare/report, raw findings updated (Codex)
+
+- Полный `pipeline.py` выполнен в foreground-сессии после проверки, что `nohup ... &` в текущем
+  окружении убивает дочерний процесс при завершении shell. Первый час после корректного запуска не
+  мониторился; дальше статус проверялся примерно раз в 15 минут.
+- Прогон завершён `PASS`: `run_id=2ad6cc1dc880`, лог
+  `logs/pipeline_full_20260810_1527_retry.log`, финал `2026-08-10 17:07:58 +05`.
+  Итоговые строки: `raw_yandex=25,498,875`, `raw_leads=995,965`, `raw_calls=69,696`,
+  `big_analytics_full=5,230,747`, `fact_big_analytics=5,351,549`.
+- `verify_big_analytics` PASS, но `KUDERKO_RAW_INCOMPLETE` остаётся: 29/67 логинов Кудерко есть в
+  raw, 28/67 до golden-отсечки. Это продолжение known issue #37, не регрессия ETL.
+- Штатный `data_check/compare/run.py` сейчас падает до сверки чисел (`exit 2`): контракт ожидает
+  wide-колонки `специалист` и `"Название crm"` прямо в `fact_big_analytics`, а текущая v6 хранит их
+  через dimensions. Открыт known issue #38.
+- Read-only custom compare v5 wide fact ↔ v6 `fact_big_analytics` + dimensions за
+  `2026-02-01..2026-07-31`, `По дате заявки`: cost -0.06%, заявки -1.62%, квалифицированные -3.49%,
+  продажи -0.86%. Крупные перекладывания: `Звонки`/`Контекст`/посевы/pixel, а не только totals.
+- Raw-сверка: Direct в v6 богаче v5 на 338,059 строк и 13.19 млн cost; leads в 2026-срезе меньше
+  на 2,155 и `updated_at` отстаёт до 2026-07-30; `raw_perform_leads` в v6 пустой; `domains` меньше
+  v5 на 308. Отчёт: `V5_V6_RECONCILE_2026-08-10.md`; raw-кратко:
+  `RAW_DIFF_FINDINGS.md`; JSON-артефакты в `logs/custom_compare_v5_v6_20260810_171446.json` и
+  `logs/raw_compare_v5_v6_20260810_172639.json`.
+
+---
+
+_Предыдущее обновление: 2026-08-07 (oleg_programmer — Dim_Site rework по вердикту director
 "needs rework" (блокеры A/B/C: направление/Название crm/специалист брались из СПРАВОЧНИКА с ДРУГОЙ
 таксономией вместо факта). Исправлено, пересобрано вживую (shadow+swap), golden PASS без сдвига.
 Полная история → `STATE_ARCHIVE.md`._

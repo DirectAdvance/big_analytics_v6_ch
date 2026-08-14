@@ -1,25 +1,29 @@
-# step1_load_raw — Загрузка RAW UNLOGGED таблиц
+# step1_load_raw — RAW слой ClickHouse
 
-Второй шаг пайплайна. Перекладывает данные из локальных копий (`local_*`) в RAW-таблицы `UNLOGGED`. UNLOGGED = без записи в WAL — INSERT работает в 2–3 раза быстрее, что важно при перегрузке миллионных датасетов на каждый прогон.
+Шаг 1 v6_ch пересоздаёт рабочий RAW-слой в ClickHouse `ad_analytics` из
+источников `raw_data.*`. Это не PostgreSQL `UNLOGGED`: WAL, `VACUUM`, `SET LOGGED`,
+FDW и `local_*`-копии относятся к v5/legacy.
 
 ## Назначение
 
-Создаёт **4 RAW-таблицы** с предвычисленными полями для последующих шагов:
+Создаёт/заменяет **5 RAW-объектов** с предвычисленными полями для последующих шагов:
 
 ```
-yandex_direct_manager_reports (FDW) ──► raw_yandex     (расходы + campaign_code/tp/cpc_cpa/site_quiz/adgroup_code/key3)
-local_leads_all ─┬► raw_leads          (не-звонки, без excluded domains + fid + key3 + key3_arrival_date)
-                 └► raw_calls          (только звонки)
-local_domains ──► raw_domains          (без изменений)
-local_perform_leads ──► raw_perform_leads (perform-заявки + дедуп кросс-доменных продаж + ветка (b) из local_leads_all)
+raw_data.yandex_direct_report_rows ──► ad_analytics.raw_yandex
+raw_data.leads_all + raw_data.domains ─┬► ad_analytics.raw_leads
+                                       └► ad_analytics.raw_calls
+raw_data.domains ───────────────────────► ad_analytics.raw_domains
+нет raw_data.perform_leads ─────────────► ad_analytics.raw_perform_leads (совместимая пустая таблица)
 ```
 
-Каждая RAW-таблица создаётся через `DROP TABLE IF EXISTS` + `CREATE UNLOGGED TABLE AS SELECT` — всегда чистый срез данных.
+`raw_yandex`, `raw_leads` и `raw_calls` пересоздаются как ClickHouse `MergeTree`
+таблицы. `raw_domains` — `VIEW` поверх `raw_data.domains`. `raw_perform_leads`
+остаётся совместимой пустой таблицей, пока нет живого источника `raw_data.perform_leads`.
 
 ## Архитектурная схема
 
 ```
-local_yandex (LOGGED) ─────► raw_yandex   (UNLOGGED)
+raw_data.yandex_direct_report_rows ─────► raw_yandex
                               ├── id, Date, CampaignId, CampaignName, AdGroupId, ...
                               ├── campaign_code = regex(CampaignName)
                               ├── tp / cpc_cpa / site_quiz = SPLIT_PART(campaign_code)
@@ -27,7 +31,7 @@ local_yandex (LOGGED) ─────► raw_yandex   (UNLOGGED)
                               ├── week_start = DATE_TRUNC('week', Date)
                               └── key3 = Date|CampaignId|AdGroupId|Device|RlAdjustmentId
 
-local_leads_all + local_domains ─► raw_leads (UNLOGGED, deal_type != 'Звонок')
+raw_data.leads_all + raw_data.domains ─► raw_leads (deal_type != 'Звонок')
                               ├── id, created_date, arrival_date, domain_id, domain
                               ├── status, source_type, campaign_id, group_id, correction_id
                               ├── utm_source/medium/campaign/content/term, phone, yclid
@@ -35,10 +39,10 @@ local_leads_all + local_domains ─► raw_leads (UNLOGGED, deal_type != 'Зво
                               ├── key3 = ключ по created_date
                               └── key3_arrival_date = ключ по arrival_date
 
-local_leads_all + local_domains ─► raw_calls (UNLOGGED, deal_type = 'Звонок')
+raw_data.leads_all + raw_data.domains ─► raw_calls (deal_type = 'Звонок')
                               └── базовые поля без UTM-ключей (звонки не нужно матчить)
 
-local_domains ─► raw_domains (UNLOGGED, копия)
+raw_data.domains ─► raw_domains (VIEW)
 ```
 
 ## Ключевая логика — `key3`
@@ -66,56 +70,65 @@ REPLACE("CampaignName", chr(1089), 'c')
 
 ## Параметры
 
-`config/settings.py`:
+`config/ch_settings.py` и `config/settings.py`:
 
 | Параметр | Значение | Влияет на |
 |----------|----------|-----------|
-| `EXCLUDED_DOMAIN_IDS` | `(1645, 883)` | Фильтр `raw_leads` (но НЕ `raw_yandex`) |
-| `T_RAW_YANDEX`, `T_RAW_LEADS`, `T_RAW_CALLS`, `T_RAW_DOMAINS` | имена таблиц | |
-| `T_YANDEX_LOCAL`, `T_LEADS_ALL_LOCAL`, `T_DOMAINS_LOCAL` | имена локальных копий | |
+| `EXCLUDED_DOMAIN_NAMES` (`config/ch_settings.py`) | `("victory-crm.ru",)` | Фильтр `raw_leads`/`raw_perform_leads` по ИМЕНИ домена (но НЕ `raw_yandex`) |
+| `RAW_SOURCE_TABLES` | `raw_data.*` источники | `raw_yandex`, `raw_leads`, `raw_calls`, `raw_domains` |
+| `RAW_TARGET_TABLES` | `ad_analytics.raw_*` выходы | downstream steps |
 
-`EXCLUDED_DOMAIN_IDS = (1645, 883)`:
-- `1645` — priezd shared key3 (общий ключ, искажает статистику)
-- `883` — `victory-crm.ru` (не клиент)
+`EXCLUDED_DOMAIN_NAMES = ("victory-crm.ru",)` (`step1_load_raw/step1.py::_excluded_domain_names_sql`,
+матч по `lowerUTF8(trim(d.domain))` через `LEFT JOIN raw_data.domains`):
+- `victory-crm.ru` — тестовый домен, не клиент.
+- ⚠️ **Фильтр по ИМЕНИ, не по числовому `domain_id`** — id непереносим между PostgreSQL (v5) и
+  ClickHouse (v6), своя нумерация в каждой системе. Раньше здесь буквально копировался v5-список
+  `EXCLUDED_DOMAIN_IDS = (1645, 883)`, что в CH исключало не те домены (`multiautos-23.ru`,
+  `rt-avtomarket-geely.ru`) и пропускало реальный мусор (`victory-crm.ru`, id=17478 в CH) —
+  см. `KNOWN_ISSUES.md` #33.
 
 ## Зависимости
 
-- step0 должен быть выполнен (нужны `local_*` таблицы)
-- Python 3.10+, psycopg2
+- step0 должен пройти ClickHouse preflight.
+- Python 3.10+, `clickhouse-connect`, доступ к `victory_clickhouse` через `.secret/loader.py`.
 
 ## Примеры запуска
 
 ```bash
 # Только step1:
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 pipeline.py --only-step=1"
+.venv/bin/python3 pipeline.py --only-step=1
 
 # Проверка после запуска:
-psql -c "SELECT relname, pg_size_pretty(pg_relation_size(relname::regclass))
-         FROM (VALUES ('raw_yandex'),('raw_leads'),('raw_calls'),('raw_domains')) AS t(relname);"
+.venv/bin/python3 - <<'PY'
+from config.ch_db import get_client
+client = get_client()
+for table in ["raw_yandex", "raw_leads", "raw_calls", "raw_domains", "raw_perform_leads"]:
+    print(table, client.command(f"SELECT count() FROM ad_analytics.{table}"))
+PY
 ```
 
 ## Проверки после запуска
 
 ```sql
 -- Количество строк в каждой RAW
-SELECT 'raw_yandex' AS t, COUNT(*) FROM raw_yandex
-UNION ALL SELECT 'raw_leads',   COUNT(*) FROM raw_leads
-UNION ALL SELECT 'raw_calls',   COUNT(*) FROM raw_calls
-UNION ALL SELECT 'raw_domains', COUNT(*) FROM raw_domains;
+SELECT 'raw_yandex' AS t, count() FROM ad_analytics.raw_yandex
+UNION ALL SELECT 'raw_leads', count() FROM ad_analytics.raw_leads
+UNION ALL SELECT 'raw_calls', count() FROM ad_analytics.raw_calls
+UNION ALL SELECT 'raw_domains', count() FROM ad_analytics.raw_domains;
 
 -- Проверить что campaign_code заполнился (не 'неверный кодер')
-SELECT campaign_code, COUNT(*) FROM raw_yandex
+SELECT campaign_code, count() FROM ad_analytics.raw_yandex
 GROUP BY campaign_code ORDER BY 2 DESC LIMIT 10;
 
 -- Проверить key3 (должен быть LOWER, формат YYYY-MM-DD|...)
-SELECT key3 FROM raw_yandex LIMIT 5;
+SELECT key3 FROM ad_analytics.raw_yandex LIMIT 5;
 ```
 
 ## Связи с другими шагами
 
-- **Зависит от:** step0 (`local_*`)
+- **Зависит от:** step0 (ClickHouse preflight)
 - **Используется:** step2 (индексы), step3 (`base_join` CTE, CTE сборки источников), step6 (звонки inline из `raw_calls`)
-- **UNLOGGED → LOGGED:** конвертация в step7
+- **Финализация:** step7 не делает PostgreSQL `UNLOGGED → LOGGED`; v6 RAW уже живёт в ClickHouse.
 
 ## Файлы
 

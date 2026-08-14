@@ -1,47 +1,38 @@
-# step_cron_night — ночной пайплайн
+# step_cron_night — v6 ClickHouse night pipeline
 
-Тяжёлые API-шаги big_analytics_v5, запускаемые автоматически в **03:00 МСК** (00:00 UTC) через cron.
-Power BI читает готовые таблицы — данные всегда свежие с ночи.
+Ночной контур v6 запускает тяжёлые диагностические/API-совместимые шаги отдельно от дневного
+`pipeline.py`, чтобы не удлинять основной прогон и не дергать Direct API для минус-фраз каждый раз.
 
-## Зачем отдельно от pipeline.py
+## Daily night steps
 
-- Эти шаги занимают **2.5–3 часа** и делают тысячи запросов к API
-- Ночной запуск не конкурирует с дневным pipeline.py за квоту Метрики
-- Квота Метрики (5000 req/day × 3 токена) сбрасывается в **00:00 UTC = 03:00 МСК** — именно поэтому старт в это время
-- Дневной pipeline.py работает быстро, читая уже готовые таблицы
+| # | Step | Result |
+|---|------|--------|
+| 101 | `night_metrika_yandex` | `ad_analytics.metrika_yandex` |
+| 102 | `night_check_utm` | `ad_analytics.check_utm`, `ad_analytics.check_utm_fuck_direct` |
+| 103 | `night_korrektirovki` | `ad_analytics.yandex_direct_korrektirovki` view |
+| 104 | `night_404_errors` | `ad_analytics.yandex_direct_404_errors` |
+| 105 | `night_recheck_404` | cleans live URLs from `yandex_direct_404_errors` |
+| 106 | `night_ml_korrektirovki` | `ad_analytics.fact_ml_korrektirovki` |
+| 114 | `night_minus_snapshot` | `ad_analytics.yandex_direct_minus_snapshot` |
 
-## Шаги (порядок важен)
-
-| # | Модуль | Таблица результата | ~Время |
-|---|--------|-------------------|--------|
-| 1 | `metrika_yandex.py` | `metrika_yandex` (grants счётчиков) | 3 мин |
-| 2 | `step13_utm_direct_audit/run.py` | `check_utm`, `check_utm_fuck_direct` | 2 ч |
-| 3 | `korrektirovki/run.py` | `yandex_direct_korrektirovki` | 25 мин |
-| 4 | `404_errors/404_errors.py` | `yandex_direct_404_errors` | 1 мин |
-
-## Cron на Victory VPS
-
-```cron
-# pipeline_night — 03:00 МСК = 00:00 UTC
-0 0 * * * cd ~/big_analytics_v5 && ~/venv/bin/python3 step_cron_night/pipeline_night.py >> /tmp/pipeline_night.log 2>&1
-```
-
-## Ручной запуск
+## Commands
 
 ```bash
-# Фоновый запуск (с логом):
-ssh victory "cd ~/big_analytics_v5 && nohup ~/venv/bin/python3 step_cron_night/pipeline_night.py > /tmp/pipeline_night.log 2>&1 &"
-
-# Мониторинг:
-ssh victory "tail -f /tmp/pipeline_night.log"
+python3 step_cron_night/pipeline_night.py
+python3 step_cron_night/pipeline_night.py --list-steps
+python3 step_cron_night/pipeline_night.py --only-step 114
 ```
 
-## Telegram-уведомления
+`CHECK_UTM_BATCH_DAYS=7` по умолчанию. Уменьшать можно для отладки, увеличивать только после проверки
+памяти ClickHouse.
 
-- При старте: сообщение "pipeline_night запущен"
-- При завершении: сводка ✅/❌ по каждому шагу + общее время
+## Telegram
 
-## Примечание
+Уведомления идут через `config.tokens` в тот же чат бота `@analitika_auto_powerbi_bot`: старт,
+ошибка шага, финальная сводка.
 
-`step13_utm_direct_audit` теперь запускается отсюда. Его можно убрать из `pipeline.py`
-(строка subprocess после crm_mappings_check) — pipeline станет короче на ~2 часа.
+## Legacy not ported
+
+Weekly v5 jobs `direct_account_reviews/pipeline.py` и `report_placement/run.py` перенесены в
+`archive/postgres_legacy_2026_07_31/step_cron_night/` и ещё не подключены как CH live-fetch. Их нельзя
+запускать из v6 ночного пайплайна, пока они не переписаны с PostgreSQL на `raw_data`/`ad_analytics`.

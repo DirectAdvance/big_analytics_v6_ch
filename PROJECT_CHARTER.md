@@ -246,7 +246,7 @@ JOIN с `local_domains`:
 
 | RAW-таблица | Фильтр |
 |---|---|
-| `raw_leads` | `deal_type != 'Звонок'` AND `domain_id NOT IN EXCLUDED_DOMAIN_IDS (1645,883)` |
+| `raw_leads` | `deal_type != 'Звонок'` AND домен `NOT IN EXCLUDED_DOMAIN_NAMES` (фильтр по имени `d.domain`, `config/ch_settings.py`; см. `KNOWN_ISSUES.md` #33) |
 | `raw_calls` | `deal_type = 'Звонок'` |
 
 **Атрибуция по каналам** (step3, по `utm_*` лида):

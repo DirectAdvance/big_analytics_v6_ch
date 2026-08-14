@@ -1,6 +1,12 @@
-# DB_TABLES.md — Таблицы на сервере (ad_analytics_bi)
+# DB_TABLES.md — legacy PostgreSQL table map
 
-Актуально на 2026-06-17. Схемы сверены с реальной БД Victory (`information_schema.columns`).
+> ⚠️ **Статус v6_ch:** этот файл является legacy-снимком PostgreSQL/v5 (`ad_analytics_bi`
+> на Victory) и пока не является актуальной картой ClickHouse v6. Для активного v6-контура
+> см. `CLAUDE.md`, `PIPELINES.md`, `config/ch_settings.py`, `step*_*/README.md` и живые
+> таблицы ClickHouse `raw_data` / `ad_analytics`. Ниже оставлен исторический справочник,
+> полезный только для понимания происхождения v5.
+
+Актуально на 2026-06-17 для v5. Схемы сверены с реальной БД Victory (`information_schema.columns`).
 
 ---
 
