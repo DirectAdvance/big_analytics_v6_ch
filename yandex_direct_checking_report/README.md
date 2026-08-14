@@ -30,18 +30,20 @@ Standalone-модуль для сверки расходов Яндекс.Дир
    - `FieldNames = ['Month', 'Cost']`
    - `DateRangeType = CUSTOM_DATE`
    - `DateFrom = 2026-01-01`, `DateTo = вчера`
-   - Заголовки: `IncludeVAT: NO`, `returnMoneyInMicros: false`
-6. Перебирает 4 агентских OAuth-токена. Первый давший `HTTP 200` →
+   - Заголовки: `IncludeVAT: YES`, `returnMoneyInMicros: false`
+   (аккаунты обрабатываются параллельно, `ThreadPoolExecutor(MAX_WORKERS=4)`)
+6. Перебирает 5 агентских OAuth-токенов. Первый давший `HTTP 200` →
    `manager_login` = логин этого агентского аккаунта.
-7. Парсит TSV, считает суммы по месяцам, пишет в таблицу.
+7. Парсит TSV, считает суммы по месяцам, пишет в таблицу, сверяет с
+   `yandex_direct_manager_reports` и шлёт отчёт в Telegram (см. «Сверка и Telegram» ниже).
 
 ## Источники данных
 
 | Откуда | Что |
 |--------|-----|
 | `public.local_gsheet_sites` | список авто-аккаунтов (login_key + domain) |
-| Reports API v5 (`api.direct.yandex.com/json/v5/reports`) | помесячный Cost без НДС |
-| `.secret/.env` через `config.tokens` | 4 OAuth-токена |
+| Reports API v5 (`api.direct.yandex.com/json/v5/reports`) | помесячный Cost с НДС |
+| `.secret/.env` через `config.tokens` | 5 OAuth-токенов |
 
 Никаких `raw_*`, `local_yandex`, `big_analytics_*` — независимо.
 
@@ -61,6 +63,17 @@ CREATE INDEX IF NOT EXISTS idx_yandex_direct_checking_report_login ON yandex_dir
 CREATE INDEX IF NOT EXISTS idx_yandex_direct_checking_report_month ON yandex_direct_checking_report(month);
 ```
 
+## Сверка и Telegram
+
+После загрузки `run()` вызывает `run_comparison()`: джойнит только что записанные
+строки с `public.yandex_direct_manager_reports` (суммы по месяцу через FDW,
+`statement_timeout=300000`) и шлёт HTML-отчёт (таблица расхождений > 0.01 ₽ +
+список аккаунтов без доступа ни по одному токену) через общий отправитель
+`notifications/telegram.py::send_html` (не голый `requests.post`): санитайз,
+чанкинг по >4096 символов вместо обрезки текста, ретраи по цепочке прокси,
+`timeout=30`. Список failed-аккаунтов передаётся с `collapse_whitespace=False`,
+чтобы сохранить отступ `  • login (domain)`.
+
 ### Логическая гранулярность
 
 Одна строка = `(account_login, month)`. Несколько кампаний внутри аккаунта
@@ -70,23 +83,23 @@ CREATE INDEX IF NOT EXISTS idx_yandex_direct_checking_report_month ON yandex_dir
 
 ### Локально (PC, Windows)
 ```powershell
-cd C:\Users\Mi\PycharmProjects\HomeServer_PythonProject\work\big_analytics_v5
+cd C:\Users\Mi\PycharmProjects\HomeServer_PythonProject\work\big_analytics_v6_ch
 python -m yandex_direct_checking_report.report
 ```
 
 ### На LXC 101 (через Mutagen синкается автоматически)
 ```bash
 ssh ai-agent@192.168.0.202
-cd /opt/scripts/work/big_analytics_v5
-~/venv/bin/python3 -m yandex_direct_checking_report.report
+cd /opt/scripts/work/big_analytics_v6_ch
+~/venv-v6/bin/python3 -m yandex_direct_checking_report.report
 ```
 
 ### На Victory VPS (нужен scp вручную)
 ```bash
-scp -r yandex_direct_checking_report victory:/home/<user>/big_analytics_v5/
+scp -r yandex_direct_checking_report victory:~/big_analytics_v6_ch/
 ssh victory
-cd ~/big_analytics_v5
-~/venv/bin/python3 -m yandex_direct_checking_report.report
+cd ~/big_analytics_v6_ch
+~/venv-v6/bin/python3 -m yandex_direct_checking_report.report
 ```
 
 ## Логи
@@ -109,9 +122,10 @@ cd ~/big_analytics_v5
 |-----------|----------|-------|
 | `TABLE_NAME` | `'yandex_direct_checking_report'` | имя таблицы |
 | `DATE_FROM` | `'2026-01-01'` | начало периода |
-| `TOKENS` | 4 пары `(token, manager_login)` | приоритет перебора |
+| `TOKENS` | 5 пар `(token, manager_login)` | приоритет перебора |
 | `MAX_RETRY_HTTP5XX` | `5` | повторы при 500/502/503 |
-| `PAUSE_BETWEEN_LOGINS` | `0.4` | пауза между аккаунтами, сек |
+| `MAX_WORKERS` | `4` | параллельных воркеров (`ThreadPoolExecutor`) |
+| `PAUSE_PER_WORKER` | `0.5` | пауза между запросами внутри воркера, сек (~2 rps на токен) |
 
 ## Проверки качества
 
@@ -150,18 +164,19 @@ LIMIT 50;
 
 ## Ограничения и нюансы
 
-1. **Лимиты Direct API**. Каждый аккаунт = 1 запрос. Если активных ~300 — это
-   ~10 минут с паузами и retry на 201/202. Параллелизма нет (последовательно).
+1. **Лимиты Direct API**. Каждый аккаунт = 1 запрос, выполняются параллельно
+   (`MAX_WORKERS=4` воркера, `PAUSE_PER_WORKER=0.5` сек → ~2 rps на токен) с
+   retry на 201/202/429/5xx.
 2. **Аккаунт без активных кампаний**. API вернёт пустой TSV — `monthly={}`,
    запись в БД не пишется (counter `no_data_accounts`).
 3. **400/401/403**. Считаются как «этим токеном нет доступа» → перебор.
-   Если все 4 дают 4xx → `failed_accounts++`, строка не пишется.
+   Если все 5 дают 4xx → `failed_accounts++`, строка не пишется.
 4. **Не входит в pipeline.py**. Это отдельный отчёт, запускается руками или
    по отдельному крону (если потребуется регулярно).
 5. **`returnMoneyInMicros=false`** — Cost приходит в рублях float, делить
    на 1_000_000 НЕ нужно.
-6. **`IncludeVAT=NO`** — расход без НДС. Это стандарт всех агрегаций
-   в `big_analytics_v5`.
+6. **`IncludeVAT=YES`** — расход с НДС, совпадает с
+   `yandex_direct_manager_reports.Cost` — нужно для сверки в `run_comparison()`.
 
 ## Файлы модуля
 

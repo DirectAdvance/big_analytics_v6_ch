@@ -1,7 +1,80 @@
 # big_analytics_v6_ch — Состояние (handoff)
 
-_Последнее обновление: 2026-08-10 (Codex — полный прогон pipeline, сверка v5↔v6, актуализация
-активных MD). Полная история → `STATE_ARCHIVE.md`._
+_Последнее обновление: 2026-08-14 (oleg_programmer — все Telegram-отправители v6 сведены на
+`notifications/telegram.py`: 10 call sites в 9 файлах, единый sender+sanitize, verdict-first где это
+gate, report-shape где это отчёт). Полная история → `STATE_ARCHIVE.md`._
+
+## 2026-08-14 +05: все Telegram-отправители v6 на shared module (oleg_programmer)
+
+- 10 call sites (9 файлов, director's re-count): `watch_pipeline.py`, `refresh_powerbi.py` (5
+  sites incl. :437 raw-exception bug), `step_cron_night/pipeline_night.py` (already partially done
+  round 1 — now sender too), `step8_stats/funnel_drift_snapshot.py`, `config/cookies.py`
+  (`send_tg`/dead `send_tg_cookies_dead` removed, raw-exception bug at ensure_cookies fixed),
+  `crm_mappings_check/check.py` (rewritten as `build_message`, dropped `!r` repr quotes + dead
+  `unused` param), `yandex_direct_checking_report/report.py` (dropped 4090-char truncate — data
+  loss bug, now safe chunking), `data_check/golden_reward.py` (`build_message` verdict gate),
+  `data_check/reporter.py`. All raw `requests.post(...api.telegram.org...)` calls removed outside
+  `notifications/telegram.py` (grep-verified). Format: verdict-first only where the kind is a
+  gate (pipeline fail, parity, crm_mappings, golden_reward); reports (funnel drift, checking-report
+  monospace table) kept report shape per Семён's judgement-call instruction — `<code>` kept ONLY
+  for genuine fixed-width tables, not for exception text.
+- `RUNBOOK.md`: added nohup+redirect example for night pipeline (none existed before); comment in
+  `pipeline_night.py` now names the exact section instead of a vague "see RUNBOOK.md".
+- Tests: `tests/test_telegram_notifications.py` — 18 tests (was 6), one per message kind +
+  no-exception/no-repr/RU-money assertions. `golden_reward` test uses
+  `pytest.importorskip(..., exc_type=ImportError)` — module has a PRE-EXISTING unrelated
+  `ImportError: ARRIVAL_ROWS_MIN` from `data_check/verify_big_analytics.py` (confirmed present
+  already in the parent commit, not introduced by this round) — not fixed, out of scope.
+  `python3.9` (system) cannot import several of these files at all (`str | None` PEP604 syntax,
+  pre-existing) — verified with `python3.11` instead (closer to Victory's `venv-v6`); 131 passed,
+  1 skipped there, `python3.9` run: 130 passed, 1 skipped, 1 pre-existing collection failure
+  (`watch_pipeline.py`, unrelated to this change).
+- ⚠️ Found mid-session: an out-of-band auto-commit (`47b0335 "Improve BA6 telegram messages and
+  direct feed docs"`, local-only, NOT pushed, 107 commits ahead of origin) bundled this round's
+  edits together with unrelated pre-existing uncommitted changes (`STATE.md`, `PLAN.md`,
+  `direct_feed_funnel/build.py`, `DB_TABLES.md`, `PBI_TABLES.md`, `README.md`, star_refactor docs).
+  Did not touch git history myself (not asked, not my call) — flagging so it gets reviewed/split
+  before anyone pushes.
+- Not deployed, not run on Victory, no Telegram send performed (per task constraint) — render only.
+
+## 2026-08-14 +05: direct feed light fact + compatibility view, полный pipeline OK (Codex)
+
+- Безопасный `dim`-шаг: физическая `ad_analytics.fact_direct_feed_funnel` заменена на
+  `ad_analytics.fact_direct_feed_funnel_light` + compatibility view с прежним именем
+  `ad_analytics.fact_direct_feed_funnel`. Из физического факта вынесен только тяжелый
+  `placement_feed_key`: хранится `placement_feed_key_hash`, view восстанавливает строку через
+  `Dim_PlacementFeed`. Step 144 сам обновляет `Dim_PlacementFeed` перед созданием view, поэтому
+  `--only-step=144` не зависит от предварительного step 146. `domain` и `account_login` оставлены в
+  факте как низкорисковый компромисс.
+- Код/доки: `direct_feed_funnel/build.py`, `direct_feed_funnel/README.md`,
+  `tests/test_star_refactor_contracts.py`.
+- Проверки до полного прогона: `py_compile` OK; `pytest tests/test_star_refactor_contracts.py -q` —
+  14 passed. Первый `--only-step=144` выявил ClickHouse alias-конфликт в view CTE; alias исправлен,
+  публичная view восстановлена вручную, затем `--only-step=146` прошёл OK. Позже review gate нашёл
+  риск порядка сборки (`Dim_PlacementFeed` создавался позже view); добавлен вызов
+  `build_dim_placement_feed(client)` внутри step 144 и регрессионный тест, после чего `pytest` —
+  15 passed.
+- Полный `pipeline.py` OK: `run_id=d68d74cb8465`, лог
+  `logs/pipeline_full_after_feed_light_20260814_120525.log`, wall-clock по
+  `data_quality_log` 129.0 мин, сумма duration шагов 130.3 мин. `verify_big_analytics` PASS;
+  `KUDERKO_RAW_INCOMPLETE` остаётся информационным known issue #37.
+- Самые дорогие шаги этого прогона: `step3` 3234.5с, `direct_spend_staging` 900.2с, `step1`
+  897.6с, `step11` 640.4с, `build_star` 535.6с. Новая `direct_feed_funnel` часть: 48.7с.
+- Сверка direct feed после полного прогона: `fact_direct_feed_funnel` view,
+  `fact_direct_feed_funnel_light`, `pbi_import_fact_direct_feed_funnel` и
+  `bi_fact_direct_feed_funnel` совпали по строкам и метрикам: 13,227,222 строк,
+  cost=1,353,636,066.726184, clicks=33,567,405, impressions=732,221,435,
+  forms=102,580, orders/korr=27,836, paid/prodazhi=6,262, `placement_feed_key` uniq=34,894,
+  пустых placement key = 0. Размер light fact: ~180.26 MB; прежний full fact до правки был
+  ~208.29 MB на 13,191,963 строках.
+- После фикса порядка повторно выполнены `--only-step=144` (`run_id=47aebba230ea`), `--only-step=146`
+  (`run_id=c87aed3666cb`) и `--only-step=147`; `verify_big_analytics` PASS. Финальная сверка direct
+  feed: view/light/PBI/bi совпали — 13,246,925 строк, cost=1,355,729,860.099418,
+  clicks=33,621,063, impressions=733,445,049, forms=102,742, orders/korr=27,836,
+  paid/prodazhi=6,262, `placement_feed_key` uniq=34,929, пустых placement key = 0.
+- Штатный `data_check/compare/run.py --json` по-прежнему не выполняет v5↔v6 числовую сверку:
+  `exit 2`, контракт ожидает wide-колонки `специалист` и `"Название crm"` в
+  `ad_analytics.fact_big_analytics`, а BA6 хранит их через dimensions (known issue #38).
 
 ## 2026-08-10 +05: полный pipeline OK, v5↔v6 compare/report, raw findings updated (Codex)
 

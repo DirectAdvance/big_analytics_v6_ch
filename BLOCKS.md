@@ -644,11 +644,11 @@ Cascade-строки: `_source_table='direct'`, `total_cost=NULL`, колонк�
 
 Guard в начале `main()` — ДО TG-отбивки «стартовал»: сканирует `/proc/*/cmdline` на `pipeline.py` / `fast_pipeline.py` / `pipeline_powerbi.py` (исключает собственный PID). Если жив — ждёт до 30 мин, опрашивает каждые 2 мин. Истёк GUARD_WAIT_MAX_SEC → TG SKIP + `exit 0`. TG «стартовал» и t_total — только после прохождения guard.
 
-### TG_PROXY_ROTATE + TG_SEND_FAIL (2026-07-03)
+### TG_PROXY_ROTATE + TG_SEND_FAIL (2026-07-03, СУПЕРСЕДЕНО 2026-08-14)
 
-**pipeline_powerbi.py** (маркер `TG_PROXY_ROTATE_2026-07-03`): `_send_telegram` переведён с единственного `TELEGRAM_PROXY` на цикл `TELEGRAM_PROXY_VARIANTS`; после исчерпания всех прокси — `logger.error`.
+**pipeline_powerbi.py** (маркер `TG_PROXY_ROTATE_2026-07-03`): `_send_telegram` переведён с единственного `TELEGRAM_PROXY` на цикл `TELEGRAM_PROXY_VARIANTS`; после исчерпания всех прокси — `logger.error`. *(В v6_ch `pipeline_powerbi.py` — legacy, `archive/postgres_legacy_2026_07_31/`, не в активном пайплайне.)*
 
-**config/cookies.py** (маркер `TG_SEND_FAIL_2026-07-03`): `logger.error(...)` добавлен в `send_tg` и `send_tg_cookies_dead` после for-цикла прокси. Ранее молчаливый провал TG теперь виден в логе.
+**config/cookies.py** (маркер `TG_SEND_FAIL_2026-07-03`): `logger.error(...)` добавлен в `send_tg` и `send_tg_cookies_dead` после for-цикла прокси. Ранее молчаливый провал TG теперь виден в логе. *(С 2026-08-14: `send_tg_cookies_dead` удалена, `send_tg` — тонкая обёртка над `notifications/telegram.py::send_html`, тот же `logger.error` behavior — см. COOKIES.md.)*
 
 ### Форматирование отчётов step8/step12/verify (2026-07-02)
 

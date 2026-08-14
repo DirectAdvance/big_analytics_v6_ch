@@ -5,17 +5,19 @@
 > For code structure (who calls what, impact radius) use MCP `code-review-graph`;
 > this index is the fallback when the graph is unavailable.
 
-Files indexed: **8**
+Files indexed: **9**
 
 ## project root
 
 | file | KB | purpose |
 |---|---|---|
-| `CLAUDE.md` | 7 | step8_stats — Финальная статистика + Telegram-отчёт |
-| `MEMORY.md` | 2 | MEMORY — step8_stats |
-| `README.md` | 7 | step8_stats — Финальная статистика + Telegram-отчёт |
-| `STEP.md` | 1 | STEP.md — Шаг 6: Статистика + Telegram-отчёт |
+| `CLAUDE.md` | 8 | step8_stats — Статистика ClickHouse (step8) + отдельные Postgres drift-снимки |
+| `INDEX.md` | 1 | INDEX — step8_stats |
+| `MEMORY.md` | 3 | MEMORY — step8_stats |
+| `README.md` | 8 | step8_stats — ClickHouse-статистика (step8) + standalone Postgres drift-снимки |
+| `STEP.md` | 1 | STEP.md — Шаг 8: ClickHouse-статистика (step8) |
 | `__init__.py` | 1 |  |
-| `funnel_drift_snapshot.py` | 30 | step8_stats/funnel_drift_snapshot.py — снимок воронки по (month × источник) + алерт дрейфа. |
+| `funnel_drift_snapshot.py` | 29 | step8_stats/funnel_drift_snapshot.py — снимок воронки по (month × источник) + алерт дрейфа. |
 | `pipeline_log_snapshot.py` | 7 | step8_stats/pipeline_log_snapshot.py — снимок воронки по месяцам в data_pipeline_log. |
 | `step8.py` | 1 | Step 8 for v6_ch: read-only ClickHouse statistics. |
+

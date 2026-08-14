@@ -25,7 +25,7 @@ raw_calls (inline) ───┘                       │
                                      LEFT JOIN campaign_status
                                               │
                                               ▼
-                                     CASE для emoji-префикса 🟢🟡⚪
+                                     (v5-only: emoji-префикса 🟢🟡⚪ в v6_ch `step6.py` нет)
                                               │
                                               ▼
                                   9+ постпроцессинговых UPDATE
@@ -58,7 +58,7 @@ raw_calls (inline) ───┘                       │
 - **География**: `салон`, `город`, `регион`, `id_салона`
 - **Сайт**: `тип_заявки`, `тип_сайта`, `шаблон`, `статус`, `Название crm`, `направление`, `direction`, `источник`, `поставщик`, `_source_table`
 - **План**: `План заявки`, `План приезда`
-- **Доп**: `марки авто`, `неверный_кодер_new`, emoji-префикс в названии, `priezd_arrival_date`, `prodazhi_arrival_date`
+- **Доп**: `марки авто`, `неверный_кодер_new`, `priezd_arrival_date`, `prodazhi_arrival_date` (emoji-префикс в названии — v5-only, в v6_ch нет)
 
 ## Звонки (inline)
 
@@ -121,7 +121,7 @@ WHERE table_name='big_analytics_full' ORDER BY ordinal_position LIMIT 20;
 -- direction='Авто' (единственный интересный фильтр)
 SELECT COUNT(*) FROM big_analytics_full WHERE direction='Авто';
 
--- Emoji-префикс работает (🟢 на активных)
+-- Emoji-префикс — v5-only, в v6_ch `step6.py` его нет (не запускать этот запрос как проверку)
 SELECT campaign_status, LEFT("номер кампании | название кампании", 4) AS prefix, COUNT(*)
 FROM big_analytics_full
 WHERE _source_table='direct'

@@ -1,113 +1,84 @@
-# step8_stats — Финальная статистика + Telegram-отчёт
+# step8_stats — ClickHouse-статистика (step8) + standalone Postgres drift-снимки
 
-Шаг 8 (последний) пайплайна. Собирает статистику по всем выполненным шагам, формирует итоговый Telegram-отчёт и записывает снимок воронки в `data_pipeline_log`.
+`step8.py` — рядовой шаг `pipeline.py::STEPS` (последний из содержательных, перед `verify`).
+Read-only: считает строки в `ad_analytics.*` (ClickHouse) и логирует агрегаты
+`big_analytics_full`. **Telegram не отправляет.**
+
+`pipeline_log_snapshot.py` и `funnel_drift_snapshot.py` в `pipeline.py::STEPS` **не вызываются**.
+Grep по репозиторию: `funnel_drift_snapshot` — только в
+`tests/test_telegram_notifications.py:241`; `pipeline_log_snapshot` — нигде вне своего файла (нет
+даже в тестах). Это PostgreSQL-скрипты (`config.db`, `public.big_analytics_unified`) для
+legacy-контура, запускаются вручную/standalone.
+`funnel_drift_snapshot.py` при этом активно поддерживается — шлёт Telegram-алерт дрейфа.
 
 ## Назначение
 
-| Действие | Файл |
-|----------|------|
-| Собрать длительности шагов из `data_quality_log` | `step8.py` |
-| Посчитать объёмы таблиц (full, direct, seo, pixel, crop, reviews) | `step8.py` |
-| Отправить отчёт в Telegram | `step8.py` |
-| Записать снимок воронки в `data_pipeline_log` | `pipeline_log_snapshot.py` |
+| Действие | Файл | Вызывается из pipeline.py? |
+|----------|------|------|
+| Посчитать строки `ad_analytics.*` (ClickHouse) + агрегаты `big_analytics_full` | `step8.py` | да, `STEPS` |
+| Записать снимок воронки в `data_pipeline_log` (Postgres) | `pipeline_log_snapshot.py` | нет — standalone |
+| Записать снимок + Telegram-алерт дрейфа в `data_funnel_drift_log` (Postgres) | `funnel_drift_snapshot.py` | нет — standalone |
 
 ## Архитектурная схема
 
 ```
-data_quality_log              ─┐
-big_analytics_*               ─┼─► step8.run()
-yandex_direct_manager_reports ─┤        │   (FDW; step8.py:507-513, маркер RECON_FIX_2026-06-19)
-fact_big_analytics            ─┤        │   (step8.py:519+, RECON_FIX_2026-06-19)
-campaign_status               ─┘        │
-                          ├──► Telegram (через SOCKS5-прокси)
-                          │
-                          └──► data_pipeline_log (snapshot воронки)
-                                                       │
-                                                       ▼
-                                        Дашборд → /api/pipeline-delta
-                                        Виджет "Дельта пайплайна"
+step8.py (ClickHouse, IN только):
+ad_analytics.raw_yandex / raw_leads / raw_calls / big_analytics_sources /
+big_analytics_calls / big_analytics_full / big_analytics_pixel_score /
+big_analytics_full_arrival / big_analytics_unified / fact_big_analytics
+        │  count_rows() + table_exists() (config/ch_utils.py)
+        ▼
+   logger.info(...)   — нет OUT (длительность пишет generic run_step() в pipeline.py)
+
+pipeline_log_snapshot.py / funnel_drift_snapshot.py (Postgres, standalone, НЕ из pipeline.py):
+public.big_analytics_unified
+        │
+        ├──► data_pipeline_log            (pipeline_log_snapshot.py)
+        │        │
+        │        ▼
+        │    Дашборд → /api/pipeline-delta → виджет "Дельта пайплайна"
+        │
+        └──► data_funnel_drift_log + Telegram-алерт (funnel_drift_snapshot.py,
+             через notifications/telegram.py::send_html, SOCKS5-прокси-цепочка)
 ```
 
-## Telegram-отчёт
+## step8.py — вывод (лог, не Telegram)
+
+`step8.py` больше не отправляет отчёт в Telegram — только логирует построчно (`step8.py:37-43`
+построчно по таблицам, `:58-61` агрегаты `big_analytics_full`, `:64` итоговая длительность):
 
 ```
-🟢 big_analytics_v5 pipeline complete
-
-⏱ Длительность шагов:
-  Синхронизация: 12.3s
-  Загрузка RAW: 8.1s
-  Индексы: 5.4s
-  Источники: 124.5s
-  Корректировки: 67.2s
-  Статусы кампаний: 6m 19s
-  big_analytics_full: 89.6s
-  ...
-  Статистика: 4.1s
-Всего: 28m 12s
-
-📊 Объёмы:
-  big_analytics_full: 2,634,521 строк
-  big_analytics_direct: 712,345
-  big_analytics_seo: 14,567
-  big_analytics_crop_targeting: 16,234
-  ...
-
-📈 Воронка (direction='Авто', !пиксель_атрибуц):
-  Расход: 12,345,678 ₽
-  Обращения: 45,678
-  Заявки: 12,345
-  ...
+INFO pipeline.step8:   big_analytics_full: 2634521 строк
+INFO pipeline.step8:   fact_big_analytics: 712345 строк
+...
+INFO pipeline.step8:   full metrics: cost=12345678.0 z=45678 korr=12345 kval=... priezd=... prodazhi=...
+INFO pipeline.step8: Шаг 8 v6_ch завершён за 4.1 сек
 ```
 
-Сообщение > 4096 символов автоматически режется на чанки.
+`STEP_LABELS` и человекочитаемые лейблы шагов в этой папке не существуют — весь пер-шаговый
+итоговый отчёт с длительностями по `STEP_LABELS` был частью старой v5-версии step8, в v6_ch
+он не перенесён. Длительность самого step8 пишет generic `run_step()` из `pipeline.py`, никакого
+self-tracking hack (synthetic entry) в `step8.py` нет.
 
-## STEP_LABELS
+## Telegram — только `funnel_drift_snapshot.py`
 
-Все имена шагов имеют человекочитаемые лейблы:
-
-| Имя шага | Лейбл |
-|----------|-------|
-| `step0` | Синхронизация |
-| `step1` | Загрузка RAW |
-| `step2` | Индексы |
-| `step3` | Источники |
-| `corrections` | Корректировки |
-| `sync_pixel_config` | Конфиг пикселей |
-| `step5` | Пиксели (build_pixel) |
-| `step4` | Статусы кампаний |
-| `step6` | big_analytics_full |
-| `step7` | Финализация |
-| `step9` | История Директа |
-| `step10` | Посевы Telega.in |
-| `load_reviews` | Загрузка отзывов |
-| `load_crop` | Загрузка посевов |
-| `404_errors` | 404 ошибки |
-| `normalize_salons` | Нормализация салонов |
-| `cleanup_old_dates` | Очистка старых дат |
-| `step11` | Атрибуция пикселя (score) |
-| `step11_pixel_score` | Атрибуция пикселя (score) |
-| `step8` | Статистика |
-
-Если шаг отсутствует в `STEP_LABELS` — в отчёте появится сырое имя (`step_NN:`).
-
-## Self-tracking
-
-step8 не может писать свою собственную длительность в `data_quality_log` до формирования отчёта (запись делается после `run_step`). Решение — synthetic entry в `stats['step_durations']`:
+Единственный отправитель Telegram в этой папке — `funnel_drift_snapshot.py::_send_drift_alert()`.
+Он строит HTML-текст и отдаёт его целиком в общий `notifications/telegram.py::send_html()`:
 
 ```python
-durations = list(stats.get('step_durations', []))
-durations.append(('step8', time.perf_counter() - t0))
-stats['step_durations'] = durations
+send_html(text, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+          proxy_variants=TELEGRAM_PROXY_VARIANTS, collapse_whitespace=False, timeout=15)
 ```
 
-## Telegram-прокси
-
-На Victory `api.telegram.org` заблокирован (РФ). Используется `TELEGRAM_PROXY_VARIANTS` из `config/tokens.py`.
-
-Стратегия отправки в `send_telegram()` — ротация цепочки прокси Amsterdam→DE→NL→FR→direct
-(маркер `TG_PROXY_CHAIN_ROTATION_2026-06-17`). Итерирует список вариантов, при успехе возвращает True.
-
-Splitting: `_split_chunks(text, 4096)` — режет по `\n`, чтобы не разорвать слова.
+- Чанкинг >4096 симв. и ротация прокси (`TELEGRAM_PROXY_VARIANTS`, Amsterdam→DE→NL→FR→direct,
+  маркер `TG_PROXY_CHAIN_ROTATION_2026-06-17`) — внутри `send_html()`, локального
+  `_split_chunks`/`_send_one`/`send_telegram()` в этой папке больше нет.
+- `collapse_whitespace=False` — обязателен: без него санитайзер схлопывает отступы иерархии
+  месяц→источник→метрика в один пробел (маркер `WHITESPACE_IS_CONTENT_2026-08-14`).
+- Суммы в тексте — через `format_ru_amount()` (NNBSP-разделитель тысяч, запятая-десятичная),
+  не голый `f'{val:,}'`.
+- `timeout=15` — восстановлен под исходный `requests.post(..., timeout=15)` (после миграции на
+  `send_html` таймаут по умолчанию был 10s).
 
 ## `pipeline_log_snapshot.py`
 
@@ -142,56 +113,50 @@ ON CONFLICT (run_id, month) DO NOTHING
 
 ## Зависимости
 
-- Все предыдущие шаги (записи в `data_quality_log`)
-- `requests` + прокси для Telegram
-- Доступ к 6 таблицам `big_analytics_*`
+- `step8.py`: `config/ch_db.py` (ClickHouse client), `config/ch_utils.py` (`count_rows`/`table_exists`)
+- `pipeline_log_snapshot.py`/`funnel_drift_snapshot.py`: `config/db.py` (Postgres), `requests` + прокси для Telegram (только funnel_drift)
 
 ## Примеры запуска
 
 ```bash
-# Только step8 (для тестирования отчёта):
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 pipeline.py --only-step=8"
+# Только step8 (реальный шаг пайплайна):
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 pipeline.py --only-step=8"
 
 # В составе полного пайплайна:
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 pipeline.py"
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 pipeline.py"
 
-# Только снимок воронки:
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 step8_stats/pipeline_log_snapshot.py"
+# Только снимок воронки (standalone, не часть pipeline.py):
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 step8_stats/pipeline_log_snapshot.py"
 ```
 
 ## Проверки после запуска
 
 ```sql
--- Все шаги попали в лог
-SELECT step_name, duration_sec, status FROM data_quality_log
-WHERE run_id = (SELECT MAX(run_id) FROM data_quality_log)
-ORDER BY started_at;
+-- ClickHouse: все шаги (включая step8) попали в лог за последний run
+-- (запись делает generic run_step() из pipeline.py для КАЖДОГО шага, не step8.py сам)
+SELECT step, duration_sec, status FROM ad_analytics.data_quality_log
+WHERE run_id = (SELECT run_id FROM ad_analytics.data_quality_log ORDER BY run_at DESC LIMIT 1)
+ORDER BY run_at;
+```
 
--- Снимки воронки растут (по run_at)
+```sql
+-- Postgres: снимки воронки растут (по run_at) — только если pipeline_log_snapshot.py запускали вручную
 SELECT run_at, COUNT(*) AS months FROM data_pipeline_log
 GROUP BY 1 ORDER BY 1 DESC LIMIT 10;
 ```
 
-## История фиксов
-
-| Дата | Фикс |
-|------|------|
-| Май 2026 | step8 вынесен в отдельную константу `STEP8_INFO`, запускается последним |
-| Май 2026 | `sync_pixel_config` логируется через явный `log_step()` |
-| 2026-05-20 | Добавлен `pipeline_log_snapshot.py` для виджета "Дельта пайплайна" |
-
 ## Связи
 
-- **Зависит от:** ВСЕ шаги (через `data_quality_log`)
-- **Последний шаг** пайплайна
+- **step8.py:** ClickHouse read-only, независим, стоит последним из содержательных шагов `STEPS`.
+- **pipeline_log_snapshot.py / funnel_drift_snapshot.py:** standalone, вне `pipeline.py::STEPS`.
 
 ## Файлы
 
 | Файл | Описание |
 |------|----------|
-| `step8.py` | Основной скрипт (статистика + Telegram) |
-| `pipeline_log_snapshot.py` | Снимок воронки в `data_pipeline_log` |
-| `funnel_drift_snapshot.py` | Снимок по (month × источник) в `data_funnel_drift_log` + алерт дрейфа |
+| `step8.py` | ClickHouse-статистика (row counts + агрегаты), без Telegram |
+| `pipeline_log_snapshot.py` | Снимок воронки в `data_pipeline_log` (Postgres, standalone) |
+| `funnel_drift_snapshot.py` | Снимок по (month × источник) в `data_funnel_drift_log` + Telegram-алерт дрейфа (Postgres, standalone) |
 | `__init__.py` | Пустой |
 | `CLAUDE.md` | Краткая инструкция для ИИ |
 | `README.md` | Этот файл |

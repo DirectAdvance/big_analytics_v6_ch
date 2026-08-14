@@ -281,7 +281,8 @@ JOIN с `local_domains`:
 - Метрики `kol_vo_zayavok/korr/kval/priezd/prodazhi/nekorr/dohod_do_kredita/dobro`
   считаются во всех витринах (`big_analytics_*`, `analytics_report_placement`).
 - Хардкод (не из таблицы): `ne_otvechaet`, `filtr`, `nedozvon`, `priedet`.
-- Проверка целостности маппингов — `crm_mappings_check/check.py` (Telegram-отчёт: UNUSED / UNMAPPED status / UNMAPPED reason).
+- Проверка целостности маппингов — `crm_mappings_check/check.py` (Telegram-отчёт: UNMAPPED status /
+  UNMAPPED reason; UNUSED считается, но с 2026-08-14 остаётся в логе, в Telegram не идёт).
 
 ---
 

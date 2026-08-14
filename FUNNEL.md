@@ -114,8 +114,10 @@ dobro            = reason category approved
 
 ## Проверка маппингов: crm_mappings_check
 
-Модуль `crm_mappings_check/check.py` запускается автоматически после step12. Шлёт Telegram-отчёт с 3 секциями:
-1. **UNUSED** — маппинги в `raw_data.crm_status_mapping` без записей в leads
+Модуль `crm_mappings_check/check.py` запускается автоматически после step12. Считает 3 сверки, но
+Telegram-отчёт (с 2026-08-14) шлёт только 2 секции — **UNUSED** остаётся в логе (Семён не хочет шум
+по неиспользуемым маппингам), в Telegram не идёт:
+1. (лог, не в Telegram) **UNUSED** — маппинги в `raw_data.crm_status_mapping` без записей в leads
 2. **UNMAPPED status** — статусы в `leads.status` без маппинга в `raw_data.crm_status_mapping`/`CODE_STATUS_CATEGORY`
 3. **UNMAPPED reason** — значения в `leads.reason` без маппинга
 

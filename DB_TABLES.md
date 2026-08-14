@@ -5,6 +5,9 @@
 > см. `CLAUDE.md`, `PIPELINES.md`, `config/ch_settings.py`, `step*_*/README.md` и живые
 > таблицы ClickHouse `raw_data` / `ad_analytics`. Ниже оставлен исторический справочник,
 > полезный только для понимания происхождения v5.
+> В частности, дерево `direct_feed_funnel` ниже описывает старую v5 feed-логику. В v6_ch
+> активный step144 строит `ad_analytics.fact_direct_feed_funnel_light`, а
+> `ad_analytics.fact_direct_feed_funnel` — compatibility view по `Dim_PlacementFeed`.
 
 Актуально на 2026-06-17 для v5. Схемы сверены с реальной БД Victory (`information_schema.columns`).
 
@@ -715,17 +718,15 @@ api.telegram.org → чат 336635373
 # _TG = load_auto_bi_analytics_telegram()
 # TELEGRAM_BOT_TOKEN = _TG['bot_token']  # TG_AUTO_BI_ANALYTICS_BOT
 # TELEGRAM_CHAT_ID   = _TG['chat_id']    # TG_AUTO_BI_ANALYTICS_CHAT, фолбэк на TG_PERSONAL_CHAT если пусто
+# TELEGRAM_PROXY_VARIANTS = tg_proxy_variants()  # ротация прокси
 
-# Функция отправки (шаги 6 и 7):
-def _tg(text: str) -> None:
-    try:
-        requests.post(
-            f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-            json={'chat_id': TELEGRAM_CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
-            timeout=30,
-        )
-    except Exception as e:
-        logger.warning('Telegram недоступен: %s', e)
+# Единый транспорт (с 2026-08-14) — notifications/telegram.py, все 10 call site'ов
+# в 9 файлах идут через него; сырых requests.post(...api.telegram.org...) вне
+# этого модуля не осталось (grep-проверено).
+from notifications.telegram import send_html  # или send_notification(TelegramMessage)
+
+send_html(html_text, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+          proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=15)  # timeout per caller, see COOKIES.md
 ```
 
 ---

@@ -5,7 +5,7 @@
 > For code structure (who calls what, impact radius) use MCP `code-review-graph`;
 > this index is the fallback when the graph is unavailable.
 
-Files indexed: **301**
+Files indexed: **307**
 
 This is a compact root index. Detailed file maps live in child `INDEX.md` files.
 Read the nearest child index first; use this file only to choose the right area.
@@ -22,7 +22,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `COOKIES.md` | 7 | COOKIES.md — куки Яндекс.Директ |
 | `DB_TABLES.md` | 52 | DB_TABLES.md — legacy PostgreSQL table map |
 | `DOD.md` | 17 | DOD — Definition of Done, big_analytics_v5 |
-| `FUNNEL.md` | 11 | FUNNEL.md — воронка заявок (`local_crm_statuses`) |
+| `FUNNEL.md` | 12 | FUNNEL.md — воронка заявок (`raw_data.crm_status_mapping`) |
 | `GOLDEN_BASELINE.md` | 32 | GOLDEN BASELINE — эталонные значения v6_ch |
 | `KNOWN_ISSUES.md` | 69 | KNOWN_ISSUES — big_analytics_v6_ch |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |
@@ -36,13 +36,13 @@ Read the nearest child index first; use this file only to choose the right area.
 | `QUERIES.md` | 9 | QUERIES.md — SQL-шпаргалка |
 | `RAW_DIFF_FINDINGS.md` | 6 | RAW_DIFF_FINDINGS — сырьё v5 ↔ v6_ch |
 | `README.md` | 12 | big_analytics_v6_ch — ClickHouse-пайплайн аналитики |
-| `RUNBOOK.md` | 5 | RUNBOOK.md — v6_ch operations |
+| `RUNBOOK.md` | 6 | RUNBOOK.md — v6_ch operations |
 | `SHEET_RECONCILE.md` | 10 | Сверка с гугл-таблицей «посевы» — FINDINGS + METHODOLOGY |
 | `SHEET_RECONCILE_FINDINGS.md` | 55 | Сверка Google-таблиц салонов ↔ public.fact_big_analytics (контекст) |
 | `SHEET_RECONCILE_METHODOLOGY.md` | 28 | Методика сверки Google-таблиц салонов ↔ витрина (КОНТЕКСТ) |
 | `SPEC.md` | 33 | SPEC — big_analytics v6 на ClickHouse |
 | `STAR_REFACTOR_BRIEF.md` | 14 | ТЗ для director — рефакторинг big_analytics_v5 под звезду (star schema) |
-| `STATE.md` | 11 | big_analytics_v6_ch — Состояние (handoff) |
+| `STATE.md` | 17 | big_analytics_v6_ch — Состояние (handoff) |
 | `STATE_ARCHIVE.md` | 500 | Сессия 2026-07-15 (oleg_programmer — restore-прогон на откаченном коде) — ⚠️ kval НЕ восстановился |
 | `V5_V6_RECONCILE_2026-08-10.md` | 11 | Сверка big_analytics_v6_ch с big_analytics_v5 — 2026-08-10 |
 | `_rebuild_arrival.py` | 1 |  |
@@ -54,10 +54,10 @@ Read the nearest child index first; use this file only to choose the right area.
 | `pipeline.py` | 10 | ClickHouse orchestrator for big_analytics_v6_ch. |
 | `pipeline_mutex.py` | 5 | pipeline_mutex.py — PIPELINE_MUTEX_2026-07-12 |
 | `refresh_cookies.py` | 8 | refresh_cookies.py — автоматическое обновление cookies.json с эндпоинта glavpotok.ru. |
-| `refresh_powerbi.py` | 19 | refresh_powerbi.py — только обновление отчётов Power BI Service. |
+| `refresh_powerbi.py` | 20 | refresh_powerbi.py — только обновление отчётов Power BI Service. |
 | `spec_fallback.py` | 9 | SPEC_FALLBACK_V3_2026-08-06 — пост-проход по пустому `специалист` в `big_analytics_full`. |
 | `sync_replica_incremental.sh` | 3 | bin/bash |
-| `watch_pipeline.py` | 11 | watch_pipeline.py — хвостит /tmp/fast_pipeline.log, детектирует завершение |
+| `watch_pipeline.py` | 12 | watch_pipeline.py — хвостит /tmp/fast_pipeline.log, детектирует завершение |
 
 ## child indexes
 
@@ -80,7 +80,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `step7_finalize/` | `step7_finalize/INDEX.md` | 6 | step7_finalize — Финализация big_analytics_full |
 | `step8_stats/` | `step8_stats/INDEX.md` | 9 | step8_stats — Финальная статистика + Telegram-отчёт |
 | `step_cron_night/` | `step_cron_night/INDEX.md` | 20 | CLAUDE.md — step_cron_night v6_ch |
-| `tests/` | `tests/INDEX.md` | 15 | INDEX — tests |
+| `tests/` | `tests/INDEX.md` | 19 | INDEX — tests |
 
 ## areas without child index
 
@@ -95,6 +95,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `direct_placement_links/` | 2 |
 | `docs/` | 2 |
 | `migrations/` | 2 |
+| `notifications/` | 2 |
 | `region_spend/` | 3 |
 | `sales_attribution/` | 4 |
 | `spend/` | 4 |

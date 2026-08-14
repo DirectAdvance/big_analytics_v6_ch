@@ -1,44 +1,23 @@
-# STEP.md — Шаг 6: Статистика + Telegram-отчёт
+# STEP.md — Шаг 8: ClickHouse-статистика (step8)
 
 ## Что делает
 
-1. Считает строки во всех result-таблицах
-2. Считает агрегаты `big_analytics_full` (заявки, приезды, продажи, расходы, домены)
-3. Отправляет отчёт в Telegram через gateway на хоум сервере
-4. Записывает итог в `data_quality_log`
+1. Считает строки в ClickHouse-таблицах `ad_analytics.*` из списка `TABLES` (`step8.py`) —
+   пропускает отсутствующие через `table_exists()`.
+2. Логирует агрегаты `big_analytics_full` (`sum(total_cost)`, `kol_vo_zayavok`, `korr`, `kval`,
+   `priezd`, `prodazhi`).
+3. Ничего не отправляет в Telegram и не пишет в БД сам — только `logger.info(...)`.
 
-## Telegram gateway
+Длительность/статус шага в `ad_analytics.data_quality_log` пишет общий `run_step()` из
+`pipeline.py` (одинаково для всех шагов, не специфично для step8).
 
-Отправка через HTTP-шлюз на хоум сервере (LXC 101):
-```
-POST http://192.168.0.202:8767/send
-Header: X-API-Key: victory-gateway-key-2026
-Body: {"text": "...", "parse_mode": "HTML"}
-```
-
-Шлюз сам выбирает прокси: PL → DE → NL.  
-Если gateway недоступен — ошибка логируется, пайплайн не падает.
-
-## Пример отчёта
+## Пример лога
 
 ```
-big_analytics_v5 ✅
-15.04.2026 14:23  run_id: a1b2c3d4
-
-Строк в таблицах:
-  full:      2 345 678
-  direct:    1 890 123
-  seo:           45 231
-  telegram:       8 100
-  crop:          12 044
-  pixel:              0
-
-Итого (full):
-  Заявок:    98 432
-  Приездов:   8 901
-  Продаж:     1 234
-  Расходы:   45 678 900 ₽
-  Доменов:         312
-
-Время: 412 сек
+INFO pipeline.step8:   big_analytics_full: 2634521 строк
+INFO pipeline.step8:   full metrics: cost=45678900.0 z=98432 korr=... kval=... priezd=8901 prodazhi=1234
+INFO pipeline.step8: Шаг 8 v6_ch завершён за 4.1 сек
 ```
+
+Никакого HTTP-шлюза / Telegram-gateway в `step8.py` нет — единственный отправитель Telegram в
+этой папке — `funnel_drift_snapshot.py` (standalone, не вызывается из `pipeline.py`), см. `CLAUDE.md`.
