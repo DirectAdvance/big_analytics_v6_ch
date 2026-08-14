@@ -23,7 +23,8 @@ def test_leads_and_calls_use_marcar_sheet_domain_when_it_matches_auto_site():
 def test_build_branches_contains_marcar_orphans_before_pixel():
     branch_names = [name for name, _columns, _sql in step13.build_branches("2026-01-01")]
 
-    assert branch_names == ["leads", "calls", "marcar_orphans", "pixel"]
+    assert branch_names == ["leads", "calls", "marcar_orphans", "perform_posevy_proxy", "pixel"]
+    assert branch_names.index("marcar_orphans") < branch_names.index("pixel")
 
 
 def test_marcar_orphans_branch_adds_unmatched_gsheet_rows_by_source_domain():
