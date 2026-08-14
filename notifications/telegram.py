@@ -8,6 +8,7 @@ fail-closed fallback when an HTML send fails end-to-end (`_post_message`).
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -15,6 +16,8 @@ from html import escape, unescape
 from typing import Callable, Iterable
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 TELEGRAM_MESSAGE_LIMIT = 4096
@@ -474,13 +477,19 @@ def _post_once_per_proxy(
     post: PostFunc,
     timeout: int,
 ) -> bool:
+    last_error: Exception | None = None
     for proxies in proxy_variants:
         try:
             response = post(url, json=payload, timeout=timeout, proxies=proxies)
-        except Exception:
+        except Exception as exc:
+            last_error = exc
+            logger.debug('Telegram send via proxy %r failed, trying next: %s', proxies, exc)
             continue
         if response.ok:
             return True
+        last_error = RuntimeError(f'HTTP {response.status_code}: {response.text[:200]}')
+    if last_error is not None:
+        logger.error('Telegram send failed on every proxy variant, last error: %s', last_error)
     return False
 
 

@@ -444,3 +444,29 @@ def test_reporter_format_report_uses_ru_money_not_python_comma():
     assert f'1{nnbsp}234{nnbsp}567 ₽' in report  # round 2 fix: space before ₽
     assert '567₽' not in report  # no glued-on ₽
     assert '1,234,567' not in report
+
+
+# ── notifications/telegram.py: silent-failure regression guard ─────────────────
+
+def test_post_once_per_proxy_logs_failure_and_cause_when_every_proxy_fails(caplog):
+    # Regression guard for the swallowed `except Exception: continue` that made
+    # a dead Telegram channel invisible (director finding, 2026-08-14): when
+    # every proxy variant fails, the log must say so AND carry the last error.
+    from notifications.telegram import _post_once_per_proxy
+
+    def fake_post(url, json, timeout, proxies):
+        raise ConnectionError('proxy refused connection')
+
+    with caplog.at_level('ERROR', logger='notifications.telegram'):
+        result = _post_once_per_proxy(
+            url='https://api.telegram.org/botX/sendMessage',
+            payload={'chat_id': '1', 'text': 'hi'},
+            proxy_variants=[{'https': 'socks5://a'}, {'https': 'socks5://b'}],
+            post=fake_post,
+            timeout=5,
+        )
+
+    assert result is False
+    error_records = [r for r in caplog.records if r.levelname == 'ERROR']
+    assert len(error_records) == 1  # one summary line, not one per attempt
+    assert 'proxy refused connection' in error_records[0].getMessage()
