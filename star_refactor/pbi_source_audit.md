@@ -1,5 +1,17 @@
 # PBI Source Audit
 
+## 2026-08-14 v6_ch direct placement light fact
+
+- Step144 `direct_feed_funnel.build` now treats the old feed-funnel name as a compatibility
+  surface for the Direct placement aggregate.
+- Physical storage is `ad_analytics.fact_direct_feed_funnel_light`; it keeps
+  `placement_feed_key_hash` and metric columns. `ad_analytics.fact_direct_feed_funnel` is a
+  compatibility view that restores `placement_feed_key` through `Dim_PlacementFeed`.
+- `Dim_PlacementFeed` is rebuilt inside step144 before the compatibility view is swapped, so
+  `--only-step=144` does not depend on a later PBI compatibility step.
+- Verified after rerun: `fact_direct_feed_funnel_light=13,246,925`,
+  `fact_direct_feed_funnel=13,246,925`, `Dim_PlacementFeed=34,929`.
+
 ## 2026-08-08 v6_ch account/CRM/salon star cleanup
 
 - `Dim_Account`, `Dim_CRMStatus`, `Dim_Salon` promoted to first-class star dimensions:

@@ -19,7 +19,8 @@ Implemented in code, to be run only after ClickHouse is healthy:
 - `ad_analytics.pbi_import_big_analytics_full` -> `pbi_big_analytics_full` view.
 - `ad_analytics.pbi_import_fact_direct_feed_funnel` -> `arf_fact` and `bi_fact_direct_feed_funnel`.
 - `ad_analytics.pbi_import_region_spend` -> `bi_fact_region_spend`.
-- `ad_analytics.arp_fact` is physical, built from `fact_direct_feed_funnel` in daily batches.
+- `ad_analytics.pbi_import_fact_direct_feed_funnel` is physical; Direct placement import reads
+  the compatibility `fact_direct_feed_funnel` view over `fact_direct_feed_funnel_light`.
 
 These layers keep existing Power BI object names stable and avoid recomputing heavy views during refresh.
 
@@ -279,12 +280,13 @@ target `count()`:
 - `region_spend/build_region_spend.py`: `fact_region_spend`.
 - `adformat_spend/build_adformat_spend.py`: `fact_adformat_spend`.
 - `criterion_spend/build_criterion_spend.py`: `fact_criterion_spend`.
-- `direct_feed_funnel/build.py`: `fact_direct_feed_funnel`.
+- `direct_feed_funnel/build.py`: `fact_direct_feed_funnel_light` plus compatibility view
+  `fact_direct_feed_funnel`.
 - `star_refactor/build_star.py`: `fact_big_analytics`, `fact_ml_korrektirovki`, `fact_vk_ads`.
 - `star_refactor/build_pbi_compat.py`: `pbi_import_big_analytics_full`,
   `pbi_import_fact_direct_feed_funnel`, `pbi_import_region_spend`, `arp_fact`.
-- `star_refactor/build_pbi_compat.py`: `Dim_PlacementFeed` now uses daily staging,
-  then final aggregation over the staged key set.
+- `direct_feed_funnel/build.py`: `Dim_PlacementFeed` is rebuilt before swapping
+  `fact_direct_feed_funnel`, so `--only-step=144` is self-contained.
 
 Guardrails now applied centrally:
 

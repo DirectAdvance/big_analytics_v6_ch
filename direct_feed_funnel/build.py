@@ -1,4 +1,4 @@
-"""Build ClickHouse `fact_direct_feed_funnel` from raw report rows.
+"""Build ClickHouse Direct placement aggregate with a feed-funnel compatibility name.
 
 ⚠️ FEED_FUNNEL_NOT_PORTED_2026-08-05 — это НЕ воронка по фидам, это агрегат по площадкам РСЯ.
 
@@ -17,7 +17,7 @@
   • CRM-база shadow orders (`load_db('shadow_orders')` → `public.orders`) — лидовая сторона,
     из неё вытаскивается `fid` из `entry_point`.
 
-Пока эти источники не появятся в `raw_data`, таблицу нельзя считать витриной фидов —
+Пока эти источники не появятся в `raw_data`, compatibility view нельзя считать витриной фидов —
 и её нельзя чинить правкой этого файла. Замену источников не выдумывать.
 """
 
@@ -32,10 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow
 from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
+from star_refactor.build_pbi_compat import build_dim_placement_feed
 
 logger = logging.getLogger("pipeline.direct_feed_funnel")
+LIGHT_TABLE = "ad_analytics.fact_direct_feed_funnel_light"
+COMPAT_VIEW = "ad_analytics.fact_direct_feed_funnel"
 
 
 def _site_key_sql(expr: str = "domain") -> str:
@@ -50,13 +53,13 @@ def fact_direct_feed_funnel_create_sql(target: str) -> str:
         CREATE TABLE {target}
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(date)
-        ORDER BY (date, campaign_id, ad_group_id, placement_feed_key, site_key)
+        ORDER BY (date, campaign_id, ad_group_id, placement_feed_key_hash, site_key)
         AS
         SELECT
             toDate('2026-01-01') AS date,
             toInt64(0) AS campaign_id,
             toInt64(0) AS ad_group_id,
-            '' AS placement_feed_key,
+            toUInt64(0) AS placement_feed_key_hash,
             CAST(NULL, 'Nullable(String)') AS domain,
             CAST(NULL, 'Nullable(String)') AS account_login,
             toUInt64(0) AS site_key,
@@ -77,7 +80,7 @@ def fact_direct_feed_funnel_insert_sql(target: str, lo: str, hi: str) -> str:
             date,
             campaign_id,
             ad_group_id,
-            placement_feed_key,
+            cityHash64(placement_feed_key) AS placement_feed_key_hash,
             anyLast(domain) AS domain,
             account_login,
             site_key,
@@ -107,16 +110,45 @@ def fact_direct_feed_funnel_insert_sql(target: str, lo: str, hi: str) -> str:
             WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
         )
         WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
-        GROUP BY date, campaign_id, ad_group_id, placement_feed_key, account_login, site_key
+        GROUP BY date, campaign_id, ad_group_id, placement_feed_key_hash, account_login, site_key
+    """
+
+
+def fact_direct_feed_funnel_view_sql(source: str = LIGHT_TABLE) -> str:
+    return f"""
+        WITH placement_feed AS
+        (
+            SELECT
+                cityHash64(placement_feed_key) AS placement_feed_key_hash,
+                anyLast(placement_feed_key) AS placement_feed_key_value
+            FROM ad_analytics.Dim_PlacementFeed
+            GROUP BY placement_feed_key_hash
+        )
+        SELECT
+            f.date,
+            f.campaign_id,
+            f.ad_group_id,
+            ifNull(pf.placement_feed_key_value, '') AS placement_feed_key,
+            f.domain,
+            f.account_login,
+            f.site_key,
+            f.cost,
+            f.clicks,
+            f.impressions,
+            f.all_forms,
+            f.crm_order_created,
+            f.crm_order_paid
+        FROM {source} f
+        LEFT JOIN placement_feed pf ON pf.placement_feed_key_hash = f.placement_feed_key_hash
     """
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
-    logger.info("direct_feed_funnel v6_ch: fact_direct_feed_funnel")
+    logger.info("direct_feed_funnel v6_ch: fact_direct_feed_funnel_light + compatibility view")
     client = get_client()
     t0 = time.perf_counter()
     ensure_staging(client)
-    shadow = "ad_analytics.fact_direct_feed_funnel_new"
+    shadow = "ad_analytics.fact_direct_feed_funnel_light_new"
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
     client.command(
         fact_direct_feed_funnel_create_sql(shadow),
@@ -129,10 +161,22 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             settings=SAFE_QUERY_SETTINGS,
         )
         logger.info("  direct_feed daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
-    swap_shadow(client, "ad_analytics.fact_direct_feed_funnel", shadow)
-    rows = count_rows(client, "ad_analytics.fact_direct_feed_funnel")
-    logger.info("direct_feed_funnel v6_ch завершён за %.1f сек: rows=%d", time.perf_counter() - t0, rows)
-    return {"rows": rows, "details": f"fact_direct_feed_funnel={rows:,}"}
+    swap_shadow(client, LIGHT_TABLE, shadow)
+    dim_rows = build_dim_placement_feed(client)
+    replace_view(client, COMPAT_VIEW, fact_direct_feed_funnel_view_sql())
+    rows = count_rows(client, COMPAT_VIEW)
+    light_rows = count_rows(client, LIGHT_TABLE)
+    logger.info(
+        "direct_feed_funnel v6_ch завершён за %.1f сек: light_rows=%d view_rows=%d dim_rows=%d",
+        time.perf_counter() - t0,
+        light_rows,
+        rows,
+        dim_rows,
+    )
+    return {
+        "rows": rows,
+        "details": f"fact_direct_feed_funnel_light={light_rows:,}, view={rows:,}, Dim_PlacementFeed={dim_rows:,}",
+    }
 
 
 if __name__ == "__main__":

@@ -143,8 +143,10 @@ step 145). Актуальные инварианты и открытые рас�
 
 ## Отдельные витрины
 
-`direct_feed_funnel/` — ClickHouse-витрина фидовой воронки. Активный шаг:
-`direct_feed_funnel.build`, вызывается из корневого `pipeline.py` как step 144.
+`direct_feed_funnel/` — ClickHouse-витрина площадок РСЯ/Direct placement с историческим
+именем feed funnel. Активный шаг: `direct_feed_funnel.build`, вызывается из корневого
+`pipeline.py` как step 144. Физический факт — `fact_direct_feed_funnel_light`; старое имя
+`fact_direct_feed_funnel` оставлено как compatibility view.
 Старые v5 helper-скрипты перенесены в `archive/postgres_legacy_2026_07_31/`.
 Подробности: [`direct_feed_funnel/README.md`](direct_feed_funnel/README.md).
 

@@ -68,7 +68,7 @@ FDW и `VACUUM` относятся к v5/legacy и не являются инс�
 | 141 | `region_spend.build_region_spend` | `region_spend` | `fact_region_spend`. |
 | 142 | `adformat_spend.build_adformat_spend` | `adformat_spend` | `fact_adformat_spend`. |
 | 143 | `criterion_spend.build_criterion_spend` | `criterion_spend` | `fact_criterion_spend`. |
-| 144 | `direct_feed_funnel.build` | `direct_feed_funnel` | `fact_direct_feed_funnel`. |
+| 144 | `direct_feed_funnel.build` | `direct_feed_funnel` | Площадки РСЯ/Direct placement: физическая `fact_direct_feed_funnel_light`, compatibility view `fact_direct_feed_funnel`, обновление `Dim_PlacementFeed`. |
 | 1431 | `region_spend.build_region_zayavki` | `region_zayavki` | Заявочная воронка по регионам. |
 | 1432 | `criterion_spend.build_criterion_zayavki` | `criterion_zayavki` | Заявочная воронка по критериям. |
 | 145 | `star_refactor.build_star` | `build_star` | `fact_big_analytics`, `Dim_*`, `arp_fact`, `fact_vk_ads`. |

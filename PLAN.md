@@ -258,7 +258,9 @@ CH поддерживает большинство оконных функций
 - [x] `step11_pixel_score`: `Decimal(18,6)` сохраняется; pixel_score и доливка в full идут батчами.
 - [x] `build_unified.py`: `full + arrival` собирается batch `UNION`-слоем.
 - [x] Spend-датамарты `region_spend`, `adformat_spend`, `criterion_spend` переведены на CH batch rebuild.
-- [x] `direct_feed_funnel/`: фидовая воронка построена из текущего CH raw/report rows.
+- [x] `direct_feed_funnel/`: текущая v6_ch витрина площадок РСЯ/Direct placement построена из
+      `direct_spend_staging`; физический факт `fact_direct_feed_funnel_light`, старое имя
+      `fact_direct_feed_funnel` оставлено как compatibility view.
 
 ### Этап 5. Звёздная схема для Power BI — ✅ выполнено 2026-07-30 (Codex)
 

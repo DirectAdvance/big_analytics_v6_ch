@@ -9,6 +9,10 @@
 > **Назначение legacy-раздела.** Исторически фиксировал, какие именно таблицы PostgreSQL
 > подтягивал Power BI как источник данных, чтобы к вопросу «а что грузится в PBI?»
 > больше не возвращаться.
+> Строки про `public.fact_direct_feed_funnel`, `feed_url` и ручную переливку ниже относятся к
+> старому PostgreSQL/v5-контракту. В активном v6_ch контуре step144 строит ClickHouse
+> `ad_analytics.fact_direct_feed_funnel_light`, а `ad_analytics.fact_direct_feed_funnel`
+> является compatibility view через `Dim_PlacementFeed`.
 >
 > **Authoritative-источник списка** — массив `_ALL_TABLES` в
 > [`refresh_powerbi.py`](refresh_powerbi.py) (строки 193–204). Именно эти таблицы

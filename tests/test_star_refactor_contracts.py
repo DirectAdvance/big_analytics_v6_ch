@@ -1,3 +1,5 @@
+import inspect
+
 import pipeline
 from data_check import verify_big_analytics
 from star_refactor import build_pbi_compat, build_star, build_star_extensions, cleanup_wide_intermediates
@@ -97,8 +99,25 @@ def test_direct_feed_fact_materializes_site_key():
     insert_sql = direct_feed_build.fact_direct_feed_funnel_insert_sql("target", "2026-01-01", "2026-01-02")
 
     assert "toUInt64(0) AS site_key" in create_sql
+    assert "toUInt64(0) AS placement_feed_key_hash" in create_sql
     assert "AS site_key" in insert_sql
-    assert "GROUP BY date, campaign_id, ad_group_id, placement_feed_key, account_login, site_key" in insert_sql
+    assert "cityHash64(placement_feed_key) AS placement_feed_key_hash" in insert_sql
+    assert "GROUP BY date, campaign_id, ad_group_id, placement_feed_key_hash, account_login, site_key" in insert_sql
+
+
+def test_direct_feed_fact_view_restores_placement_key_from_dimension():
+    sql = direct_feed_build.fact_direct_feed_funnel_view_sql("source_table")
+
+    assert "FROM source_table f" in sql
+    assert "FROM ad_analytics.Dim_PlacementFeed" in sql
+    assert "ifNull(pf.placement_feed_key_value, '') AS placement_feed_key" in sql
+    assert "LEFT JOIN placement_feed pf ON pf.placement_feed_key_hash = f.placement_feed_key_hash" in sql
+
+
+def test_direct_feed_builds_placement_dimension_before_compat_view():
+    source = inspect.getsource(direct_feed_build.run)
+
+    assert source.index("build_dim_placement_feed(client)") < source.index("replace_view(")
 
 
 def test_direct_feed_pbi_view_joins_dim_site_by_materialized_site_key():
