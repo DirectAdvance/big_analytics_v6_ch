@@ -5,6 +5,7 @@ idna==3.18
 lz4==4.4.5
 packaging==26.3
 psycopg2-binary==2.9.12
+PySocks==1.7.1
 pytz==2026.3.post1
 requests==2.32.5
 urllib3==2.6.3
