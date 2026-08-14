@@ -337,7 +337,7 @@ def build() -> None:
                     FROM public.yandex_direct_feeds_report r
                     LEFT JOIN LATERAL (
                         SELECT d.feed_key AS feed_url_key
-                        FROM public.direct_global_feed_rules d
+                        FROM direct_automation.direct_global_feed_rules d
                         WHERE lower(coalesce(r.feed_name, '')) LIKE '%' || lower(regexp_replace(d.feed_key, '[.]xml$', '')) || '%'
                         ORDER BY length(regexp_replace(d.feed_key, '[.]xml$', '')) DESC, d.feed_key
                         LIMIT 1

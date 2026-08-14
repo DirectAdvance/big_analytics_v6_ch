@@ -91,19 +91,6 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
                 anyLast(`CampaignName`) AS campaign_name
             FROM ad_analytics.raw_yandex
             GROUP BY `CampaignId`
-        ),
-        locations AS
-        (
-            SELECT
-                id_location,
-                anyLast(location) AS location,
-                anyLast(`Область`) AS `Область`,
-                anyLast(GeoRegionType) AS GeoRegionType,
-                toInt32OrNull(toString(round(anyLast(distance_km)))) AS distance_km,
-                anyLast(distance_km_agreg) AS distance_km_agreg
-            FROM ad_analytics.fact_region_spend
-            WHERE id_location IS NOT NULL
-            GROUP BY id_location
         )
         SELECT
             toString(cityHash64(toString(a.created_date), ifNull(a.campaign_id, 0), ifNull(a.id_location, 0))) AS row_hash,
@@ -111,11 +98,6 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             a.campaign_id AS campaign_id,
             cn.campaign_name,
             a.id_location AS id_location,
-            loc.location,
-            loc.`Область`,
-            loc.GeoRegionType,
-            loc.distance_km,
-            loc.distance_km_agreg,
             CAST(a.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
             a.domain_id AS domain_id,
             a.kol_vo_zayavok,
@@ -133,7 +115,6 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             now() AS updated_at
         FROM agg a
         LEFT JOIN campaign_names cn ON cn.campaign_id = a.campaign_id
-        LEFT JOIN locations loc ON loc.id_location = a.id_location
         """
     )
     swap_shadow(client, "ad_analytics.fact_region_zayavki", shadow)
