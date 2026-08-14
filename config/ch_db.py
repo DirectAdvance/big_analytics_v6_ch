@@ -8,6 +8,8 @@ Managed ClickHouse Yandex Cloud использует сертификат Yandex
 from __future__ import annotations
 
 import sys
+import os
+import time
 import urllib.request
 from pathlib import Path
 
@@ -39,15 +41,27 @@ def get_client(database: str | None = None) -> Client:
     Явно передать 'raw_data' для чтения сырых источников.
     """
     db = load_db("victory_clickhouse")
-    return clickhouse_connect.get_client(
-        host=db["host"],
-        port=db["port"],
-        username=db["user"],
-        password=db["password"],
-        database=database or db["database"],
-        secure=True,
-        ca_cert=get_ca_cert_path(),
-    )
+    attempts = int(os.getenv("CH_CONNECT_ATTEMPTS", "5"))
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return clickhouse_connect.get_client(
+                host=db["host"],
+                port=db["port"],
+                username=db["user"],
+                password=db["password"],
+                database=database or db["database"],
+                secure=True,
+                ca_cert=get_ca_cert_path(),
+                connect_timeout=int(os.getenv("CH_CONNECT_TIMEOUT", "30")),
+                send_receive_timeout=int(os.getenv("CH_SEND_RECEIVE_TIMEOUT", "300")),
+            )
+        except Exception as exc:
+            last_error = exc
+            if attempt == attempts:
+                raise
+            time.sleep(min(5 * attempt, 30))
+    raise RuntimeError("ClickHouse client connection failed") from last_error
 
 
 if __name__ == "__main__":

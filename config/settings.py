@@ -38,6 +38,13 @@ BATCH_RETRIES = 5                 # попыток при сбое батча
 BATCH_RETRY_PAUSE = 10            # пауза между попытками (сек)
 
 # ── Исключения ────────────────────────────────────────────────────────────────
+# ⚠️ ЛЕГАСИ, НЕ ДЛЯ КОНТУРА CLICKHOUSE: это PG-копия под v5-нумерацию `domain_id` (буквально
+# скопирована при форке из work/big_analytics_v5/config/settings.py). Числовой domain_id
+# НЕ переносится между PostgreSQL (v5) и ClickHouse (v6) — своя нумерация в каждой системе
+# (см. KNOWN_ISSUES.md #33). Актуальный фильтр ClickHouse-контура — ИМЕНА доменов,
+# `config/ch_settings.py::EXCLUDED_DOMAIN_NAMES`, используется `step1_load_raw/step1.py`.
+# У этой константы (`EXCLUDED_DOMAIN_IDS`) на 2026-08-06 нет активных потребителей в v6_ch —
+# не переиспользовать её вслепую для ClickHouse-фильтрации.
 EXCLUDED_DOMAIN_IDS = (1645, 883)  # 1645=priezd shared key3; 883=victory-crm.ru (не клиент)
 
 # ── PostgreSQL оптимизация ────────────────────────────────────────────────────

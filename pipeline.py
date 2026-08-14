@@ -44,25 +44,32 @@ STEPS = [
     (12, "step12_proverka_big_analytics.step12", "step12"),
     (13, "step13_arrival.step13", "step13"),
     (131, "step13_arrival.build_unified", "build_unified"),
+    (139, "direct_placement_links.build", "direct_placement_links"),
+    (140, "spend.build_direct_spend_staging", "direct_spend_staging"),
     (141, "region_spend.build_region_spend", "region_spend"),
     (142, "adformat_spend.build_adformat_spend", "adformat_spend"),
     (143, "criterion_spend.build_criterion_spend", "criterion_spend"),
+    (144, "direct_feed_funnel.build", "direct_feed_funnel"),
     (1431, "region_spend.build_region_zayavki", "region_zayavki"),
     (1432, "criterion_spend.build_criterion_zayavki", "criterion_zayavki"),
-    (144, "direct_feed_funnel.build", "direct_feed_funnel"),
     (145, "star_refactor.build_star", "build_star"),
     (1451, "star_refactor.build_star_extensions", "build_star_extensions"),
     (148, "star_refactor.cleanup_wide_intermediates", "cleanup_wide_intermediates"),
     (146, "star_refactor.build_pbi_compat", "build_pbi_compat"),
+    (147, "spend.cleanup_direct_spend_staging", "direct_spend_staging_cleanup"),
     (14, "step14_minus_snapshot.step14", "step14"),
     (8, "step8_stats.step8", "step8"),
     (900, "data_check.verify_big_analytics", "verify"),
 ]
 
 MAINTENANCE_STEPS = {2, 7}
-HEAVY_PBI_STEPS = {141, 142, 143, 1431, 1432, 144, 145, 1451, 146, 148}
+HEAVY_PBI_STEPS = {140, 141, 142, 143, 1431, 1432, 144, 145, 1451, 146, 147, 148}
+NIGHTLY_DEFAULT_STEPS = {14}
 PARALLEL_BACKGROUND_STEPS = {14}
 STEP14_START_AT = {13, 131, 141, 142, 143, 1431, 1432, 144, 145, 1451, 146, 14, 8, 900}
+DIRECT_STAGING_CONSUMERS = {141, 142, 143, 144, 146}
+DIRECT_PLACEMENT_LINKS_STEP = 139
+DIRECT_STAGING_STEP = 140
 
 
 def ensure_quality_log(client) -> None:
@@ -139,12 +146,15 @@ def selected_steps(
     only_step: int | None,
     include_maintenance: bool,
     skip_heavy_pbi: bool,
+    include_nightly: bool,
 ):
     if only_step is not None:
         return [item for item in STEPS if item[0] == only_step]
     skip_steps = set()
     if skip_heavy_pbi:
         skip_steps.update(HEAVY_PBI_STEPS)
+    if not include_nightly:
+        skip_steps.update(NIGHTLY_DEFAULT_STEPS)
     if from_step is not None:
         selected = []
         started = False
@@ -153,6 +163,16 @@ def selected_steps(
                 started = True
             if started and item[0] not in skip_steps and (include_maintenance or item[0] not in MAINTENANCE_STEPS):
                 selected.append(item)
+        dependency_steps = []
+        if any(item[0] in DIRECT_STAGING_CONSUMERS for item in selected) and not any(
+            item[0] == DIRECT_PLACEMENT_LINKS_STEP for item in selected
+        ):
+            dependency_steps.append(next(item for item in STEPS if item[0] == DIRECT_PLACEMENT_LINKS_STEP))
+        if any(item[0] in DIRECT_STAGING_CONSUMERS for item in selected) and not any(
+            item[0] == DIRECT_STAGING_STEP for item in selected
+        ):
+            dependency_steps.append(next(item for item in STEPS if item[0] == DIRECT_STAGING_STEP))
+        selected = dependency_steps + selected
         return selected
     if include_maintenance:
         return [item for item in STEPS if item[0] not in skip_steps]
@@ -164,6 +184,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from-step", type=int)
     parser.add_argument("--only-step", type=int)
     parser.add_argument("--include-maintenance", action="store_true")
+    parser.add_argument(
+        "--include-nightly",
+        action="store_true",
+        default=os.getenv("PIPELINE_INCLUDE_NIGHTLY", "").lower() in {"1", "true", "yes"},
+        help="Include API/diagnostic steps that normally run from step_cron_night/pipeline_night.py.",
+    )
     parser.add_argument(
         "--skip-heavy-pbi",
         action="store_true",
@@ -186,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     failed = False
     if args.skip_heavy_pbi:
         logger.info("skip-heavy-pbi enabled: пропускаю шаги %s", sorted(HEAVY_PBI_STEPS))
+    if not args.include_nightly and args.only_step is None:
+        logger.info("nightly-default steps excluded: %s", sorted(NIGHTLY_DEFAULT_STEPS))
     parallel_safe = not args.no_parallel_safe and args.only_step is None
     if parallel_safe:
         logger.info("parallel-safe enabled: step14 can run in background")
@@ -195,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         args.only_step,
         args.include_maintenance,
         args.skip_heavy_pbi,
+        args.include_nightly,
     )
     step14_item = next((item for item in steps if item[0] == 14), None)
     step14_future: concurrent.futures.Future | None = None
