@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import count_rows, swap_shadow
+from criterion_spend.build_criterion_spend import CRITERION_CLEAN
 from step3_build_sources.step3 import _metric_expr
 
 logger = logging.getLogger("pipeline.build_criterion_zayavki")
@@ -115,11 +116,31 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         criterion_dim AS
         (
             SELECT
-                lower(criterion) AS criterion_key,
+                lowerUTF8(trim(BOTH ' ' FROM criterion_norm)) AS criterion_key,
                 anyLast(criterion_type) AS criterion_type,
                 anyLast(criterion_raw) AS criterion_raw
-            FROM ad_analytics.fact_criterion_spend
-            WHERE notEmpty(criterion)
+            FROM
+            (
+                SELECT
+                    criterion_norm,
+                    criterion_raw,
+                    multiIf(
+                        positionCaseInsensitive(criterion_norm, 'autotargeting') > 0, 'autotargeting',
+                        positionCaseInsensitive(criterion_norm, 'ретаргетинг') > 0, 'retargeting',
+                        positionCaseInsensitive(criterion_norm, 'интерес') > 0 OR positionCaseInsensitive(criterion_norm, 'привычк') > 0, 'interests',
+                        'keyword'
+                    ) AS criterion_type
+                FROM
+                (
+                    SELECT
+                        {CRITERION_CLEAN} AS criterion_norm,
+                        criterion AS criterion_raw
+                    FROM raw_data.yandex_direct_report_rows
+                    WHERE toDate(day) >= toDate('{DATE_FROM}')
+                      AND campaign_id != 0
+                )
+            )
+            WHERE notEmpty(lowerUTF8(trim(BOTH ' ' FROM criterion_norm)))
             GROUP BY criterion_key
         )
         SELECT
@@ -149,7 +170,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             now() AS updated_at
         FROM agg a
         LEFT JOIN campaign_names cn ON cn.campaign_id = a.campaign_id
-        LEFT JOIN criterion_dim cd ON cd.criterion_key = lower(ifNull(a.criterion, ''))
+        LEFT JOIN criterion_dim cd ON cd.criterion_key = lowerUTF8(trim(BOTH ' ' FROM ifNull(a.criterion, '')))
         """
     )
     swap_shadow(client, "ad_analytics.fact_criterion_zayavki", shadow)

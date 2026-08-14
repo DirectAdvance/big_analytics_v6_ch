@@ -12,28 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
+from criterion_spend.cleaning import CRITERION_CLEAN
+from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
 
 logger = logging.getLogger("pipeline.criterion_spend")
-
-CRITERION_CLEAN = """
-trim(replaceRegexpAll(
-    replaceRegexpAll(
-        replaceRegexpAll(
-            replaceAll(replaceAll(replaceAll(ifNull(criterion, ''), '\u00a0', ' '), '\u202f', ' '), '\u2009', ' '),
-            '^-+',
-            ''
-        ),
-        '\\\\s+-.*$', ''
-    ),
-    '[!+\\\\[\\\\]]', ''
-))
-"""
-
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     logger.info("criterion_spend v6_ch: fact_criterion_spend")
     client = get_client()
     t0 = time.perf_counter()
+    ensure_staging(client)
     shadow = "ad_analytics.fact_criterion_spend_new"
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
     client.command(
@@ -41,29 +29,20 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         CREATE TABLE {shadow}
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(date)
-        ORDER BY (date, campaign_id, ad_group_id, ifNull(criterion_id, 0), criterion)
+        ORDER BY (date, campaign_id, ad_group_id, ad_network_type_key, ifNull(criterion_id, 0), criterion_key)
         AS
         SELECT
             toDate('2026-01-01') AS date,
-            toString(cityHash64('')) AS row_hash,
             toInt64(0) AS campaign_id,
-            CAST(NULL, 'Nullable(String)') AS campaign_name,
             toInt64(0) AS ad_group_id,
-            CAST(NULL, 'Nullable(String)') AS ad_group_name,
-            CAST(NULL, 'Nullable(String)') AS ad_network_type,
+            CAST('', 'String') AS ad_network_type_key,
             CAST(NULL, 'Nullable(Int64)') AS criterion_id,
-            '' AS criterion,
-            CAST(NULL, 'Nullable(String)') AS criterion_raw,
-            '' AS criterion_type,
+            toUInt64(0) AS criterion_key,
             toDecimal64(0, 6) AS cost,
             toDecimal64(0, 6) AS clicks,
             toDecimal64(0, 6) AS impressions,
             CAST(NULL, 'Nullable(String)') AS account_login,
-            CAST(NULL, 'Nullable(String)') AS domain,
-            CAST(NULL, 'Nullable(String)') AS `специалист`,
-            CAST(NULL, 'Nullable(String)') AS `салон`,
-            CAST(NULL, 'Nullable(String)') AS `город`,
-            CAST(NULL, 'Nullable(String)') AS `регион`
+            toUInt64(0) AS site_key
         WHERE 0
         """,
         settings=SAFE_QUERY_SETTINGS,
@@ -73,44 +52,26 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         client.command(
             f"""
             INSERT INTO {shadow}
-            WITH cleaned AS
-            (
-                SELECT
-                    *,
-                    {CRITERION_CLEAN} AS criterion_norm
-                FROM raw_data.yandex_direct_report_rows
-                WHERE toDate(day) >= toDate('{lo}') AND toDate(day) < toDate('{hi}')
-                  AND campaign_id != 0
-            )
             SELECT
-                toDate(day) AS date,
-                toString(cityHash64(toString(toDate(day)), campaign_id, ifNull(ad_group_id, 0), ifNull(ad_network_type, ''), ifNull(criterion_id, 0), criterion_norm)) AS row_hash,
+                date,
                 campaign_id,
-                anyLast(campaign_name) AS campaign_name,
-                ifNull(ad_group_id, 0) AS ad_group_id,
-                anyLast(ad_group_name) AS ad_group_name,
-                ad_network_type,
+                ad_group_id,
+                lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
                 criterion_id,
-                criterion_norm AS criterion,
-                anyLast(criterion) AS criterion_raw,
-                multiIf(
-                    positionCaseInsensitive(criterion_norm, 'autotargeting') > 0, 'autotargeting',
-                    positionCaseInsensitive(criterion_norm, 'ретаргетинг') > 0, 'retargeting',
-                    positionCaseInsensitive(criterion_norm, 'интерес') > 0 OR positionCaseInsensitive(criterion_norm, 'привычк') > 0, 'interests',
-                    'keyword'
-                ) AS criterion_type,
-                toDecimal64(sum(ifNull(total_cost, 0)), 6) AS cost,
-                toDecimal64(sum(ifNull(clicks, 0)), 6) AS clicks,
-                toDecimal64(sum(ifNull(impressions, 0)), 6) AS impressions,
-                client_login AS account_login,
-                anyLast(gs.domain) AS domain,
-                anyLast(gs.directologist) AS `специалист`,
-                anyLast(gs.salon) AS `салон`,
-                anyLast(gs.city) AS `город`,
-                anyLast(gs.region) AS `регион`
-            FROM cleaned y
-            LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(y.client_login)
-            GROUP BY date, campaign_id, ad_group_id, ad_network_type, criterion_id, criterion_norm, client_login
+                criterion_key,
+                toDecimal64(sum(cost), 6) AS cost,
+                toDecimal64(sum(clicks), 6) AS clicks,
+                toDecimal64(sum(impressions), 6) AS impressions,
+                account_login,
+                if(
+                    notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(anyLast(gs.domain), '')))),
+                    cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(anyLast(gs.domain), '')))),
+                    toUInt64(0)
+                ) AS site_key
+            FROM {STAGING_TABLE} y
+            LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(y.account_login)
+            WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
+            GROUP BY date, campaign_id, ad_group_id, ad_network_type_key, criterion_id, criterion_norm, criterion_key, account_login
             """,
             settings=SAFE_QUERY_SETTINGS,
         )

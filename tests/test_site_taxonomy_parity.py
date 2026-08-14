@@ -44,6 +44,14 @@ def test_perform_vk_has_dedicated_source_branch() -> None:
     assert "'avto_0415'" in vk_sql
 
 
+def test_reviews_without_site_get_stable_domain() -> None:
+    source = inspect.getsource(step3._fetch_reviews_rows_from_postgres)
+
+    assert "AS review_domain" in source
+    assert "'reviews-' || REPLACE(LOWER(TRIM(COALESCE(r.login, 'unknown'))), '_', '-') || '.local'" in source
+    assert "COALESCE(r.login, '') || '|' || COALESCE(r.review_domain, '')" in source
+
+
 def test_perform_api_uses_live_crm_status_mapping() -> None:
     coverage_source = inspect.getsource(step3.check_crm_mapping_coverage)
 

@@ -32,7 +32,8 @@ step10/step11 и до step12/step13, чтобы `big_analytics_full_arrival` и 
 -------------------
 1. `directologist` из `raw_data.gsheet_sites` по домену (реальный специалист);
 2. `direction_main` оттуда же (канал: SEO / Контекст / Посевы / …);
-3. `'Звонки'` — для `campaign_code = 'звонки'` без связки в gsheet;
+3. `'Звонки'` — для `campaign_code = 'звонки'` или фактических `_source_table='calls'`
+   без связки в gsheet;
 4. `'Без специалиста'` — последний resort.
 
 Идемпотентность и область
@@ -73,6 +74,10 @@ def _empty_spec(alias: str = "") -> str:
     return f"ifNull(trim({prefix}`специалист`), '') = ''"
 
 
+def _is_calls_expr(alias: str = "s") -> str:
+    return f"(ifNull({alias}.campaign_code, '') = 'звонки' OR {alias}.`_source_table` = 'calls')"
+
+
 def _fallback_expr(alias: str = "s", gs: str = "gsp") -> str:
     """Каскад v5 `apply_spec_fallback_v3`. Пустое значение → gsheet → канал → дефолт."""
     return (
@@ -80,7 +85,7 @@ def _fallback_expr(alias: str = "s", gs: str = "gsp") -> str:
         "coalesce("
         f"nullIf(trim(ifNull({gs}.directologist, '')), ''), "
         f"nullIf(trim(ifNull({gs}.direction_main, '')), ''), "
-        f"if(ifNull({alias}.campaign_code, '') = 'звонки', 'Звонки', 'Без специалиста')), "
+        f"if({_is_calls_expr(alias)}, 'Звонки', 'Без специалиста')), "
         f"{alias}.`специалист`)"
     )
 
@@ -94,7 +99,7 @@ def _tier_report(client, table: str) -> str:
             multiIf(
                 trim(ifNull(gsp.directologist, '')) != '', '1_directologist',
                 trim(ifNull(gsp.direction_main, '')) != '', '2_direction_main',
-                ifNull(s.campaign_code, '') = 'звонки', '3_Звонки',
+                {_is_calls_expr('s')}, '3_Звонки',
                 '4_Без специалиста'
             ) AS tier,
             count() AS rows,

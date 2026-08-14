@@ -308,7 +308,6 @@ _ALL_TABLES = [
     'big_analytics_full', 'big_analytics_full_arrival',
     'Dim_Date', 'Dim_Campaign', 'Dim_AdGroup', 'Dim_Site',
     'fact_vk_ads',                  # VK Ads датамарт (star build_vk_ads_fact, VK_ADS_FACT_2026-07-10) — parity с PBI_TABLES
-    'analytics_report_placement',   # партиция теперь читает star.arp_fact (репойнт в Этапе 3)
     'direct_history', 'check_utm_fuck_direct',
     'yandex_direct_korrektirovki', 'yandex_direct_404_errors',
     'yandex_direct_return_commission_report',
@@ -318,9 +317,9 @@ _ALL_TABLES = [
     # т.к. refresh обновляет только объекты из _ALL_TABLES. Dim_Distance НЕ включаем (calculated).
     'fact_adformat_spend',                      # «Формат» (расход по ad_format)
     'fact_criterion_spend', 'fact_criterion_zayavki',   # «Ключевые слова» (расход + воронка по критерию)
-    'dim_criterion', 'analytics_report_criterion',      # справочник + отчёт по критериям
+    'dim_criterion',                                    # справочник критериев
     'fact_region_spend', 'fact_region_zayavki', 'Dim_Location',  # «расстояние»/область
-    'Dim_PlacementFeed', 'fact_direct_feed_funnel', 'analytics_report_feed',  # «Фиды»
+    'Dim_PlacementFeed', 'fact_direct_feed_funnel',  # «Фиды»
     # MINUS_TABLES_2026-07-18: «Я.Директ проверки → Количество минус слов».
     # Обе присутствуют в опубликованном датасете (проверено executeQueries 18.07),
     # обе — mode: import над PG (delta — VIEW на стороне PG, для PBI обычная таблица).

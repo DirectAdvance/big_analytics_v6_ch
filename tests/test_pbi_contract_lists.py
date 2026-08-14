@@ -1,0 +1,47 @@
+import ast
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _literal_list_from_file(path: Path, name: str):
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} not found in {path}")
+
+
+def test_stale_analytics_report_objects_are_not_in_pbi_contract_lists():
+    pbi_source_objects = _literal_list_from_file(
+        ROOT / "star_refactor" / "build_pbi_compat.py",
+        "PBI_SOURCE_OBJECTS",
+    )
+    all_tables = _literal_list_from_file(ROOT / "refresh_powerbi.py", "_ALL_TABLES")
+    verify_required_tables = _literal_list_from_file(
+        ROOT / "data_check" / "verify_big_analytics.py",
+        "REQUIRED_TABLES",
+    )
+    verify_pbi_source_objects = _literal_list_from_file(
+        ROOT / "data_check" / "verify_big_analytics.py",
+        "PBI_SOURCE_OBJECTS",
+    )
+    verify_pbi_compat_objects = _literal_list_from_file(
+        ROOT / "data_check" / "verify_big_analytics.py",
+        "PBI_COMPAT_OBJECTS",
+    )
+    stale_compat_objects = {"arp_fact", "arc_fact", "arf_fact", "Dim_Criterion"}
+    stale_refresh_tables = {
+        "analytics_report_placement",
+        "analytics_report_criterion",
+        "analytics_report_feed",
+    }
+
+    assert stale_compat_objects.isdisjoint(pbi_source_objects)
+    assert stale_refresh_tables.isdisjoint(all_tables)
+    assert {"arp_fact", "arc_fact", "arf_fact"}.isdisjoint(verify_required_tables)
+    assert stale_compat_objects.isdisjoint(verify_pbi_source_objects)
+    assert {"arp_fact", "arc_fact", "arf_fact"}.isdisjoint(verify_pbi_compat_objects)
