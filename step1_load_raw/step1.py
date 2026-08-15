@@ -17,7 +17,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, EXCLUDED_DOMAIN_NAMES, RAW_TARGET_TABLES
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
+from config.ch_utils import (
+    SAFE_QUERY_SETTINGS,
+    apply_storage_codecs,
+    count_rows,
+    day_ranges,
+    replace_view,
+    swap_shadow,
+    table_exists,
+)
 
 logger = logging.getLogger("pipeline.step1")
 
@@ -263,19 +271,56 @@ def _total_cost_expr() -> str:
     return f"multiIf({', '.join(branches)})"
 
 
-def _raw_yandex_sql(raw_date_filter: str = "", source: str = "raw_data.yandex_direct_report_rows") -> str:
-    table = RAW_TARGET_TABLES["raw_yandex"]
-    total_cost_expr = _total_cost_expr()
+# RAW_YANDEX_WEIGHT_2026-08-14 (OPTIMIZATION_PLAN.md, фаза 1+2.1): схема задаётся явно, а не
+# выводится из SELECT. Три правки, вместе −63.7% веса таблицы на пробе партиции 202607:
+#   * колонка `id` (cityHash64(row_key)) убрана — 198 МиБ = 32% таблицы, ни один потребитель её
+#     не читает, в ORDER BY её нет, случайный хэш не сжимается;
+#   * LowCardinality на словарных строках (Device 4 значения, AdNetworkType 2, manager_login 5,
+#     account_login 1060, CampaignName 19.3k, AdGroupName 44.9k);
+#   * кодеки на числовых: T64+ZSTD(3) для Decimal(18,9) и Int64 (замерено: лучше чистого ZSTD
+#     и Delta именно на этой колонке), ZSTD(3) на длинном строковом ключе key3.
+# Порядок колонок обязан совпадать с порядком в _raw_yandex_select: INSERT ... SELECT позиционный.
+_RAW_YANDEX_COLUMNS = """
+    `Date` Date,
+    `CampaignId` Int64 CODEC(T64, ZSTD(3)),
+    `CampaignName` LowCardinality(Nullable(String)),
+    `AdGroupId` Int64 CODEC(T64, ZSTD(3)),
+    `AdGroupName` LowCardinality(Nullable(String)),
+    `AdNetworkType` LowCardinality(Nullable(String)),
+    `Device` LowCardinality(Nullable(String)),
+    `RlAdjustmentId` Int64 CODEC(T64, ZSTD(3)),
+    `Impressions` Int64 CODEC(T64, ZSTD(3)),
+    `Clicks` Int64 CODEC(T64, ZSTD(3)),
+    `total_cost` Decimal(18, 9) CODEC(T64, ZSTD(3)),
+    `account_login` LowCardinality(String),
+    `manager_login` LowCardinality(String),
+    `adgroup_code` LowCardinality(Nullable(String)),
+    `campaign_code` LowCardinality(Nullable(String)),
+    `tp` LowCardinality(String),
+    `cpc_cpa` LowCardinality(String),
+    `site_quiz` LowCardinality(String),
+    `week_start` Date,
+    `key3` String CODEC(ZSTD(3))
+"""
+
+
+def _raw_yandex_ddl() -> str:
+    """Пустая raw_yandex с явными типами и кодеками. Данные заливаются батчами отдельно."""
     return f"""
-CREATE TABLE {table}
+CREATE TABLE {RAW_TARGET_TABLES["raw_yandex"]}
+({_RAW_YANDEX_COLUMNS})
 ENGINE = MergeTree
 PARTITION BY toYYYYMM("Date")
 ORDER BY ("Date", "CampaignId", key3)
-AS
+"""
+
+
+def _raw_yandex_select(raw_date_filter: str = "", source: str = "raw_data.yandex_direct_report_rows") -> str:
+    total_cost_expr = _total_cost_expr()
+    return f"""
 WITH parsed_src AS
 (
     SELECT
-        cityHash64(row_key) AS id,
         toDate(day) AS "Date",
         campaign_id AS "CampaignId",
         campaign_name AS "CampaignName",
@@ -305,7 +350,6 @@ WITH parsed_src AS
       {raw_date_filter}
 )
 SELECT
-    id,
     "Date",
     "CampaignId",
     "CampaignName",
@@ -736,6 +780,9 @@ def _rebuild_batched(client, logical_name: str, empty_sql: str, batch_selects: l
         label=f"{logical_name} shadow create",
         settings=SAFE_QUERY_SETTINGS,
     )
+    # RAW_WEIGHT_2026-08-14: у raw_leads/raw_calls схема выводится из SELECT — кодеки навешиваем
+    # на пустую shadow. Для raw_yandex они уже прописаны в DDL, повторный ALTER идемпотентен.
+    apply_storage_codecs(client, shadow)
     for idx, select_sql in enumerate(batch_selects, start=1):
         client = _command_with_retry(
             client,
@@ -761,16 +808,14 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     t_table = time.perf_counter()
     yandex_ranges = day_ranges(DATE_FROM)
     yandex_batches = [
-        _select_from_create(
-            _raw_yandex_sql(
-                f"AND toDate(day) >= toDate('{lo}') AND toDate(day) < toDate('{hi}')",
-                source=direct_source,
-            )
+        _raw_yandex_select(
+            f"AND toDate(day) >= toDate('{lo}') AND toDate(day) < toDate('{hi}')",
+            source=direct_source,
         )
         for lo, hi in yandex_ranges
     ]
     logger.info("  rebuild %s (%d daily batches)", RAW_TARGET_TABLES["raw_yandex"], len(yandex_batches))
-    client, rows = _rebuild_batched(client, "raw_yandex", _raw_yandex_sql("AND 0", source=direct_source), yandex_batches)
+    client, rows = _rebuild_batched(client, "raw_yandex", _raw_yandex_ddl(), yandex_batches)
     total += rows
     details_parts.append(f"raw_yandex={rows:,}")
     logger.info("  raw_yandex: %d строк за %.1f сек", rows, time.perf_counter() - t_table)

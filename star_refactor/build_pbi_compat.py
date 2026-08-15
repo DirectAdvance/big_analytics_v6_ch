@@ -11,7 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, range_batches, q, swap_shadow, table_exists
+from config.ch_utils import (
+    SAFE_QUERY_SETTINGS,
+    apply_storage_codecs,
+    count_rows,
+    range_batches,
+    q,
+    swap_shadow,
+    table_exists,
+)
 from criterion_spend.cleaning import CRITERION_CLEAN
 from spend.build_direct_spend_staging import STAGING_TABLE
 
@@ -355,6 +363,10 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
+    # PBI_WEIGHT_2026-08-14 (OPTIMIZATION_PLAN.md, фаза 3): самая тяжёлая PBI-проекция.
+    # Схема выводится из SELECT, поэтому кодеки вешаем на пустую shadow: замерено ZSTD(3) на
+    # Float64-метриках −15.7%, Gorilla оказался хуже отсутствия кодека.
+    apply_storage_codecs(client, shadow)
     ranges = range_batches(DATE_FROM, days=1)
     for idx, (lo, hi) in enumerate(ranges, start=1):
         client.command(

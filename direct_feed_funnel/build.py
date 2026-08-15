@@ -48,28 +48,33 @@ def _site_key_sql(expr: str = "domain") -> str:
     )
 
 
+# FACT_WEIGHT_2026-08-14 (OPTIMIZATION_PLAN.md, фаза 2.2): явная схема с кодеками вместо вывода
+# типов из CTAS-заглушки. Замер на однотипной fact_region_spend: −34.5% веса.
+# Порядок колонок обязан совпадать с fact_direct_feed_funnel_insert_sql: INSERT позиционный.
+_LIGHT_COLUMNS = """
+    `date` Date,
+    `campaign_id` Int64 CODEC(T64, ZSTD(3)),
+    `ad_group_id` Int64 CODEC(T64, ZSTD(3)),
+    `placement_feed_key_hash` UInt64,
+    `domain` LowCardinality(Nullable(String)),
+    `account_login` LowCardinality(Nullable(String)),
+    `site_key` UInt64,
+    `cost` Decimal(18, 6) CODEC(ZSTD(3)),
+    `clicks` Decimal(18, 6) CODEC(ZSTD(3)),
+    `impressions` Decimal(18, 6) CODEC(ZSTD(3)),
+    `all_forms` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_created` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_paid` Decimal(18, 6) CODEC(ZSTD(3))
+"""
+
+
 def fact_direct_feed_funnel_create_sql(target: str) -> str:
     return f"""
         CREATE TABLE {target}
+        ({_LIGHT_COLUMNS})
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(date)
         ORDER BY (date, campaign_id, ad_group_id, placement_feed_key_hash, site_key)
-        AS
-        SELECT
-            toDate('2026-01-01') AS date,
-            toInt64(0) AS campaign_id,
-            toInt64(0) AS ad_group_id,
-            toUInt64(0) AS placement_feed_key_hash,
-            CAST(NULL, 'Nullable(String)') AS domain,
-            CAST(NULL, 'Nullable(String)') AS account_login,
-            toUInt64(0) AS site_key,
-            toDecimal64(0, 6) AS cost,
-            toDecimal64(0, 6) AS clicks,
-            toDecimal64(0, 6) AS impressions,
-            toDecimal64(0, 6) AS all_forms,
-            toDecimal64(0, 6) AS crm_order_created,
-            toDecimal64(0, 6) AS crm_order_paid
-        WHERE 0
     """
 
 

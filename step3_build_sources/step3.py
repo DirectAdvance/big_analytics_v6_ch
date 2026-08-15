@@ -45,8 +45,9 @@ CRM_BY_SOURCE_TYPE = {
 _CRM_FALLBACK_RE = "(_crm)?_excel$"
 STEP3_QUERY_SETTINGS = {
     **SAFE_QUERY_SETTINGS,
-    "max_execution_time": 180,
-    "max_memory_usage": 1_500_000_000,
+    "max_execution_time": 900,
+    # MEMORY_LIMIT_2026-08-14: свой лимит 1.5 ГБ убран — общий в SAFE_QUERY_SETTINGS теперь 2 ГБ,
+    # и локальное переопределение только опускало бы step3 ниже общего.
 }
 
 

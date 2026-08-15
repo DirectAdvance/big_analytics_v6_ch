@@ -17,6 +17,24 @@ from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
 
 logger = logging.getLogger("pipeline.criterion_spend")
 
+# FACT_WEIGHT_2026-08-14 (OPTIMIZATION_PLAN.md, фаза 2.2): явная схема с кодеками вместо вывода
+# типов из CTAS-заглушки. Замер на однотипной fact_region_spend: −34.5% веса.
+# Порядок колонок обязан совпадать с SELECT ниже: INSERT ... SELECT позиционный.
+_COLUMNS = """
+    `date` Date,
+    `campaign_id` Int64 CODEC(T64, ZSTD(3)),
+    `ad_group_id` Int64 CODEC(T64, ZSTD(3)),
+    `ad_network_type_key` LowCardinality(String),
+    `criterion_id` Nullable(Int64) CODEC(T64, ZSTD(3)),
+    `criterion_key` UInt64,
+    `cost` Decimal(18, 6) CODEC(ZSTD(3)),
+    `clicks` Decimal(18, 6) CODEC(ZSTD(3)),
+    `impressions` Decimal(18, 6) CODEC(ZSTD(3)),
+    `account_login` LowCardinality(Nullable(String)),
+    `site_key` UInt64
+"""
+
+
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     logger.info("criterion_spend v6_ch: fact_criterion_spend")
     client = get_client()
@@ -27,23 +45,10 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     client.command(
         f"""
         CREATE TABLE {shadow}
+        ({_COLUMNS})
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(date)
         ORDER BY (date, campaign_id, ad_group_id, ad_network_type_key, ifNull(criterion_id, 0), criterion_key)
-        AS
-        SELECT
-            toDate('2026-01-01') AS date,
-            toInt64(0) AS campaign_id,
-            toInt64(0) AS ad_group_id,
-            CAST('', 'String') AS ad_network_type_key,
-            CAST(NULL, 'Nullable(Int64)') AS criterion_id,
-            toUInt64(0) AS criterion_key,
-            toDecimal64(0, 6) AS cost,
-            toDecimal64(0, 6) AS clicks,
-            toDecimal64(0, 6) AS impressions,
-            CAST(NULL, 'Nullable(String)') AS account_login,
-            toUInt64(0) AS site_key
-        WHERE 0
         """,
         settings=SAFE_QUERY_SETTINGS,
     )

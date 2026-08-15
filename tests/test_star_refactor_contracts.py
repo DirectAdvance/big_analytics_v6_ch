@@ -98,8 +98,10 @@ def test_direct_feed_fact_materializes_site_key():
     create_sql = direct_feed_build.fact_direct_feed_funnel_create_sql("target")
     insert_sql = direct_feed_build.fact_direct_feed_funnel_insert_sql("target", "2026-01-01", "2026-01-02")
 
-    assert "toUInt64(0) AS site_key" in create_sql
-    assert "toUInt64(0) AS placement_feed_key_hash" in create_sql
+    # Схема задана явно (FACT_WEIGHT_2026-08-14), а не выведена из CTAS-заглушки: контракт —
+    # обе колонки существуют в факте физически и остаются UInt64.
+    assert "`site_key` UInt64" in create_sql
+    assert "`placement_feed_key_hash` UInt64" in create_sql
     assert "AS site_key" in insert_sql
     assert "cityHash64(placement_feed_key) AS placement_feed_key_hash" in insert_sql
     assert "GROUP BY date, campaign_id, ad_group_id, placement_feed_key_hash, account_login, site_key" in insert_sql

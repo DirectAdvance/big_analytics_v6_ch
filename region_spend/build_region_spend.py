@@ -17,32 +17,39 @@ from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
 logger = logging.getLogger("pipeline.region_spend")
 
 
+# FACT_WEIGHT_2026-08-14 (OPTIMIZATION_PLAN.md, фаза 2.2): схема задаётся явно, а не выводится из
+# CTAS-заглушки. Замер на партиции 202607 этой же таблицы: ZSTD(3) на Decimal(18,6)-метриках +
+# T64+ZSTD(3) на *_id + LowCardinality на строках = −34.5% веса. T64 на самих метриках пробовали —
+# хуже (−28.9%); перевод id_location в Int32 не дал ничего сверх кодека, поэтому тип не тронут.
+# Порядок колонок обязан совпадать с SELECT в _insert_batch: INSERT ... SELECT позиционный.
+_COLUMNS = """
+    `date` Date,
+    `campaign_id` Int64 CODEC(T64, ZSTD(3)),
+    `ad_group_id` Int64 CODEC(T64, ZSTD(3)),
+    `ad_network_type_key` LowCardinality(String),
+    `id_location` Nullable(Int64) CODEC(T64, ZSTD(3)),
+    `cost` Decimal(18, 6) CODEC(ZSTD(3)),
+    `clicks` Decimal(18, 6) CODEC(ZSTD(3)),
+    `impressions` Decimal(18, 6) CODEC(ZSTD(3)),
+    `all_forms` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_created` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_paid` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_spam_order` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_canceled` Decimal(18, 6) CODEC(ZSTD(3)),
+    `account_login` LowCardinality(Nullable(String)),
+    `site_key` UInt64
+"""
+
+
 def _create_empty(client, target: str) -> None:
     client.command(f"DROP TABLE IF EXISTS {target} SYNC")
     client.command(
         f"""
         CREATE TABLE {target}
+        ({_COLUMNS})
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(date)
         ORDER BY (date, campaign_id, ifNull(ad_group_id, 0), ad_network_type_key, ifNull(id_location, 0))
-        AS
-        SELECT
-            toDate('2026-01-01') AS date,
-            toInt64(0) AS campaign_id,
-            toInt64(0) AS ad_group_id,
-            CAST('', 'String') AS ad_network_type_key,
-            CAST(NULL, 'Nullable(Int64)') AS id_location,
-            toDecimal64(0, 6) AS cost,
-            toDecimal64(0, 6) AS clicks,
-            toDecimal64(0, 6) AS impressions,
-            toDecimal64(0, 6) AS all_forms,
-            toDecimal64(0, 6) AS crm_order_created,
-            toDecimal64(0, 6) AS crm_order_paid,
-            toDecimal64(0, 6) AS crm_spam_order,
-            toDecimal64(0, 6) AS crm_order_canceled,
-            CAST(NULL, 'Nullable(String)') AS account_login,
-            toUInt64(0) AS site_key
-        WHERE 0
         """,
         settings=SAFE_QUERY_SETTINGS,
     )

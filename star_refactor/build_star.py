@@ -14,6 +14,7 @@ from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import (
     SAFE_QUERY_SETTINGS as BASE_SAFE_QUERY_SETTINGS,
+    apply_storage_codecs,
     column_names,
     count_rows,
     day_ranges,
@@ -145,6 +146,9 @@ def _create_fact_empty(client, target: str, select_sql: str) -> None:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
+    # FACT_WEIGHT_2026-08-14: схема факта выводится из big_analytics_unified и заранее неизвестна,
+    # поэтому кодеки навешиваются на уже созданную пустую shadow-таблицу (OPTIMIZATION_PLAN.md).
+    apply_storage_codecs(client, target)
 
 
 def drop_fact_compat_objects(client) -> None:
