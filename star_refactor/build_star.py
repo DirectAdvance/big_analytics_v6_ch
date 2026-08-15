@@ -115,10 +115,15 @@ FACT_SWAP_COMPAT_OBJECTS = [
     "big_analytics_crop_targeting",
     "big_analytics_reviews",
     "big_analytics_unified",
-    "big_analytics_pixel_score",
     "big_analytics_full_arrival",
     "big_analytics_full",
 ]
+# PIXEL_DEDUP_2026-08-15: big_analytics_pixel_score deliberately excluded here.
+# It used to be dropped in this pass and rebuilt by cleanup_wide_intermediates.py
+# as a compat view; that recreation was removed (self-referencing view crash —
+# see cleanup_wide_intermediates.py), so this table now stays untouched end to
+# end as the physical table step11 produces. Dropping it here with nothing left
+# to recreate it broke step13's pixel branch and build_pbi_compat.build_pixel_score().
 
 
 def _normalized_string_expr(column: str) -> str:

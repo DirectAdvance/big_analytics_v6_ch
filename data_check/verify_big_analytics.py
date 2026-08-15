@@ -108,9 +108,13 @@ COMPAT_VIEWS = [
     "dim_criterion",
 ]
 
+# PIXEL_DEDUP_2026-08-15 (распоряжение Семёна): `big_analytics_pixel_score` убран отсюда.
+# Этот список требует от объекта движок `View`, а таблица теперь физическая по замыслу: с оси
+# заявок убрали дубль `пиксель_атрибуц`, поэтому вьюхе над `fact_big_analytics` больше нечего
+# фильтровать. Проверка не потеряна — существование и непустота этой же таблицы остаются в
+# `REQUIRED_TABLES` (единственное, что ушло, — требование быть вьюхой).
 WIDE_COMPAT_VIEWS = [
     "big_analytics_full",
-    "big_analytics_pixel_score",
     "big_analytics_full_arrival",
     "big_analytics_unified",
 ]

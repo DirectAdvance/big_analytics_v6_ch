@@ -90,7 +90,13 @@ def test_calls_rows_use_complex_direction() -> None:
 
 
 def test_step11_copies_raw_pixel_into_full() -> None:
+    """PIXEL_DEDUP_2026-08-15: only the raw 'pixel' copy (block 3) lands in
+    big_analytics_full now. The attributed `пиксель_атрибуц` copy (old block 2,
+    reading from `ad_analytics.big_analytics_pixel_score`) duplicated the same
+    leads/cost as the raw copy and was removed — `big_analytics_pixel_score`
+    stays a standalone table read directly by step13 and PBI, not re-merged
+    into big_analytics_full."""
     source = inspect.getsource(step11._rebuild_full_with_pixel)
 
-    assert "ad_analytics.big_analytics_pixel_score" in source
+    assert "ad_analytics.big_analytics_pixel_score" not in source
     assert "s._source_table = 'pixel'" in source

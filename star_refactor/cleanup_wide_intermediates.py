@@ -142,13 +142,21 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     views = {
         "big_analytics_full": "WHERE f.`атрибуция` = 'По дате заявки'",
         "big_analytics_full_arrival": "WHERE f.`атрибуция` = 'По дате визита'",
-        "big_analytics_pixel_score": "WHERE f.`атрибуция` = 'По дате заявки' AND f.`_source_table` = 'пиксель_атрибуц'",
     }
     rows: dict[str, int] = {}
     for table, where_sql in views.items():
         replace_view(client, f"ad_analytics.{table}", _wide_fact_sql(where_sql))
         rows[table] = count_rows(client, f"ad_analytics.{q(table)}")
         log.info("  %s view rows=%d", table, rows[table])
+
+    # PIXEL_DEDUP_2026-08-15: step11 no longer copies `пиксель_атрибуц` rows into
+    # big_analytics_full (that was the lead-axis duplicate of `_source_table='pixel'`),
+    # so this step can no longer reconstruct big_analytics_pixel_score as a view over
+    # fact_big_analytics/big_analytics_full — that tag doesn't exist there anymore, and
+    # a view pointing back at big_analytics_pixel_score itself is a self-reference (the
+    # object this same step drops/recreates). big_analytics_pixel_score simply stays the
+    # physical table step11 produced: small (241k rows), untouched here, still readable
+    # by step13's pixel branch and build_pbi_compat::build_pixel_score().
 
     # Сначала снять вьюхи источников с широкой таблицы, потом дропать её:
     # обратный порядок оставил бы окно, в котором они уже сломаны.

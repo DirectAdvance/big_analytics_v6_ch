@@ -380,18 +380,10 @@ def _rebuild_full_with_pixel(client) -> int:
         )
         logger.info("  full keep daily batch %d/%d inserted: %s -> %s", idx, len(full_ranges), lo, hi)
 
-    pixel_ranges = day_ranges(DATE_FROM)
-    for idx, (lo, hi) in enumerate(pixel_ranges, start=1):
-        client.command(
-            f"""
-            INSERT INTO {shadow} ({cols_sql})
-            SELECT {cols_sql}
-            FROM ad_analytics.big_analytics_pixel_score
-            WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-        logger.info("  full pixel daily batch %d/%d inserted: %s -> %s", idx, len(pixel_ranges), lo, hi)
+    # PIXEL_DEDUP_2026-08-15: attributed pixel rows (`пиксель_атрибуц`) are no longer
+    # copied into big_analytics_full — they duplicated the same leads/cost already
+    # carried by the raw 'pixel' copy below (block 3). big_analytics_pixel_score stays
+    # a physical table (step13 visit-axis branch + PBI `pixel_score` tab still read it).
 
     source_ranges = day_ranges(DATE_FROM)
     select_cols = _direct_pixel_select_cols(cols)

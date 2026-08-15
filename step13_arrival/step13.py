@@ -31,8 +31,11 @@ OR prodazhi>0` и обнуляла только Impressions/Clicks/total_cost. `
      `source_record_id` (в `raw_calls` этих колонок нет). Та же eff_arrival_date.
 
   3. ПИКСЕЛЬ (`_pixel_branch`) — порт v5-ветки 4 (`DATE-SHIFT` дробной атрибуции).
-     Источник — `big_analytics_full WHERE направление='Пиксель_атрибуц'` (ДРОБНАЯ
-     атрибуция step11). У пиксельной строки витрины своей CRM-даты нет, поэтому
+     Источник — `ad_analytics.big_analytics_pixel_score` напрямую (ДРОБНАЯ
+     атрибуция step11; таблица целиком пиксель-атрибуция, WHERE не нужен —
+     PIXEL_DEDUP_2026-08-15: `направление='Пиксель_атрибуц'` больше не льётся в
+     `big_analytics_full`, чтобы не задваивать лид-ось с `_source_table='pixel'`).
+     У пиксельной строки витрины своей CRM-даты нет, поэтому
      внутри (домен, месяц-заявки) строится распределение визит-лидов пиксель-пула
      по eff_arrival_date (доля v_share, Σ=1 на группу) и каждая дробная строка
      размножается по реальным датам с этими весами (одна доля на приезды и продажи —
@@ -1033,12 +1036,11 @@ pixel_shifted AS
         f.key_pixel_score AS key_pixel_score,
         toFloat64(f.priezd) * ifNull(pxv.v_share, 0) AS priezd_part,
         toFloat64(f.prodazhi) * ifNull(pxv.v_share, 0) AS prodazhi_part
-    FROM ad_analytics.big_analytics_full f
+    FROM ad_analytics.big_analytics_pixel_score f
     INNER JOIN pixel_eff_dist pxv
         ON pxv.dom = lower(trim(ifNull(f.domain, '')))
        AND pxv.mon = toStartOfMonth(f.`Date`)
-    WHERE f.`направление` = 'Пиксель_атрибуц'
-      AND f.`Date` >= toDate('{date_from}')
+    WHERE f.`Date` >= toDate('{date_from}')
       AND ifNull(pxv.v_share, 0) > 0
       AND (f.priezd > 0 OR f.prodazhi > 0)
 
@@ -1098,12 +1100,11 @@ pixel_shifted AS
         f.key_pixel_score AS key_pixel_score,
         toFloat64(f.priezd) AS priezd_part,
         toFloat64(f.prodazhi) AS prodazhi_part
-    FROM ad_analytics.big_analytics_full f
+    FROM ad_analytics.big_analytics_pixel_score f
     LEFT JOIN pixel_totals pt
         ON pt.dom = lower(trim(ifNull(f.domain, '')))
        AND pt.mon = toStartOfMonth(f.`Date`)
-    WHERE f.`направление` = 'Пиксель_атрибуц'
-      AND f.`Date` >= toDate('{date_from}')
+    WHERE f.`Date` >= toDate('{date_from}')
       AND ifNull(pt.visit_leads, 0) = 0
       AND (f.priezd > 0 OR f.prodazhi > 0)
 )
