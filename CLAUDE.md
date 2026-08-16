@@ -11,7 +11,9 @@
   `victory`; no separate `yandex` SSH host is used.
 - Victory stores only code, `~/venv-v6`, and rotated logs. Data, marts, raw layers, and heavy caches
   live in Yandex Cloud ClickHouse, not on Victory disk.
-- No cron/launchd schedule for v6 yet; dashboard manual launch is active.
+- Daily run is scheduled on Victory: `0 2 * * *` UTC = 07:00 Yekaterinburg. It runs `cron_run.py`,
+  not `pipeline.py` — the pipeline itself sends no Telegram at all, so the wrapper reports the
+  outcome. Night pipeline and step14 are still manual (`KNOWN_ISSUES.md` #42).
 - Victory `~/big_analytics_v5/` is the old v5 production contour, not this project.
 - Current ClickHouse storage: Yandex Cloud
   `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`, DBs `ad_analytics` and `raw_data`.

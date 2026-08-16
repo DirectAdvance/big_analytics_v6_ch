@@ -5,11 +5,30 @@
 Victory `~/big_analytics_v5`, `fast_pipeline.py`, `pipeline_powerbi.py`, PostgreSQL `UNLOGGED`,
 FDW и `VACUUM` относятся к v5/legacy и не являются инструкциями для v6.
 
+## Расписание
+
+**Дневной прогон стоит в кроне Victory: `0 2 * * *` UTC = 07:00 Екатеринбург**
+(`CRON_SCHEDULE_2026-08-16`). Victory живёт в UTC, поэтому 07:00 Екб — это 02:00 в crontab.
+
+```
+0 2 * * * cd ~/big_analytics_v6_ch && /usr/bin/flock -n /tmp/ba6_cron.lock \
+          ~/venv-v6/bin/python3 cron_run.py >> /tmp/ba6_cron.log 2>&1
+```
+
+Запускается не `pipeline.py` напрямую, а обёртка `cron_run.py`: сам пайплайн в Telegram не пишет
+ничего — ни успех, ни падение, — а под расписанием это означает молчаливые провалы. Обёртка гоняет
+прогон, кладёт лог в `logs/cron_<стамп>.log` (держит 14 последних) и шлёт итог: run_id, время,
+verify PASS/нет, golden Кудерко; при падении — номер упавшего шага и хвост лога на 25 строк.
+`flock -n` не даёт наложиться на ручной прогон.
+
 ## Команды запуска
 
 ```bash
 # Дневной ручной пайплайн v6_ch.
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/pipeline.py
+
+# То же, что делает крон (с уведомлением в Telegram).
+~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/cron_run.py
 
 # То же, но с maintenance steps 2 и 7.
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/pipeline.py --include-maintenance
@@ -111,7 +130,7 @@ PostgreSQL за `yandex_direct_raw.yandex_direct_reports_reviews` + `yandex_dire
 (`yandex_direct_feeds_report` / `yandex_direct_feed_urls`). Список и последствия —
 [`PBI_TABLES.md`](PBI_TABLES.md) §0.
 
-⚠️ **Крона у v6 нет.** Ночной пайплайн и step14 запускаются только руками, поэтому
+⚠️ **Ночного крона у v6 нет.** Ночной пайплайн и step14 запускаются только руками, поэтому
 `yandex_direct_minus_snapshot` держит один день вместо `RETENTION_DAYS=30`.
 
 ## Проверки после прогона
