@@ -5,7 +5,7 @@
 > For code structure (who calls what, impact radius) use MCP `code-review-graph`;
 > this index is the fallback when the graph is unavailable.
 
-Files indexed: **313**
+Files indexed: **315**
 
 This is a compact root index. Detailed file maps live in child `INDEX.md` files.
 Read the nearest child index first; use this file only to choose the right area.
@@ -23,22 +23,22 @@ Read the nearest child index first; use this file only to choose the right area.
 | `DB_TABLES.md` | 52 | DB_TABLES.md — legacy PostgreSQL table map |
 | `DOD.md` | 18 | DOD — Definition of Done, big_analytics_v5 |
 | `FUNNEL.md` | 12 | FUNNEL.md — воронка заявок (`raw_data.crm_status_mapping`) |
-| `GOLDEN_BASELINE.md` | 33 | GOLDEN BASELINE — эталонные значения v6_ch |
-| `KNOWN_ISSUES.md` | 76 | KNOWN_ISSUES — big_analytics_v6_ch |
+| `GOLDEN_BASELINE.md` | 34 | GOLDEN BASELINE — эталонные значения v6_ch |
+| `KNOWN_ISSUES.md` | 78 | KNOWN_ISSUES — big_analytics_v6_ch |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |
 | `MEMORY_ARCHIVE.md` | 275 | MEMORY.md — ba_pipeline: нетривиальные уроки |
 | `OPTIMIZATION_PLAN.md` | 19 | План оптимизации веса таблиц `ad_analytics` (BA6) |
-| `PBI_TABLES.md` | 45 | PBI_TABLES.md — Power BI source tables |
-| `PIPELINES.md` | 9 | PIPELINES.md — v6_ch ClickHouse pipelines |
+| `PBI_TABLES.md` | 46 | PBI_TABLES.md — Power BI source tables |
+| `PIPELINES.md` | 10 | PIPELINES.md — v6_ch ClickHouse pipelines |
 | `PLAN.md` | 42 | PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse) |
 | `POSEV_LEADS_LOSS_PLAN.md` | 24 | POSEV_LEADS_LOSS_PLAN — системный план ловли и починки потерь посевных ЗАЯВОК |
 | `POSEV_LOSSES_PLAYBOOK.md` | 45 | POSEV_LOSSES_PLAYBOOK — направление «посевы» big_analytics_v5 |
 | `PROJECT_CHARTER.md` | 33 | PROJECT_CHARTER.md — Устав проекта big_analytics_v5 |
 | `QUERIES.md` | 10 | QUERIES.md — SQL-шпаргалка |
-| `RAW_DATA_REQUEST.md` | 12 | Запрос владельцу `raw_data`: что big_analytics_v6 тянет из Яндекс.Директа мимо вашей схемы |
+| `RAW_DATA_REQUEST.md` | 10 | Запрос владельцу `raw_data`: что big_analytics_v6 тянет из Яндекс.Директа мимо вашей схемы |
 | `RAW_DIFF_FINDINGS.md` | 11 | RAW_DIFF_FINDINGS — сырьё v5 ↔ v6_ch |
 | `README.md` | 15 | big_analytics_v6_ch — ClickHouse-пайплайн аналитики |
-| `RUNBOOK.md` | 6 | RUNBOOK.md — v6_ch operations |
+| `RUNBOOK.md` | 7 | RUNBOOK.md — v6_ch operations |
 | `SHEET_RECONCILE.md` | 10 | Сверка с гугл-таблицей «посевы» — FINDINGS + METHODOLOGY |
 | `SHEET_RECONCILE_FINDINGS.md` | 55 | Сверка Google-таблиц салонов ↔ public.fact_big_analytics (контекст) |
 | `SHEET_RECONCILE_METHODOLOGY.md` | 28 | Методика сверки Google-таблиц салонов ↔ витрина (КОНТЕКСТ) |
@@ -52,6 +52,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `_warm_campaign_status.py` | 3 | _warm_campaign_status.py — точечный прогрев campaign_status/payment_model БЕЗ step0/step8. |
 | `copy_metrika.py` | 6 | Копирует данные из локального big_analytics.public.metrika |
 | `corrections.py` | 57 | ClickHouse v6 corrections hook — порт правил v5 `corrections.py`. |
+| `cron_run.py` | 4 | CRON_RUNNER_2026-08-16 — обёртка для ежедневного прогона БА6 из cron. |
 | `explain_capture.py` | 10 | explain_capture.py — захват EXPLAIN ANALYZE планов тяжёлых шагов. |
 | `pipeline.py` | 10 | ClickHouse orchestrator for big_analytics_v6_ch. |
 | `pipeline_mutex.py` | 5 | pipeline_mutex.py — PIPELINE_MUTEX_2026-07-12 |
@@ -105,6 +106,6 @@ Read the nearest child index first; use this file only to choose the right area.
 | `step10_crop_targeting/` | 3 |
 | `step14_minus_snapshot/` | 2 |
 | `step9_direct_history/` | 3 |
-| `tools/` | 3 |
+| `tools/` | 4 |
 | `yandex_direct_checking_report/` | 3 |
 
