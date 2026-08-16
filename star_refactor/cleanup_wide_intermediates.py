@@ -30,7 +30,11 @@ SOURCE_VIEWS = {
     "big_analytics_seo": ("seo",),
     "big_analytics_pixel": ("pixel",),
     "big_analytics_crop_targeting": ("crop_targeting",),
-    "big_analytics_reviews": ("reviews",),
+    # REVIEWS_TAG_2026-08-16 — тегов два. step3 пишет отзывы как 'direct_account_reviews'
+    # (`step3_build_sources/step3.py:1742` создаёт вьюху с обоими значениями), а этот модуль
+    # пересоздавал её только по 'reviews' — которого в данных нет. Итог: после каждого полного
+    # прогона `big_analytics_reviews` отдавала 0 строк при 4 996 строках в факте.
+    "big_analytics_reviews": ("reviews", "direct_account_reviews"),
 }
 
 
