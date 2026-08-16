@@ -1,5 +1,10 @@
 # PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse)
 
+<!-- pixel-dedup-2026-08-15 -->
+> 🧭 **Статус на 2026-08-15.** Этапы миграции пройдены, контур v6 рабочий и принят по данным
+> (`RAW_DIFF_FINDINGS.md`). Остаток — не ETL, а источники и модель Power BI:
+> `PBI_TABLES.md` §0 и `RAW_DATA_REQUEST.md` поток 4.
+
 > Дата: 2026-07-30. Статус: Этапы 0–5 выполнены в v6_ch; полный ClickHouse-прогон замерен.
 > Источник: анализ `work/big_analytics_v5/` (CLAUDE.md, PIPELINES.md, PBI_TABLES.md).
 > Ключевые решения 2026-07-30 (§3а, §5а, §6): хост исполнения (Yandex Cloud), UPSERT-паттерны

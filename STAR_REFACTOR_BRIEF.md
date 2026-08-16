@@ -1,5 +1,12 @@
 # ТЗ для director — рефакторинг big_analytics_v5 под звезду (star schema)
 
+<!-- pixel-dedup-2026-08-15 -->
+> 🧭 **Область в v6_ch (2026-08-15).** Бриф писался под v5/PostgreSQL (`public.arp_fact`,
+> `public."Dim_*"`). В v6 звезда живёт в ClickHouse `ad_analytics`, а `arp_fact` / `arc_fact` /
+> `arf_fact` **не существуют** — они вычеркнуты из контракта (`tests/test_pbi_contract_lists.py`),
+> из-за чего три таблицы модели Power BI в v6 не собираются (`KNOWN_ISSUES.md` #39).
+> Актуальный маппинг PBI — `PBI_TABLES.md` §0.
+
 > ✅ **СТАТУС 2026-06-11: рефактор РЕАЛИЗОВАН и в проде.** ⚠️ Звезда **консолидирована в схему
 > `public` (2026-06-10)** — отдельной схемы `star` БОЛЬШЕ НЕТ. Все упоминания `star.<имя>` ниже —
 > исторические (момент PoC/построения); фактически объекты в `public`: `public.fact_big_analytics`,

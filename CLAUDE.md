@@ -16,6 +16,14 @@
 - Current ClickHouse storage: Yandex Cloud
   `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`, DBs `ad_analytics` and `raw_data`.
 - PostgreSQL legacy code is in `archive/postgres_legacy_2026_07_31/` and is not in the pipeline.
+- One live PostgreSQL dependency remains: step3 `_fetch_reviews_rows_from_postgres` reads
+  `yandex_direct_raw.yandex_direct_reports_reviews` from Victory PG — reviews are absent from
+  `raw_data`.
+- Power BI parity is NOT reached: 7 of the 31 model tables have no v6 source
+  (`PBI_TABLES.md` §0, `KNOWN_ISSUES.md` #39). Raw data itself is richer than v5
+  (`RAW_DIFF_FINDINGS.md`, measured 2026-08-15).
+- Freshness must be read from table dates, never from `raw_data.etl_runs` or
+  `leads_all.updated_at` — both are stale by design (`KNOWN_ISSUES.md` #43).
 - Latest status, open v5↔v6 deltas, and run ids live in `STATE.md` and `KNOWN_ISSUES.md`.
 
 ## Read First
@@ -33,7 +41,9 @@
 | Useful SQL | `QUERIES.md` |
 | Table lifecycle | `DB_TABLES.md` |
 | Power BI compatibility/source tables | `PBI_TABLES.md` |
-| Known defects and accepted deltas | `KNOWN_ISSUES.md`, `RAW_DIFF_FINDINGS.md` |
+| Known defects and accepted deltas | `KNOWN_ISSUES.md` |
+| v5↔v6 raw comparison | `RAW_DIFF_FINDINGS.md` |
+| v5↔v6 Power BI parity (31 tables) | `PBI_TABLES.md` §0 |
 | Data quality checks | `data_check/README.md`, `data_verification/README.md` |
 | Column dictionary | `COLUMNS_big_analytics_full.md` |
 | Canonical values | `CANON.md`, `FUNNEL.md` |

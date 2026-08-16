@@ -1,5 +1,13 @@
 # PROJECT_CHARTER.md — Устав проекта big_analytics_v5
 
+<!-- v6-scope-banner -->
+> 🧭 **Область в v6_ch (2026-08-15).** Устав описывает контур **v5 на PostgreSQL** и остаётся
+> источником по «зачем и кто владелец». Архитектура v6 — другая: ClickHouse Yandex Cloud,
+> `raw_data` + `ad_analytics`, звезда `fact_big_analytics` + `Dim_*`. Разделы про
+> `analytics_report_placement`, ночной `report_placement`, `pipeline_powerbi.py` и FDW
+> к v6 неприменимы: этих объектов в ClickHouse нет (`KNOWN_ISSUES.md` #39).
+> Актуальная карта шагов — `PIPELINES.md`, паритет с v5 — `PBI_TABLES.md` §0.
+
 > Высокоуровневый устав: зачем проект существует, кто владелец, как устроена
 > архитектура, какие таблицы критичны, какие инварианты нельзя нарушать, что и
 > когда запускается, где точки отказа. Технические подробности по шагам — в

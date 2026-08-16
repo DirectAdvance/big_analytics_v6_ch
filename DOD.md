@@ -1,5 +1,11 @@
 # DOD — Definition of Done, big_analytics_v5
 
+<!-- v6-scope-banner -->
+> 🧭 **Область в v6_ch (2026-08-15).** Чеклист унаследован от v5/PostgreSQL и по смыслу
+> действует, но команды и объекты читать как ClickHouse: `psql`/`VACUUM`/`EXPLAIN ANALYZE` →
+> MCP `clickhouse-victory` и `config/ch_db.get_client()`; `ad_analytics_bi` → `ad_analytics`;
+> гейт — `data_check/verify_big_analytics.py` (`0=PASS`, `1=FAIL`, `2=crash`).
+
 > Задача РЕАЛЬНО готова только когда пройден весь чеклист своего типа И своего источника.
 > «Должно работать» — не DoD. DoD = измеренный факт.
 

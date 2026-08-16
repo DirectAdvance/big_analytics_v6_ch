@@ -58,7 +58,7 @@ FDW и `VACUUM` относятся к v5/legacy и не являются инс�
 | 7 | `step7_finalize.step7` | `step7` | Maintenance: `OPTIMIZE` для `big_analytics_sources/calls/full`. Только с `--include-maintenance`. |
 | 9 | `step9_direct_history.step9` | `step9` | История Директа из `raw_data.direct_campaigns`. |
 | 10 | `step10_crop_targeting.step10` | `step10` | Посевы Telega/VK/MAX и связанные локальные CH-таблицы. |
-| 11 | `step11_pixel_score.step11` | `step11` | Pixel score и доливка `_source_table='пиксель_атрибуц'`. |
+| 11 | `step11_pixel_score.step11` | `step11` | Pixel score. С 2026-08-15 пиксель разведён по осям: заявочная — `_source_table='pixel'` / `источник='Пиксель'` (31 151 строка), визитная — `_source_table='пиксель_атрибуц'` / `источник='Пиксель_атрибуц'` (84 566). Дубль на заявочной оси убран (127 554 695.53 ₽). |
 | 115 | `spec_fallback` | `spec_fallback` | Каскад `специалист` по домену без окна дат после step10/step11. |
 | 12 | `step12_proverka_big_analytics.step12` | `step12` | Проверка CRM-маппингов. |
 | 13 | `step13_arrival.step13` | `step13` | Воронка по дате визита → `big_analytics_full_arrival`. |
@@ -71,7 +71,7 @@ FDW и `VACUUM` относятся к v5/legacy и не являются инс�
 | 144 | `direct_feed_funnel.build` | `direct_feed_funnel` | Площадки РСЯ/Direct placement: физическая `fact_direct_feed_funnel_light`, compatibility view `fact_direct_feed_funnel`, обновление `Dim_PlacementFeed`. |
 | 1431 | `region_spend.build_region_zayavki` | `region_zayavki` | Заявочная воронка по регионам. |
 | 1432 | `criterion_spend.build_criterion_zayavki` | `criterion_zayavki` | Заявочная воронка по критериям. |
-| 145 | `star_refactor.build_star` | `build_star` | `fact_big_analytics`, `Dim_*`, `arp_fact`, `fact_vk_ads`. |
+| 145 | `star_refactor.build_star` | `build_star` | `fact_big_analytics`, `Dim_*`, `fact_vk_ads`. `arp_fact` НЕ строится — вычеркнут из контракта (`tests/test_pbi_contract_lists.py`). |
 | 1451 | `star_refactor.build_star_extensions` | `build_star_extensions` | Расширения star-слоя. |
 | 148 | `star_refactor.cleanup_wide_intermediates` | `cleanup_wide_intermediates` | Очистка wide-промежуточных таблиц. |
 | 146 | `star_refactor.build_pbi_compat` | `build_pbi_compat` | PBI compatibility layer. |
@@ -95,9 +95,24 @@ FDW и `VACUUM` относятся к v5/legacy и не являются инс�
 | 106 | `step_cron_night.build_ml_korrektirovki_night` | `night_ml_korrektirovki` |
 | 114 | `step14_minus_snapshot.step14` | `night_minus_snapshot` |
 
-Legacy PG jobs `direct_account_reviews`, `report_placement`, old `build_spend_daily`
-and `revoke_metrika_grants` лежат в `archive/postgres_legacy_2026_07_31/` и не входят
-в активный v6 night, пока не портированы на `raw_data`/`ad_analytics`.
+Legacy PG jobs `report_placement`, old `build_spend_daily` и `revoke_metrika_grants` лежат
+в `archive/postgres_legacy_2026_07_31/` и не входят в активный v6 night, пока не портированы
+на `raw_data`/`ad_analytics`.
+
+🔌 **`direct_account_reviews` — исключение: мост в PostgreSQL живой.** Дневной step3
+(`step3_build_sources/step3.py:1746`, `_fetch_reviews_rows_from_postgres`) ходит на Victory
+PostgreSQL за `yandex_direct_raw.yandex_direct_reports_reviews` + `yandex_direct_account_reviews`,
+потому что отзывов в `raw_data` нет. Это единственная зависимость v6 от PG в рабочем контуре.
+Даёт `_source_table='direct_account_reviews'` — 4 996 строк / 1 041 642.40 ₽, совпадает с v5.
+
+⚠️ **Не портированы вообще (нет источника в `raw_data`), из-за чего в v6 не собираются
+соответствующие страницы Power BI:** `report_placement` (`analytics_report_placement`),
+`sync_direct_ads_texts_master`, `sync_direct_type_placement_report_master`, фид-воронка
+(`yandex_direct_feeds_report` / `yandex_direct_feed_urls`). Список и последствия —
+[`PBI_TABLES.md`](PBI_TABLES.md) §0.
+
+⚠️ **Крона у v6 нет.** Ночной пайплайн и step14 запускаются только руками, поэтому
+`yandex_direct_minus_snapshot` держит один день вместо `RETENTION_DAYS=30`.
 
 ## Проверки после прогона
 

@@ -1,6 +1,159 @@
 # PBI_TABLES.md — Power BI source tables
 
-> ⚠️ **Статус v6_ch:** большая часть этого файла ниже — legacy/v5 PostgreSQL-справочник
+> 📍 **Читать §0 — он актуальный. Всё, что ниже §0, — legacy-справочник v5/PostgreSQL.**
+
+---
+
+# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-15
+
+Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
+что живут на v5.** Метод: живая модель
+`~/Documents/креативы виктори/Большая аналитика_admin/Большая аналитика_v00.SemanticModel`
+(31 таблица с источником + 3 DAX-таблицы `Users` / `Модель атрибуции` / `Dim_Distance`),
+для каждой — источник в v5 и объект в ClickHouse `ad_analytics`, построчная сверка колонок.
+
+## §0.1 Короткий ответ
+
+**Нет, не хватает — на сегодня v6 закрывает 24 таблицы модели из 31.** Ядро отчёта (главная
+витрина, звезда, spend-витрины по регионам/форматам/критериям, воронки, корректировки, 404,
+cookie-страницы, поисковые запросы) — есть и по числам сходится с v5 в пределах ±3.5%.
+Не соберутся 7 таблиц и 2 расчётные:
+
+| # | Таблица модели | Причина |
+|---|---|---|
+| 1 | `analytics_report_placement` | нет источника: `yandex_direct_report_placement` не переносился в `raw_data` |
+| 2 | `analytics_report_placement_links` | зависит от `arp_fact` (сам справочник `tp_placement_links` в v6 есть — 7 029 строк) |
+| 3 | `analytics_report_criterion` | `arc_fact` удалён из контракта v6 (`tests/test_pbi_contract_lists.py`) |
+| 4 | `analytics_report_feed` | `arf_fact` удалён из контракта v6 |
+| 5 | `yandex_direct_ads_texts` | нет источника `yandex_direct_ads_texts_master_*` (v5: 5.1 M строк) |
+| 6 | `yandex_direct_type_placement_report_master` | нет источника (v5: 7.5 M строк) |
+| 7 | `yandex_direct_accounts_human_cyborgs` | справочника нет в ClickHouse (v5: 17 строк, схема `victoryads_direct_automation`) |
+| — | `Dim_Distance` (DAX) | считается из `distance_km_agreg`; в физических `fact_region_*` v6 колонки нет, есть только в `bi_*`-вьюхах |
+| — | `fact_direct_feed_funnel` (по смыслу) | имя занято, но это **не** воронка по фидам — см. §0.3 |
+
+Плюс два PBI-объекта v6 существуют как **пустые заглушки**: `check_utm_fuck_direct` и
+`yandex_direct_return_commission_report` — это `CREATE VIEW … SELECT CAST(NULL, …)`, 0 строк
+(в v5: 1 828 и 45 867). Гейт `verify_big_analytics.py` непустоту проверяет, но эти два покрыты
+whitelist `PBI_EMPTY_ALLOWED`, поэтому PASS проходит штатно (#40).
+
+## §0.2 Матрица 31 таблицы
+
+Легенда: ✅ есть и полно · ⚠️ есть, но урезано/переименовано · ❌ нет.
+
+| Таблица PBI | Источник v5 | v5 строк | Объект v6 `ad_analytics` | v6 строк | |
+|---|---|---:|---|---:|:-:|
+| `big_analytics_full` | `public.pbi_big_analytics_full` | 5 019 702 | `pbi_big_analytics_full` | 5 231 242 | ⚠️ |
+| `Dim_AdGroup` | `public.Dim_AdGroup` | 229 264 | `Dim_AdGroup` | 603 116 | ✅ |
+| `Dim_Campaign` | `public.Dim_Campaign` | 38 413 | `Dim_Campaign` | 24 445 | ⚠️ |
+| `Dim_Date` | `public.Dim_Date` | 226 | `Dim_Date` | 227 | ✅ |
+| `Dim_Location` | `public.Dim_Location` | 16 200 | `Dim_Location` | 16 317 | ✅ |
+| `Dim_Site` | `public.Dim_Site` | 5 023 | `Dim_Site` | 5 032 | ⚠️ |
+| `analytics_report_criterion` | `public.arc_fact` | 151 288 | — | — | ❌ |
+| `analytics_report_feed` | `public.arf_fact` | 91 898 | — | — | ❌ |
+| `analytics_report_placement` | `public.arp_fact` | 1 927 669 | — | — | ❌ |
+| `analytics_report_placement_links` | `arp_fact` + `yandex_direct_tp_placement_links` | 5 093 | `yandex_direct_tp_placement_links` | 7 029 | ❌ |
+| `check_utm_fuck_direct` | `public.check_utm_fuck_direct` | 1 828 | `check_utm_fuck_direct` | **0** | ⚠️ |
+| `dim_criterion` | `public.dim_criterion` | 86 076 | `dim_criterion` | 94 217 | ✅ |
+| `direct_history` | `yandex_direct_raw.yandex_direct_history` | 77 836 | `yandex_direct_history` | 35 823 | ⚠️ |
+| `fact_adformat_spend` | `public.fact_adformat_spend_light` | 3 018 471 | `fact_adformat_spend` | 3 104 439 | ⚠️ |
+| `fact_criterion_spend` | `public.fact_criterion_spend_light` | 4 837 544 | `fact_criterion_spend` | 4 977 987 | ⚠️ |
+| `fact_criterion_zayavki` | `public.fact_criterion_zayavki` | 137 602 | `fact_criterion_zayavki` | 137 890 | ✅ |
+| `fact_direct_feed_funnel` | `public.fact_direct_feed_funnel` | 92 016 | `fact_direct_feed_funnel` | 13 304 023 | ❌ смысл |
+| `fact_ml_korrektirovki` | `public.fact_ml_korrektirovki` | 11 674 | `fact_ml_korrektirovki` | 15 396 | ✅ |
+| `fact_region_spend` | `public.fact_region_spend_light` | 13 989 880 | `fact_region_spend` | 14 175 006 | ⚠️ |
+| `fact_region_zayavki` | `public.fact_region_zayavki` | 188 432 | `fact_region_zayavki` | 188 691 | ⚠️ |
+| `fact_vk_ads` | `public.fact_vk_ads` | 705 | `fact_vk_ads` | 783 | ⚠️ |
+| `v_yandex_direct_minus_delta` | `yandex_direct_raw.v_yandex_direct_minus_delta` | 32 831 | `v_yandex_direct_minus_delta` | 1 546 | ⚠️ |
+| `yandex_direct_404_errors` | `yandex_direct_raw.yandex_direct_404_errors` | 11 780 | `yandex_direct_404_errors` | 13 548 | ✅ |
+| `yandex_direct_accounts_human_cyborgs` | `victoryads_direct_automation.…` | 17 | — | — | ❌ |
+| `yandex_direct_ads_texts` | `yandex_direct_raw.…_ads_texts_master_light` | 5 106 097 | — | — | ❌ |
+| `yandex_direct_cookie_analytics_website_pages` | `yandex_direct_raw.…` | 1 011 518 | `yandex_direct_cookie_analytics_website_pages` | 965 764 | ✅ |
+| `yandex_direct_korrektirovki` | `yandex_direct_raw.…` | 43 603 | `yandex_direct_korrektirovki` | 190 286 | ✅ |
+| `yandex_direct_minus_snapshot` | `yandex_direct_raw.…` | 32 831 | `yandex_direct_minus_snapshot` | 1 546 | ⚠️ |
+| `yandex_direct_return_commission_report` | `yandex_direct_raw.…` | 45 867 | `yandex_direct_return_commission_report` | **0** | ⚠️ |
+| `yandex_direct_search_query_report_master` | `yandex_direct_raw.…_master_pbi` | 328 658 | `yd_search_query_report_master` | 40 136 496 | ⚠️ |
+| `yandex_direct_type_placement_report_master` | `yandex_direct_raw.…_master_light` | 7 539 230 | — | — | ❌ |
+
+## §0.3 Что означает каждая ⚠️
+
+**`big_analytics_full`** — v6 `pbi_big_analytics_full` отдаёт 42 колонки против 68 в v5. Это не
+потеря данных, а **звезда**: `AdNetworkType`/`Device`/`источник`/`manager_login` заменены на
+`*_key`, а текстовые атрибуты (`CampaignName`, `AdGroupName`, `campaign_code`, `tp`, `cpc_cpa`,
+`site_quiz`, `марки авто`, `ag_part1…7`, `campaign_status`, `payment_model`, `поставщик`,
+`неверный_кодер_new`, `week_start`, `День недели`, конкатенации «номер | название») переехали в
+`Dim_Campaign` / `Dim_AdGroup` / `Dim_Date` / `Dim_Source` / `Dim_Adjustment`. Все они проверены —
+существуют в v6. **Модель PBI нужно перевязать на звезду; на плоскую таблицу она больше не сядет.**
+
+Ровно две колонки v5 отсутствуют в v6 где бы то ни было:
+`домен для зоны` и `id группы | логин | id кампании`.
+
+**`Dim_Campaign`** — нет `статус_кампании` (есть только в `bi_Dim_Campaign`), `специалист`,
+`manager_login`; последние два живут в `Dim_Salon` / `Dim_ManagerLogin`.
+**`Dim_Site`** — атрибуты переименованы с английского на русский (`city`→`город`, `salon`→`салон`,
+`directologist`→`специалист` и т.д.); реально нет только `client_id` и `niche`.
+**`Dim_AdGroup`** — нет `ag_part1_name` в физической таблице, есть в `bi_Dim_AdGroup`.
+
+**`fact_region_spend` / `fact_adformat_spend` / `fact_criterion_spend`** — в физических таблицах нет
+конверсионных колонок `Все формы`, `CRM: Заказ создан/оплачен/Спам/отменен`, а также `network_key`,
+`distance_km`, `distance_km_agreg`, `updated_at`. Все они восстанавливаются во вьюхах
+`bi_fact_*` / `pbi_import_region_spend` — **модель обязана читать `bi_*`, а не физические факты.**
+`fact_region_zayavki` дополнительно потерял `location`, `Область`, `GeoRegionType` (ушли в `Dim_Location`).
+
+**`fact_direct_feed_funnel`** — имя сохранено, содержимое другое. В v5 это воронка по товарным
+фидам (92 016 строк, 36 колонок, полная воронка `kol_vo_zayavok…prodazhi`, `feed_id`/`feed_name`/`feed_url`).
+В v6 это агрегат по площадкам РСЯ (13 304 023 строки, 13 колонок, только `cost/clicks/impressions/
+all_forms/crm_order_*`, **воронки нет вообще**). Причина и список недостающих источников —
+шапка `direct_feed_funnel/build.py` (`FEED_FUNNEL_NOT_PORTED_2026-08-05`). Страница «Фиды» в v6 не соберётся.
+
+**`direct_history`** — 35 823 строки против 77 836 и 12 колонок против 19 (нет `ulogin`,
+`user_login`, `user_uid`, `category`, `ad_group_id`, `ad_group_name`, `raw_event`, `loaded_at`).
+v6 строит историю из `raw_data.direct_campaigns`, а не из внутреннего API Директа.
+
+**`yandex_direct_minus_snapshot` / `v_yandex_direct_minus_delta`** — 1 546 строк за **один день**
+(2026-07-31) против 32 831 за 2026-07-17…2026-08-15 в v5. Причина: step14 в v6 в
+`NIGHTLY_DEFAULT_STEPS` (по умолчанию выключен), крона для v6 нет, `RETENTION_DAYS=30` не работает
+без ежедневных запусков. Дельта минус-фраз в v6 бессмысленна, пока не появится расписание.
+
+**`yandex_direct_search_query_report_master`** — в v6 лежит сырьё (40 M строк, 2026-01-01…2026-08-03),
+в v5 в PBI шёл готовый агрегат `…_master_pbi` (328 658). Данные есть, но объект в PBI-контракт v6 не
+включён и агрегата нет — импортировать 40 M строк в модель нельзя.
+
+**`yandex_direct_cookie_analytics_website_pages`** — 965 764 vs 1 011 518, свежесть до 2026-07-25
+против 2026-08-01 в v5.
+
+## §0.4 Числовая сверка ядра
+
+`fact_big_analytics`, 2026-02-01…2026-07-31, ось «По дате заявки», без пикселя:
+
+| метрика | v5 | v6 | Δ% |
+|---|---:|---:|---:|
+| cost | 1 052 177 987.70 | 1 056 015 699.73 | +0.36% |
+| заявки | 292 489 | 296 912 | +1.51% |
+| корректные | 148 012 | 153 209 | +3.51% |
+| квалифицированные | 44 543 | 43 308 | −2.77% |
+| приезды | 33 487 | 33 460 | −0.08% |
+| продажи | 3 063 | 3 062 | −0.03% |
+
+Подробности и разбор остаточных дельт — [`RAW_DIFF_FINDINGS.md`](RAW_DIFF_FINDINGS.md) §6.
+
+## §0.5 Что нужно сделать, чтобы отчёты собрались
+
+1. Завести в `raw_data` пять источников: `yandex_direct_feeds_report`, `yandex_direct_feed_urls`,
+   `yandex_direct_ads_texts_master`, `yandex_direct_type_placement_report_master`,
+   `yandex_direct_report_placement`. Передаточная спецификация со всеми эндпоинтами, полями,
+   расписанием и DDL — [`../../docs/DIRECT_RAW_HANDOVER.md`](../../docs/DIRECT_RAW_HANDOVER.md).
+2. Починить две пустые заглушки: `check_utm_fuck_direct` и `yandex_direct_return_commission_report`.
+3. Дать v6 расписание, иначе step14 (минус-фразы) не накапливает историю.
+4. Перевязать PBI-модель на звезду и на `bi_*`-вьюхи (иначе половина колонок и `Dim_Distance` не найдутся).
+5. Решить, что делать с `analytics_report_criterion/feed/placement` — восстанавливать или
+   объявить unsupported (сейчас они вычеркнуты из контракта тестом `tests/test_pbi_contract_lists.py`).
+6. Сузить `PBI_EMPTY_ALLOWED` в `data_check/verify_big_analytics.py` до двух реальных заглушек —
+   сейчас whitelist прикрывает ещё десять живых витрин (#40).
+
+---
+
+> ⚠️ **Legacy-раздел (v5 / PostgreSQL) ниже.** Актуальный ответ — §0 выше.
+> Большая часть этого файла — legacy/v5 PostgreSQL-справочник
 > Power BI-источников. В v6_ch активный слой строится в ClickHouse `ad_analytics`,
 > а публикация/refresh Power BI должна проверяться отдельно по текущему `refresh_powerbi.py`,
 > TMDL/PBIP и фактическим таблицам. Не использовать старые упоминания `pipeline_powerbi.py`

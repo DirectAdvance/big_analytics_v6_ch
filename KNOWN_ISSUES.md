@@ -638,6 +638,122 @@ wide-проекцию через dimensions, либо сверял факт по
 
 ---
 
+### 🔴 #39 — 7 таблиц модели Power BI в v6 не собираются
+
+**Суть.** Живая модель `Большая аналитика_v00` тянет 31 таблицу-источник. В ClickHouse v6 есть
+эквивалент для 24 из них.
+
+Нет источника в `raw_data` вообще: `analytics_report_placement` (v5 `arp_fact`, 1 927 669 строк),
+`analytics_report_placement_links`, `yandex_direct_ads_texts` (5 106 097),
+`yandex_direct_type_placement_report_master` (7 539 230),
+`yandex_direct_accounts_human_cyborgs` (17, схема `victoryads_direct_automation`).
+Вычеркнуты из контракта решением: `analytics_report_criterion` (`arc_fact`),
+`analytics_report_feed` (`arf_fact`) — закреплено тестом `tests/test_pbi_contract_lists.py`.
+
+Отдельно: `fact_direct_feed_funnel` в v6 носит старое имя, но содержит агрегат по площадкам РСЯ
+(13.3 M строк, 13 колонок, воронки нет) вместо воронки по фидам (92 016 строк, 36 колонок).
+Причина — `direct_feed_funnel/build.py`, маркер `FEED_FUNNEL_NOT_PORTED_2026-08-05`.
+
+**Где.** Матрица со строками и колонками — `PBI_TABLES.md` §0. Запрос владельцу сырья —
+`RAW_DATA_REQUEST.md`.
+**Статус.** OPEN. Блокирует перевод отчётов Power BI с v5 на v6.
+
+---
+
+### 🔴 #40 — две пустые заглушки PBI + слишком широкий whitelist пустоты в гейте
+
+**Суть, часть 1.** `ad_analytics.check_utm_fuck_direct` и
+`ad_analytics.yandex_direct_return_commission_report` созданы как
+`CREATE VIEW … AS SELECT CAST(NULL, 'Nullable(…)') AS …` — правильная схема, 0 строк.
+В v5: 1 828 и 45 867 строк. Источника в ClickHouse нет.
+
+**Суть, часть 2 (уточнено 2026-08-16).** Гейт непустоту PBI-объектов **проверяет**
+(`verify_big_analytics.py`, `empty_pbi_view:`), но у проверки есть whitelist `PBI_EMPTY_ALLOWED`
+на 12 имён. Реально пусты только две заглушки выше; остальные десять — живые витрины
+(`bi_fact_criterion_zayavki`=137 890, `bi_fact_region_zayavki`=188 691, `bi_Dim_Location`=16 317,
+`bi_fact_ml_korrektirovki`=15 396, `bi_yandex_direct_404_errors`=13 548, `bi_fact_vk_ads`=783,
+`bi_yandex_direct_cookie_analytics_website_pages`=965 764, `bi_yandex_direct_korrektirovki`=190 286,
+`bi_yandex_direct_minus_snapshot` и `bi_v_yandex_direct_minus_delta`=1 546).
+Пока whitelist их покрывает, регрессия «витрина обнулилась» пройдёт гейт молча.
+
+_Прежняя формулировка «гейт непустоту не проверяет» была неверной — проверка есть, проблема
+в широте исключений._
+
+**Сделано 2026-08-16.** Пустой whitelisted-объект теперь логируется
+`WARNING PBI_VIEW_EMPTY_WHITELISTED`; две заглушки вынесены в `PBI_EMPTY_BY_DESIGN` и молчат
+штатно. Вердикт гейта не изменился (PASS остаётся PASS).
+
+**Что осталось.** Сузить `PBI_EMPTY_ALLOWED` до двух заглушек — правка на одну строку, но она
+делает пустоту десяти витрин FAIL для прод-прогона. Риск: `bi_yandex_direct_minus_snapshot` и
+`bi_v_yandex_direct_minus_delta` зависят от step14, который по умолчанию выключен (#42) — в
+свежем окружении гейт покраснеет законно, но неожиданно. Ждёт решения Семёна (правило корневого
+`CLAUDE.md`: новые инварианты в `verify_big_analytics.py` — только после согласования).
+**Статус.** PARTIAL.
+
+---
+
+### 🔴 #41 — `big_analytics_reviews` отдаёт 0 строк из-за рассинхрона тега
+
+**Суть.** step3 пишет отзывы с `_source_table='direct_account_reviews'` (4 996 строк /
+1 041 642.40 ₽, совпадает с v5 копейка-в-копейку) и создаёт вьюху с фильтром
+`IN ('reviews', 'direct_account_reviews')` (`step3_build_sources/step3.py:1742`).
+Шаг 148 `cleanup_wide_intermediates` пересоздаёт ту же вьюху поверх звезды, но со списком
+`SOURCE_VIEWS["big_analytics_reviews"] = ("reviews",)`
+(`star_refactor/cleanup_wide_intermediates.py:33`) — тега `reviews` в данных нет, вьюха пустеет.
+
+Данные в `fact_big_analytics` на месте, теряется только совместимое имя.
+
+**Фикс применён 2026-08-16** (`REVIEWS_TAG_2026-08-16`):
+`"big_analytics_reviews": ("reviews", "direct_account_reviews")` — теперь совпадает со step3.
+`py_compile` OK, 140 тестов зелёные.
+**Статус.** 🟡 PARTIAL — код исправлен, но вьюха пересоздаётся шагом 148, поэтому на данных
+подтвердится только после полного прогона. Ожидаемо: `big_analytics_reviews` = 4 996 строк.
+
+---
+
+### 🔴 #42 — минус-фразы в v6 хранят один день вместо тридцати
+
+**Суть.** `ad_analytics.yandex_direct_minus_snapshot` = 1 546 строк за 2026-07-31; в v5 —
+32 831 строка за 2026-07-17…2026-08-15. Как следствие `v_yandex_direct_minus_delta` в v6
+бессмысленна: дельта считается между снапшотами, а снапшот один.
+
+**Корень.** step14 лежит в `NIGHTLY_DEFAULT_STEPS` (по умолчанию выключен в дневном прогоне),
+крона/launchd для v6 нет — `RETENTION_DAYS = 30` без ежедневных запусков не наполняется.
+**Что нужно.** Расписание для v6 (или `--include-nightly` в регулярном запуске).
+**Статус.** OPEN.
+
+---
+
+### 🟡 #43 — `raw_data.etl_runs` и `leads_all.updated_at` не показывают свежесть
+
+**Суть.** Два «индикатора свежести» v6 врут, и оба уже приводили к ложным выводам в
+`V5_V6_RECONCILE_2026-08-10.md`.
+
+- `etl_runs`: по `yandex_direct` последняя запись 2026-07-14 со статусом `error`, при этом
+  данные доходят до 2026-08-14. Логируют себя только CRM-загрузчики (`crmf`, `plex`, `mauto`, …).
+- `raw_data.leads_all.updated_at`: максимум застыл на 2026-07-30, потому что загрузчик не
+  переносит колонку при UPSERT. Содержимое текущее — `created_date` до 2026-08-15, помесячные
+  `Купил` совпадают с v5 в 7 месяцах из 8.
+
+**Что нужно.** Проверять свежесть по датам в самих таблицах (`day`, `created_date`, `_loaded_at`),
+а не по `etl_runs`/`updated_at`. Отчёт 10.08 в этой части считать опровергнутым.
+**Статус.** PARTIAL — данные в порядке, врут метаданные.
+
+---
+
+### 🟡 #44 — три справочника в v6 отстают от v5
+
+**Суть.** Замер 2026-08-15: `raw_data.domains` 4 866 против 5 188 (−322, загрузчик встал —
+max `created_at` 2026-07-21 07:33 против 2026-08-15 00:22 в v5); `raw_data.gsheet_sites`
+5 051 против 5 103 (−52, `_loaded_at` 2026-08-07); `raw_data.crm_status_mapping` 791 против 796
+(−5 строк маппинга воронки).
+
+**Почему важно.** `domains` участвует в доменных join/атрибуции, `crm_status_mapping` — источник
+правды по воронке (`FUNNEL.md`). Отставание маппинга статусов тихо смещает `korr/kval/priezd`.
+**Статус.** OPEN, вне зоны репозитория — владелец `raw_data`.
+
+---
+
 ## FIXED / BY DESIGN / PARTIAL — архив
 
 > Полный разбор каждого — git history или `/work/big_analytics_v5/KNOWN_ISSUES_ARCHIVE.md` (если создан).

@@ -9,10 +9,14 @@
 ## Запуск
 
 ```bash
-python3 pipeline.py                   # все шаги 0–10 + 13 (+ доп. скрипты, step8 последним)
-python3 pipeline.py --from-step=3     # с шага 3 до конца
-python3 pipeline.py --only-step=0     # только один шаг
+.venv/bin/python3 pipeline.py                # полный прогон: 29 шагов (0…900), ~31–32 мин
+.venv/bin/python3 pipeline.py --from-step=3  # с шага 3 до конца
+.venv/bin/python3 pipeline.py --only-step=0  # только один шаг
 ```
+
+> ⚠️ `--from-step=` выше step3 после успешного прогона не работает: шаг 148
+> `cleanup_wide_intermediates` штатно удаляет `big_analytics_sources`, и step11 падает на
+> `UNKNOWN_TABLE`. Перепрогон любого пост-step3 шага = полный прогон.
 
 > Карта «шаг → папка» в формате таблицы — единый источник [`PIPELINES.md`](PIPELINES.md#steps-map)
 > (шаги 0–13 с временами; там же 3 пайплайна и расписание). Ниже — текстовое описание шагов 0–9.
@@ -44,9 +48,16 @@ python3 pipeline.py --only-step=0     # только один шаг
 - `big_analytics_direct` — Яндекс.Директ (расходы + лиды)
 - `big_analytics_seo` — SEO-трафик из Метрики
 - `big_analytics_pixel` — пиксельные данные
-- `big_analytics_telegram` — Telegram Ads
-- `big_analytics_reviews` — отзывы (из yandex_direct_reports_reviews)
-- `big_analytics_crop_targeting` — посевы
+- `big_analytics_reviews` — отзывы. 🔌 **Единственный живой мост в PostgreSQL:**
+  `_fetch_reviews_rows_from_postgres` читает `yandex_direct_raw.yandex_direct_reports_reviews`
+  и `yandex_direct_account_reviews` прямо с Victory PG, потому что их нет в `raw_data`.
+- `big_analytics_crop_targeting` — посевы (в v6 сюда же схлопнуты `telegram` / `social_посевы`
+  / `vk_zero`, которые в v5 были отдельными `_source_table`)
+
+> ⚠️ Вьюха `ad_analytics.big_analytics_reviews` сейчас отдаёт **0 строк**: она пересоздаётся
+> шагом 148 с фильтром `_source_table IN ('reviews')`, а step3 пишет тег
+> `direct_account_reviews`. Строки в факте есть (4 996 / 1 041 642.40 ₽) —
+> см. `KNOWN_ISSUES.md` #41.
 
 ---
 
@@ -105,7 +116,15 @@ UNION ALL всех источников → `big_analytics_full`.
 
 **Шаг 11 — Атрибуция пикселя** (`step11_pixel_score`)
 Распределяет пиксель-воронку салона по цепочке салон → домен → кампания по взвешенному CR.
-Результат: `pixel_score` (PBI) + строки в `big_analytics_full` (`_source_table='пиксель_атрибуц'`).
+Результат: `pixel_score` (PBI) + `big_analytics_pixel_score`.
+С 2026-08-15 пиксель **разведён по осям** (убран двойной счёт, дубль был 127 554 695.53 ₽):
+
+| ось | `_source_table` | `источник` | строк |
+|---|---|---|---:|
+| По дате заявки | `pixel` | `Пиксель` | 31 151 |
+| По дате визита | `пиксель_атрибуц` | `Пиксель_атрибуц` | 84 566 |
+
+⚠️ Мера или визуал PBI, режущий `источник='Пиксель_атрибуц'` на **заявочной** оси, покажет ноль.
 
 ---
 
@@ -162,8 +181,10 @@ step 145). Актуальные инварианты и открытые рас�
 ## Зависимости
 
 - Python 3.10+
-- psycopg2, requests, urllib3
-- Доступ к `ad_analytics` (чтение) и `ad_analytics_bi` (запись)
+- `clickhouse-connect`, requests, urllib3; `psycopg2` — только для моста отзывов в step3
+- Доступ к ClickHouse Yandex Cloud `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`
+  (`raw_data` — чтение, `ad_analytics` — запись) через `load_db('victory_clickhouse')`
+- Read-only доступ к Victory PostgreSQL `ad_analytics_bi` — только для отзывов (step3)
 - Куки Яндекс.Директ на домашнем сервере: `http://192.168.0.202:8765/cookies`
 
 ---
@@ -186,7 +207,11 @@ _Legacy Windows-путь `C:\Users\Mi\Desktop\креативы виктори\г
 
 ### Правило: вычисления — в БД, не в Power BI
 
-Все тяжёлые вычисления (агрегации, JOIN, оконные функции, форматирование дат, бизнес-логика) выполняются на стороне Postgres (в шагах пайплайна `step1`–`step9` или в SQL-DDL источника).
+Все тяжёлые вычисления (агрегации, JOIN, оконные функции, форматирование дат, бизнес-логика) выполняются на стороне ClickHouse (в шагах пайплайна или в SQL-DDL источника).
+
+> ⚠️ **Паритет с v5.** Модель PBI сейчас читает PostgreSQL v5. Пересадить её на v6 «как есть»
+> нельзя: 7 таблиц из 31 в v6 не собираются, а главная витрина стала звездой.
+> Полный разбор — [`PBI_TABLES.md`](PBI_TABLES.md) §0.
 
 Power BI используется **только** для:
 - Простых агрегаций: `Sum/Min/Max/Count/Avg` по готовым колонкам
@@ -201,7 +226,7 @@ Power BI используется **только** для:
 
 **Если нужна новая колонка:**
 1. Добавить её на стороне БД (в соответствующем шаге пайплайна или в SQL-источнике таблицы)
-2. Запустить пайплайн → колонка появится в `ad_analytics_bi`
+2. Запустить пайплайн → колонка появится в ClickHouse `ad_analytics`
 3. В семантической модели Power BI → добавить колонку в `<table>.tmdl` (тип данных + formatString)
 4. В визуале использовать прямую ссылку на колонку через `Aggregation` (`Function: 0/3/4`) или как dimension
 

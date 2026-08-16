@@ -5,7 +5,7 @@
 > For code structure (who calls what, impact radius) use MCP `code-review-graph`;
 > this index is the fallback when the graph is unavailable.
 
-Files indexed: **307**
+Files indexed: **313**
 
 This is a compact root index. Detailed file maps live in child `INDEX.md` files.
 Read the nearest child index first; use this file only to choose the right area.
@@ -15,36 +15,38 @@ Read the nearest child index first; use this file only to choose the right area.
 | file | KB | purpose |
 |---|---|---|
 | `ATTRIBUTION.md` | 7 | ATTRIBUTION.md — единый авторитет по атрибуции |
-| `BLOCKS.md` | 39 | BLOCKS.md — технические блоки ETL (C–L) + corrections |
-| `CANON.md` | 6 | CANON.md — канон значений `big_analytics_full` |
-| `CLAUDE.md` | 4 | CLAUDE.md — big_analytics_v6_ch |
+| `BLOCKS.md` | 40 | BLOCKS.md — технические блоки ETL (C–L) + corrections |
+| `CANON.md` | 7 | CANON.md — канон значений `big_analytics_full` |
+| `CLAUDE.md` | 5 | CLAUDE.md — big_analytics_v6_ch |
 | `COLUMNS_big_analytics_full.md` | 11 | COLUMNS_big_analytics_full.md — поколоночный словарь главной витрины |
 | `COOKIES.md` | 7 | COOKIES.md — куки Яндекс.Директ |
 | `DB_TABLES.md` | 52 | DB_TABLES.md — legacy PostgreSQL table map |
-| `DOD.md` | 17 | DOD — Definition of Done, big_analytics_v5 |
+| `DOD.md` | 18 | DOD — Definition of Done, big_analytics_v5 |
 | `FUNNEL.md` | 12 | FUNNEL.md — воронка заявок (`raw_data.crm_status_mapping`) |
-| `GOLDEN_BASELINE.md` | 32 | GOLDEN BASELINE — эталонные значения v6_ch |
-| `KNOWN_ISSUES.md` | 69 | KNOWN_ISSUES — big_analytics_v6_ch |
+| `GOLDEN_BASELINE.md` | 33 | GOLDEN BASELINE — эталонные значения v6_ch |
+| `KNOWN_ISSUES.md` | 76 | KNOWN_ISSUES — big_analytics_v6_ch |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |
 | `MEMORY_ARCHIVE.md` | 275 | MEMORY.md — ba_pipeline: нетривиальные уроки |
-| `PBI_TABLES.md` | 32 | PBI_TABLES.md — Power BI source tables |
-| `PIPELINES.md` | 7 | PIPELINES.md — v6_ch ClickHouse pipelines |
+| `OPTIMIZATION_PLAN.md` | 19 | План оптимизации веса таблиц `ad_analytics` (BA6) |
+| `PBI_TABLES.md` | 45 | PBI_TABLES.md — Power BI source tables |
+| `PIPELINES.md` | 9 | PIPELINES.md — v6_ch ClickHouse pipelines |
 | `PLAN.md` | 42 | PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse) |
-| `POSEV_LEADS_LOSS_PLAN.md` | 23 | POSEV_LEADS_LOSS_PLAN — системный план ловли и починки потерь посевных ЗАЯВОК |
-| `POSEV_LOSSES_PLAYBOOK.md` | 44 | POSEV_LOSSES_PLAYBOOK — направление «посевы» big_analytics_v5 |
-| `PROJECT_CHARTER.md` | 32 | PROJECT_CHARTER.md — Устав проекта big_analytics_v5 |
-| `QUERIES.md` | 9 | QUERIES.md — SQL-шпаргалка |
-| `RAW_DIFF_FINDINGS.md` | 6 | RAW_DIFF_FINDINGS — сырьё v5 ↔ v6_ch |
-| `README.md` | 12 | big_analytics_v6_ch — ClickHouse-пайплайн аналитики |
+| `POSEV_LEADS_LOSS_PLAN.md` | 24 | POSEV_LEADS_LOSS_PLAN — системный план ловли и починки потерь посевных ЗАЯВОК |
+| `POSEV_LOSSES_PLAYBOOK.md` | 45 | POSEV_LOSSES_PLAYBOOK — направление «посевы» big_analytics_v5 |
+| `PROJECT_CHARTER.md` | 33 | PROJECT_CHARTER.md — Устав проекта big_analytics_v5 |
+| `QUERIES.md` | 10 | QUERIES.md — SQL-шпаргалка |
+| `RAW_DATA_REQUEST.md` | 12 | Запрос владельцу `raw_data`: что big_analytics_v6 тянет из Яндекс.Директа мимо вашей схемы |
+| `RAW_DIFF_FINDINGS.md` | 11 | RAW_DIFF_FINDINGS — сырьё v5 ↔ v6_ch |
+| `README.md` | 15 | big_analytics_v6_ch — ClickHouse-пайплайн аналитики |
 | `RUNBOOK.md` | 6 | RUNBOOK.md — v6_ch operations |
 | `SHEET_RECONCILE.md` | 10 | Сверка с гугл-таблицей «посевы» — FINDINGS + METHODOLOGY |
 | `SHEET_RECONCILE_FINDINGS.md` | 55 | Сверка Google-таблиц салонов ↔ public.fact_big_analytics (контекст) |
 | `SHEET_RECONCILE_METHODOLOGY.md` | 28 | Методика сверки Google-таблиц салонов ↔ витрина (КОНТЕКСТ) |
 | `SPEC.md` | 33 | SPEC — big_analytics v6 на ClickHouse |
 | `STAR_REFACTOR_BRIEF.md` | 14 | ТЗ для director — рефакторинг big_analytics_v5 под звезду (star schema) |
-| `STATE.md` | 17 | big_analytics_v6_ch — Состояние (handoff) |
+| `STATE.md` | 7 | big_analytics_v6_ch — статус |
 | `STATE_ARCHIVE.md` | 500 | Сессия 2026-07-15 (oleg_programmer — restore-прогон на откаченном коде) — ⚠️ kval НЕ восстановился |
-| `V5_V6_RECONCILE_2026-08-10.md` | 11 | Сверка big_analytics_v6_ch с big_analytics_v5 — 2026-08-10 |
+| `V5_V6_RECONCILE_2026-08-10.md` | 12 | Сверка big_analytics_v6_ch с big_analytics_v5 — 2026-08-10 |
 | `_rebuild_arrival.py` | 1 |  |
 | `_set_serverhost_domain.py` | 3 | _set_serverhost_domain.py — сменить ServerHost параметр датасета на домен |
 | `_warm_campaign_status.py` | 3 | _warm_campaign_status.py — точечный прогрев campaign_status/payment_model БЕЗ step0/step8. |
@@ -78,9 +80,9 @@ Read the nearest child index first; use this file only to choose the right area.
 | `step5_build_pixel/` | `step5_build_pixel/INDEX.md` | 9 | step5_build_pixel — Пиксельные данные |
 | `step6_build_full/` | `step6_build_full/INDEX.md` | 6 | step6_build_full — Сборка `big_analytics_full` |
 | `step7_finalize/` | `step7_finalize/INDEX.md` | 6 | step7_finalize — Финализация big_analytics_full |
-| `step8_stats/` | `step8_stats/INDEX.md` | 9 | step8_stats — Финальная статистика + Telegram-отчёт |
+| `step8_stats/` | `step8_stats/INDEX.md` | 9 | step8_stats — Статистика ClickHouse (step8) + отдельные Postgres drift-снимки |
 | `step_cron_night/` | `step_cron_night/INDEX.md` | 20 | CLAUDE.md — step_cron_night v6_ch |
-| `tests/` | `tests/INDEX.md` | 19 | INDEX — tests |
+| `tests/` | `tests/INDEX.md` | 22 | INDEX — tests |
 
 ## areas without child index
 
@@ -103,6 +105,6 @@ Read the nearest child index first; use this file only to choose the right area.
 | `step10_crop_targeting/` | 3 |
 | `step14_minus_snapshot/` | 2 |
 | `step9_direct_history/` | 3 |
-| `tools/` | 2 |
+| `tools/` | 3 |
 | `yandex_direct_checking_report/` | 3 |
 

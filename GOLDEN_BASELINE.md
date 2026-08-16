@@ -153,6 +153,28 @@ WHERE "специалист" = 'Кудерко Семен'
 5. Большое расхождение по расходу/продажам или >±несколько единиц по воронке без
    причины → стоп, искать ошибку в данных/логике.
 
+### Замер 2026-08-15 (v6_ch ClickHouse, `data_check/verify_big_analytics.py` → **PASS**, exit 0)
+
+| Метрика | Эталон v6_ch | Факт | Δ | Вердикт |
+|---|---|---|---|---|
+| Расход Кудерко | 25 422 774.00 **±1000 ₽** | 25 423 305.85 | +531.85 | ✅ в допуске |
+| Продажи Кудерко | ≥ 54 (floor) | 57 | +3 | ✅ |
+| `fact_big_analytics` | — | 5 231 242 | — | max `Date` = 2026-08-15 |
+| `big_analytics_full` | — | 5 107 901 | — | View |
+| `big_analytics_unified` | — | 5 231 242 | — | `unified_count_mismatch=0` |
+| `big_analytics_full_arrival` | — | 123 341 | — | View |
+| Инварианты воронки | 0 нарушений | `korr<kval`=0, `kval<priezd`=0, `priezd<prodazhi`=0 | — | ✅ |
+| `full_null_source` / `full_before_2026` | 0 | 0 / 0 | — | ✅ |
+
+Δ+531.85 — не регрессия: `KUDERKO_RAW_INCOMPLETE`, в сырье 29/67 логинов (28/67 до отсечки golden).
+Root-cause — [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) #37, внешний бэкфил вне репозитория.
+
+⚠️ **Граница гейта.** В том же прогоне PASS выданы `bi_check_utm_fuck_direct=0` и
+`bi_yandex_direct_return_commission_report=0`. Непустота PBI-объектов **проверяется**
+(`empty_pbi_view:`), но эти два покрыты whitelist `PBI_EMPTY_ALLOWED` — как и ещё десять живых
+витрин, для которых обнуление прошло бы молча. С 2026-08-16 пустой whitelisted-объект пишет
+`WARNING PBI_VIEW_EMPTY_WHITELISTED`; сужение самого whitelist ждёт решения (#40).
+
 ### Сверка от 2026-06-11 (на состоянии БД после пересборки 10–11.06, `public.fact_big_analytics`)
 
 | Метрика | Эталон (инвариант) | Факт | Δ | Вердикт |

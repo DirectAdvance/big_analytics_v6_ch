@@ -1,5 +1,11 @@
 # QUERIES.md — SQL-шпаргалка
 
+<!-- v6-scope-banner -->
+> 🧭 **Область в v6_ch (2026-08-15).** Шпаргалка написана под PostgreSQL v5 (MCP
+> `postgres-victory`). Для активного контура v6 использовать MCP `clickhouse-victory`
+> (БД `ad_analytics` / `raw_data`) или `config/ch_db.get_client()`; синтаксис ClickHouse,
+> кириллические идентификаторы — в обратных кавычках.
+
 > Готовые read-only запросы под **MCP `postgres-victory`** (с мака, auto-approved) или
 > `ssh victory '~/venv/bin/python3 ~/pgq.py "..."'`. ⛔ psql на Victory сломан.
 > Перед изменениями данных — золотая сверка [`GOLDEN_BASELINE.md`](GOLDEN_BASELINE.md).

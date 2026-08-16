@@ -1,5 +1,11 @@
 # COLUMNS_big_analytics_full.md — поколоночный словарь главной витрины
 
+<!-- v6-scope-banner -->
+> 🧭 **Область в v6_ch (2026-08-15).** Словарь снят с v5 PostgreSQL. В v6 колонок тоже 73, но
+> раскладка другая: `ad_analytics.big_analytics_full` — View поверх `fact_big_analytics` + `Dim_*`,
+> а PBI-проекция `ad_analytics.pbi_big_analytics_full` отдаёт **42** колонки (текстовые атрибуты
+> заменены на `*_key` и вынесены в справочники). Диффы колонок v5↔v6 — `PBI_TABLES.md` §0.3.
+
 > Словарь всех колонок `public.big_analytics_full` (73 колонки). Типы получены
 > интроспекцией live-БД `ad_analytics_bi` @ Victory (`information_schema.columns`,
 > 2026-06-07). Порядок колонок задан в `step6_build_full/step6.py` (`COLS`) — он же
