@@ -93,9 +93,11 @@ UNION ALL всех источников → `big_analytics_full`.
 
 ---
 
-**Шаг 8 — Статистика и отчёт** (`step8_stats`)
-Считает итоговую статистику по всем таблицам.
-Отправляет финальный Telegram-отчёт (выполняется последним).
+**Шаг 8 — Статистика** (`step8_stats`)
+Считает итоговую статистику по таблицам ClickHouse, выполняется последним из содержательных
+шагов перед `verify`. **Telegram не отправляет** — только `logger.info` (см.
+`step8_stats/CLAUDE.md`). Отправку делает standalone `funnel_drift_snapshot.py`, которого нет
+в `pipeline.py::STEPS`.
 
 ---
 
@@ -129,7 +131,14 @@ UNION ALL всех источников → `big_analytics_full`.
 ---
 
 **Шаг 12 — Проверка CRM-маппингов** (`step12_proverka_big_analytics`)
-Проверки качества → Telegram-отчёт.
+Проверки качества. Telegram не отправляет.
+
+> ⚠️ **Дневной `pipeline.py` не шлёт в Telegram ничего — ни успех, ни падение.** Проверено
+> 2026-08-16: ни один шаг из `STEPS` не вызывает отправку, падение шага только пишется в
+> `logger.exception` и в `data_quality_log`. Уведомления есть только у ночного
+> `step_cron_night/pipeline_night.py` (ошибки + отчёт) и у standalone-скриптов
+> (`watch_pipeline.py`, `funnel_drift_snapshot.py`, `yandex_direct_checking_report`).
+> Сам канал живой: тестовая отправка 2026-08-16 доставлена и с Мака, и с Victory.
 
 ---
 
