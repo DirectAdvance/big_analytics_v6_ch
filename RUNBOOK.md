@@ -76,6 +76,30 @@ for row in rows:
 PY
 ```
 
+## 3a. Сверка кода на Victory (делать ДО доверия к прогону)
+
+Код на Victory не синхронизируется ничем: Mutagen ходит на LXC 101, сюда — только руками через
+`scp`. Дрейф копится молча и обнаруживается по странным числам. Замер 16.08: Victory отставал на
+три ETL-коммита от 13–14.08 (`config/status_sql.py`, `corrections.py`, `step6_build_full/step6.py`)
+— то есть считал воронку и классификацию источников по-старому.
+
+```bash
+# на Маке, из корня проекта
+git ls-files '*.py' | grep -v '^archive/' | sort > /tmp/ba6_files.txt
+while read -r f; do printf "%s  %s\n" "$(md5 -q "$f")" "$f"; done < /tmp/ba6_files.txt | sort -k2 > /tmp/loc.md5
+scp -q /tmp/ba6_files.txt victory:/tmp/ba6_files.txt
+ssh victory 'cd ~/big_analytics_v6_ch && while read -r f; do
+  [ -f "$f" ] && md5sum "$f" || echo "ОТСУТСТВУЕТ  $f"; done < /tmp/ba6_files.txt | sort -k2' > /tmp/vic.md5
+join -j 2 -o 0,1.1,2.1 /tmp/loc.md5 /tmp/vic.md5 | awk '$2!=$3 {print "РАЗНЫЙ " $1}'
+```
+
+Пусто = деревья совпали. После любого `scp` контракт тот же, что в скиле `deploy-victory`:
+md5 Mac == md5 Victory → grep маркера патча → `py_compile` на Victory.
+
+⚠️ Не собирать список файлов в переменную и не гонять `for f in $FILES` — zsh не разбивает строку
+на слова, и `mkdir -p ~/big_analytics_v6_ch/$(dirname $f)` создаёт в `$HOME` Victory каталоги с
+именами вроде `corrections.py`. Использовать массив: `FILES=(a.py b.py)` + `"${FILES[@]}"`.
+
 ## 4. Проверки после прогона
 
 ```bash
