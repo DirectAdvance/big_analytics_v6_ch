@@ -102,7 +102,7 @@ def _telega_api_metric_expr(status_expr: str = "status") -> str:
 
 def _gs_metric(column: str) -> str:
     return (
-        f"ifNull(toDecimal256OrNull(replaceAll(ifNull(g.`{column}`, ''), ',', '.'), 6), "
+        f"ifNull(toDecimal256OrNull(replaceAll(ifNull(toString(g.`{column}`), ''), ',', '.'), 6), "
         "toDecimal256(0, 6))"
     )
 
