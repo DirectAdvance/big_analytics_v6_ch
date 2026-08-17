@@ -104,6 +104,21 @@ def test_dim_adgroup_uses_narrow_raw_source_before_fact_fallback():
     assert sql.index("raw_data.direct_adgroups") < sql.index("ad_analytics.big_analytics_unified")
 
 
+def test_dim_site_uses_ba5_empty_crm_label():
+    sql = build_star.DIM_DDL["Dim_Site"]
+
+    assert "'Не указана'" in sql
+    assert "CAST(ifNull(crm_name, ''), 'String') AS `Название crm`" not in sql
+
+
+def test_dim_campaign_normalizes_kviz_to_quiz():
+    ddl_sql = build_star.DIM_DDL["Dim_Campaign"]
+    build_source = inspect.getsource(build_star.build_dim_campaign)
+
+    assert "replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code" in ddl_sql
+    assert "replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code" in build_source
+
+
 def test_campaign_and_adgroup_default_to_single_merge_bucket():
     signature = inspect.signature(build_star.build_dim_campaign)
     source = inspect.getsource(build_star.build_dim_adgroup)

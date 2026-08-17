@@ -113,12 +113,16 @@ from corrections import specialist_correction_expr
 from step3_build_sources.step3 import (
     _ag_parts_expr,
     _category_match_expr,
+    _CROP_ACCOUNT_DOMAIN_SUBQUERY,
+    _crop_provider_expr,
+    _crop_source_expr,
+    _crop_source_table_expr,
     _gs_account_cte,
     _leads_deduped_cte,
     _metric_expr,
     _weekday_expr,
 )
-from step6_build_full.step6 import _CROP_DOMAIN_SUBQUERY
+from step6_build_full.step6 import _POSEV_ACTIVITY_DOMAIN_SUBQUERY
 
 logger = logging.getLogger("pipeline.step13")
 
@@ -378,6 +382,8 @@ def _leads_branch_sql(date_from: str) -> str:
     )
     seo_flag = "(ifNull(l.utm_source, '') = '' OR (l.utm_source = 'seo' AND ifNull(l.utm_medium, '') = 'organic'))"
     tp_expr = "ifNull(coalesce(cd.tp, ''), '')"
+    domain_key_expr = "lowerUTF8(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), l.domain), '')))"
+    site_status_expr = "coalesce(nullIf(gs_ma.status, ''), gs.status)"
     return f"""
 WITH
 {_gs_account_cte()},
@@ -426,7 +432,9 @@ lead_visits AS
         -- Метки — конвенция ЗАЯВОЧНОЙ оси v6: посевные utm → crop_targeting/Посевы,
         -- органика → seo/SEO, остальное → direct (или tp8/tp9/tp10 по коду кампании).
         multiIf(
-            {posev_flag}, 'Посевы',
+            {posev_flag}, {_crop_source_expr("l.")},
+            {seo_flag} AND {domain_key_expr} IN ({_CROP_ACCOUNT_DOMAIN_SUBQUERY}), 'Посевы_SEO',
+            {seo_flag} AND {site_status_expr} = 'SEO Flow', 'SEO Flow',
             {seo_flag}, 'SEO',
             'Контекст'
         ) AS `источник`,
@@ -436,12 +444,13 @@ lead_visits AS
             'Комплекс'
         ) AS `направление`,
         multiIf(
-            {posev_flag}, 'Посевы',
+            {posev_flag}, {_crop_provider_expr("l.")},
+            {seo_flag} AND {domain_key_expr} IN ({_CROP_ACCOUNT_DOMAIN_SUBQUERY}), 'Посевы',
             {seo_flag}, 'Victory',
             'Яндекс'
         ) AS `поставщик`,
         multiIf(
-            {posev_flag}, 'crop_targeting',
+            {posev_flag}, {_crop_source_table_expr("l.")},
             {seo_flag}, 'seo',
             {tp_expr} IN ('tp8', 'tp9', 'tp10'), {tp_expr},
             'direct'
@@ -634,9 +643,12 @@ call_visits AS
         coalesce(nullIf(gs_ma.client_id, ''), gs.client_id) AS `id_салона`,
         coalesce(nullIf(gs_ma.sales_manager, ''), gs.sales_manager) AS `менеджер`,
         multiIf(
-            lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), ''))) IN ({_CROP_DOMAIN_SUBQUERY}),
+            coalesce(nullIf(gs_ma.direction_main, ''), gs.direction_main) = 'Посевы'
+            AND lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY}),
             'Посевы_Звонки',
-            coalesce(nullIf(gs_ma.status, ''), gs.status) IN ('SEO', 'SEO Flow'),
+            coalesce(nullIf(gs_ma.status, ''), gs.status) = 'SEO Flow',
+            'SEO Flow',
+            coalesce(nullIf(gs_ma.status, ''), gs.status) = 'SEO',
             'SEO',
             'Контекст'
         ) AS source_label,

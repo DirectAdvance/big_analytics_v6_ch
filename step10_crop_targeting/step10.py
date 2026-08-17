@@ -1,10 +1,4 @@
-"""Step 10 for v6_ch: add crop/Telega/VK cost overlays.
-
-The lead funnel for crop/social traffic is already derived from raw leads in
-step3/step6. Historical v5 cost logic also used separate cost tables: crop
-Google Sheets before May, Telega.in lead table from May, and VK Ads spend. This
-step adds those costs as zero-funnel overlay rows to avoid double-counting leads.
-"""
+"""Step 10 for v6_ch: add crop/Telega/VK cost overlays and Telega.in lead facts."""
 
 from __future__ import annotations
 
@@ -20,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
-from step3_build_sources.step3 import CROP_SOURCE_TYPES, SOURCE_STORE, _metric_expr
+from step3_build_sources.step3 import CROP_SOURCE_TYPES, SOURCE_STORE
 
 logger = logging.getLogger("pipeline.step10")
 
@@ -60,6 +54,61 @@ _API_SOURCE = """
         concat('Посевы_', ifNull(t.`источник`, ''))
     )
 """
+
+
+def _in_status(status_expr: str, values: tuple[str, ...]) -> str:
+    return f"ifNull({status_expr}, '') IN ({', '.join(repr(value) for value in values)})"
+
+
+def _telega_api_metric_expr(status_expr: str = "status") -> str:
+    """BA5 Telega.in API formula: kval = korr - no-answer - filter - no-call."""
+    korr = (
+        'Новый', 'В салоне', 'Купил', 'На рассмотрении', 'В салоне не отмечен', 'Отказ',
+        'Не отвечает', 'Приедет', 'В работе', 'Фильтр', 'Недозвон', 'Приехал',
+        'Уточнить по дате', 'Перезвонить', 'Отказ клиента', 'Продажа за наличные',
+        'Продажа в кредит', 'Соскок', 'Консультация', 'Отказ по банкам', 'Одобрен банк',
+        'Одобрено банк', 'Новая', 'Заполнить', 'Новая: Не отвечает', 'Т. Кредит',
+        'А. Кредит', 'Одобрить', 'Одобрен', 'Отложенный', 'В работе - odobrit',
+        'Перезвонить срочно', 'Одобренные', 'Оформленные', 'Одобрение', 'Дошел в КО',
+    )
+    priezd = (
+        'В салоне', 'В салоне не отмечен', 'Купил', 'Приехал', 'Соскок', 'Консультация',
+        'Отказ по банкам', 'Одобрен банк', 'Продажа за наличные', 'Продажа в кредит',
+        'Одобрить', 'Одобрен', 'На рассмотрении', 'Т. Кредит', 'А. Кредит',
+        'Одобренные', 'Оформленные', 'Одобрение', 'Дошел в КО',
+    )
+    sale = ('Купил', 'Продажа за наличные', 'Продажа в кредит', 'Т. Кредит', 'А. Кредит', 'Оформленные', 'COMPLETED', 'Продажа')
+    nekorr = ('Некорректные данные', 'Корзина', 'Повтор', 'Нет данных', 'Дубль', '***', 'Спам', 'Хлам', 'Отбракованные', 'Общие вопросы')
+    ne_otvechaet = ('Не отвечает', 'Новая: Не отвечает')
+    korr_expr = f"toInt64({_in_status(status_expr, korr)})"
+    ne_otvechaet_expr = f"toInt64({_in_status(status_expr, ne_otvechaet)})"
+    filtr_expr = f"toInt64(ifNull({status_expr}, '') = 'Фильтр')"
+    nedozvon_expr = f"toInt64(ifNull({status_expr}, '') = 'Недозвон')"
+    return f"""
+        toInt64(if(ifNull({status_expr}, '') != '', 1, 0)) AS kol_vo_zayavok,
+        {korr_expr} AS korr,
+        {korr_expr} - {ne_otvechaet_expr} - {filtr_expr} - {nedozvon_expr} AS kval,
+        toInt64({_in_status(status_expr, priezd)}) AS priezd,
+        toInt64({_in_status(status_expr, sale)}) AS prodazhi,
+        toInt64({_in_status(status_expr, nekorr)}) AS nekorr,
+        {ne_otvechaet_expr} AS ne_otvechaet,
+        {filtr_expr} AS filtr,
+        {nedozvon_expr} AS nedozvon,
+        toInt64(ifNull({status_expr}, '') = 'Приедет') AS priedet,
+        toInt64(0) AS dohod_do_kredita,
+        toInt64(0) AS dobro
+    """
+
+
+def _gs_metric(column: str) -> str:
+    return (
+        f"ifNull(toDecimal256OrNull(replaceAll(ifNull(g.`{column}`, ''), ',', '.'), 6), "
+        "toDecimal256(0, 6))"
+    )
+
+
+def _api_metric(column: str) -> str:
+    return f"toDecimal256(ifNull(t.{column}, 0), 6)"
 
 
 def _require(client, database: str, table: str) -> None:
@@ -273,7 +322,7 @@ def _campaign_source_expr(channel_link: str, utm_source: str) -> str:
 def _rebuild_telega_leads_agg(client) -> int:
     _require(client, "ad_analytics", "raw_leads")
     target = "ad_analytics._tmp_telega_leads_agg"
-    metrics = _metric_expr("status", "reason", "source_type", "salon")
+    metrics = _telega_api_metric_expr("status")
     client.command(f"DROP TABLE IF EXISTS {target} SYNC", settings=SAFE_QUERY_SETTINGS)
     client.command(
         f"""
@@ -644,16 +693,16 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
             '' AS `марки авто`,
             '' AS `Название crm`,
             CAST('Заявки', 'Nullable(String)') AS `тип_заявки`,
-            toDecimal256(0, 6) AS kol_vo_zayavok,
-            toDecimal256(0, 6) AS korr,
-            toDecimal256(0, 6) AS kval,
-            toDecimal256(0, 6) AS priezd,
-            toDecimal256(0, 6) AS prodazhi,
-            toDecimal256(0, 6) AS nekorr,
-            toDecimal256(0, 6) AS ne_otvechaet,
-            toDecimal256(0, 6) AS filtr,
-            toDecimal256(0, 6) AS nedozvon,
-            toDecimal256(0, 6) AS priedet,
+            {_gs_metric("kol_vo_zayavok")} AS kol_vo_zayavok,
+            {_gs_metric("korr")} AS korr,
+            {_gs_metric("kval")} AS kval,
+            {_gs_metric("priezd")} AS priezd,
+            {_gs_metric("prodazhi")} AS prodazhi,
+            {_gs_metric("nekorr")} AS nekorr,
+            {_gs_metric("ne_otvechaet")} AS ne_otvechaet,
+            {_gs_metric("filtr")} AS filtr,
+            {_gs_metric("nedozvon")} AS nedozvon,
+            {_gs_metric("priedet")} AS priedet,
             toInt64(0) AS dohod_do_kredita,
             toInt64(0) AS dobro,
             CAST(NULL, 'Nullable(String)') AS `статус`,
@@ -740,18 +789,18 @@ def _insert_crop_api_costs(client, target: str) -> None:
             '' AS `марки авто`,
             '' AS `Название crm`,
             CAST('Заявки', 'Nullable(String)') AS `тип_заявки`,
-            toDecimal256(0, 6) AS kol_vo_zayavok,
-            toDecimal256(0, 6) AS korr,
-            toDecimal256(0, 6) AS kval,
-            toDecimal256(0, 6) AS priezd,
-            toDecimal256(0, 6) AS prodazhi,
-            toDecimal256(0, 6) AS nekorr,
-            toDecimal256(0, 6) AS ne_otvechaet,
-            toDecimal256(0, 6) AS filtr,
-            toDecimal256(0, 6) AS nedozvon,
-            toDecimal256(0, 6) AS priedet,
-            toInt64(0) AS dohod_do_kredita,
-            toInt64(0) AS dobro,
+            {_api_metric("kol_vo_zayavok")} AS kol_vo_zayavok,
+            {_api_metric("korr")} AS korr,
+            {_api_metric("kval")} AS kval,
+            {_api_metric("priezd")} AS priezd,
+            {_api_metric("prodazhi")} AS prodazhi,
+            {_api_metric("nekorr")} AS nekorr,
+            {_api_metric("ne_otvechaet")} AS ne_otvechaet,
+            {_api_metric("filtr")} AS filtr,
+            {_api_metric("nedozvon")} AS nedozvon,
+            {_api_metric("priedet")} AS priedet,
+            ifNull(t.dohod_do_kredita, 0) AS dohod_do_kredita,
+            ifNull(t.dobro, 0) AS dobro,
             CAST(t.`статус`, 'Nullable(String)') AS `статус`,
             CAST(t.`специалист`, 'Nullable(String)') AS `специалист`,
             CAST(t.`тип_сайта`, 'Nullable(String)') AS `тип_сайта`,
@@ -930,6 +979,39 @@ def _rebuild_cost_overlays(client) -> tuple[int, float]:
     return int(row[0]), float(row[1] or 0)
 
 
+def _telega_covered_raw_keys(lo: str, hi: str) -> str:
+    effective_date = _effective_date_expr("o")
+    raw_domain = _raw_domain_expr("o")
+    return f"""
+        SELECT l.key3
+        FROM ad_analytics.raw_leads l
+        INNER JOIN
+        (
+            SELECT
+                ifNull(utm_campaign, '') AS utm_campaign,
+                leftPad(trim(ifNull(utm_content, '')), 8, '0') AS utm_content_key,
+                lowerUTF8(trim(ifNull(utm_source, ''))) AS utm_source_key,
+                lowerUTF8(trim(ifNull(utm_medium, ''))) AS utm_medium_key,
+                multiIf(
+                    nullIf({raw_domain}, '') IS NOT NULL AND {raw_domain} NOT IN ('telega.io', 'max.ru', 't.me'),
+                    {raw_domain},
+                    lowerUTF8(trim(arrayElement(splitByChar(' ', ifNull(order_project_name, '')), 1)))
+                ) AS domain_key
+            FROM ad_analytics.local_telega_in_orders o
+            WHERE ifNull(status, '') = 'complete'
+              AND {effective_date} >= toDate('2026-05-01')
+        ) t
+          ON t.utm_campaign = ifNull(l.utm_campaign, '')
+         AND t.utm_content_key = leftPad(trim(ifNull(l.utm_content, '')), 8, '0')
+         AND t.domain_key = lowerUTF8(trim(ifNull(l.domain, '')))
+         AND t.utm_source_key = lowerUTF8(trim(ifNull(l.utm_source, '')))
+         AND t.utm_medium_key = lowerUTF8(trim(ifNull(l.utm_medium, '')))
+        WHERE l.created_date >= toDate('{lo}')
+          AND l.created_date < toDate('{hi}')
+          AND ifNull(l.key3, '') != ''
+    """
+
+
 def _overlay_full(client) -> tuple[int, float, float]:
     if not table_exists(client, "ad_analytics", "big_analytics_full"):
         return 0, 0.0, 0.0
@@ -970,6 +1052,10 @@ def _overlay_full(client) -> tuple[int, float, float]:
             WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
               AND NOT startsWith(key3, 'crop_cost|')
               AND NOT startsWith(key3, 'vk_ads_cost|')
+              AND NOT (
+                  _source_table IN ('social_посевы', 'telegram')
+                  AND key3 IN ({_telega_covered_raw_keys(lo, hi)})
+              )
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
@@ -997,8 +1083,7 @@ def _overlay_full(client) -> tuple[int, float, float]:
     after_rows = int(after[0])
     after_cost = float(after[1] or 0)
     after_funnel = float(after[2] or 0)
-    if abs(after_funnel - before_funnel) > 0.0001:
-        raise RuntimeError(f"cost overlay changed funnel metrics: {before_funnel} -> {after_funnel}")
+    logger.info("  full crop-overlay funnel: %.2f -> %.2f", before_funnel, after_funnel)
     return after_rows, before_cost, after_cost
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001

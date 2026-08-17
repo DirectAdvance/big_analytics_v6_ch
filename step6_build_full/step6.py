@@ -81,6 +81,14 @@ _CROP_DOMAIN_SUBQUERY = """
     WHERE ifNull(`Сайт`, '') != ''
 """
 
+_POSEV_ACTIVITY_DOMAIN_SUBQUERY = """
+    SELECT DISTINCT lower(trim(ifNull(domain, '')))
+    FROM ad_analytics.big_analytics_crop_targeting
+    WHERE ifNull(domain, '') != ''
+      AND _source_table IN ('crop_targeting', 'tp8', 'tp9', 'tp10')
+      AND ifNull(kol_vo_zayavok, 0) > 0
+"""
+
 
 def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
     """Calls branch of `big_analytics_full` for the [lo, hi) day window.
@@ -96,15 +104,21 @@ def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
     metrics = _metric_expr("c.status", "c.reason", "c.source_type", "gs.salon")
     specialist_expr = specialist_correction_expr("c.created_date", "gs.login_key", _domain_specialist_expr("gs"))
     if crop:
-        domain_filter = f"lower(trim(ifNull(c.domain, ''))) IN ({_CROP_DOMAIN_SUBQUERY})"
+        domain_filter = (
+            "ifNull(gs.direction_main, '') = 'Посевы'\n"
+            f"  AND lower(trim(ifNull(c.domain, ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY})"
+        )
         istochnik_sql = "'Посевы_Звонки'"
         napravlenie_sql = "'Комплекс'"
     else:
         domain_filter = (
             "gs.direction = 'Авто'\n"
-            f"  AND lower(trim(ifNull(c.domain, ''))) NOT IN ({_CROP_DOMAIN_SUBQUERY})"
+            "  AND NOT (\n"
+            "      ifNull(gs.direction_main, '') = 'Посевы'\n"
+            f"      AND lower(trim(ifNull(c.domain, ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY})\n"
+            "  )"
         )
-        istochnik_sql = "multiIf(gs.status IN ('SEO', 'SEO Flow'), 'SEO', 'Контекст')"
+        istochnik_sql = "multiIf(gs.status = 'SEO Flow', 'SEO Flow', gs.status = 'SEO', 'SEO', 'Контекст')"
         napravlenie_sql = "'Комплекс'"
     return f"""
 WITH
@@ -126,6 +140,7 @@ gs_domain_best AS
             gs.city,
             gs.region,
             gs.direction,
+            gs.direction_main,
             gs.project_manager,
             gs.client_id,
             gs.sales_manager,

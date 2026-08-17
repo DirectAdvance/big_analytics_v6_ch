@@ -374,7 +374,7 @@ DIM_DDL = {
                 project AS project_manager,
                 salon_id AS `id_салона`,
                 manager AS `менеджер`,
-                CAST(ifNull(crm_name, ''), 'String') AS `Название crm`
+                CAST(if(ifNull(crm_name, '') = '', 'Не указана', crm_name), 'String') AS `Название crm`
             FROM
             (
                 -- 1) domains covered by the master directory: the 9
@@ -508,7 +508,7 @@ DIM_DDL = {
                 `CampaignId`,
                 anyLast(`CampaignName`) AS `CampaignName`,
                 anyLast(account_login) AS account_login,
-                anyLast(campaign_code) AS campaign_code,
+                replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code,
                 anyLast(tp) AS tp,
                 anyLast(cpc_cpa) AS cpc_cpa,
                 anyLast(site_quiz) AS site_quiz,
@@ -919,7 +919,7 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
             `CampaignId`,
             anyLast(`CampaignName`) AS `CampaignName`,
             anyLast(account_login) AS account_login,
-            anyLast(campaign_code) AS campaign_code,
+            replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code,
             anyLast(tp) AS tp,
             anyLast(cpc_cpa) AS cpc_cpa,
             anyLast(site_quiz) AS site_quiz,
@@ -943,7 +943,7 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
                 `CampaignId`,
                 anyLast(`CampaignName`) AS `CampaignName`,
                 anyLast(account_login) AS account_login,
-                anyLast(campaign_code) AS campaign_code,
+                replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code,
                 anyLast(tp) AS tp,
                 anyLast(cpc_cpa) AS cpc_cpa,
                 anyLast(site_quiz) AS site_quiz,

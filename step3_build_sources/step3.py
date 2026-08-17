@@ -561,6 +561,7 @@ gs_account AS
         anyLast(city) AS city,
         anyLast(region) AS region,
         anyLast(direction) AS direction,
+        anyLast(direction_main) AS direction_main,
         anyLast(project_manager) AS project_manager,
         anyLast(client_id) AS client_id,
         anyLast(sales_manager) AS sales_manager
@@ -585,6 +586,7 @@ gs_domain AS
         anyLast(city) AS city,
         anyLast(region) AS region,
         anyLast(direction) AS direction,
+        anyLast(direction_main) AS direction_main,
         anyLast(project_manager) AS project_manager,
         anyLast(client_id) AS client_id,
         anyLast(sales_manager) AS sales_manager,
@@ -1429,6 +1431,13 @@ def _crop_overrides(prefix: str = "l.") -> dict[str, str]:
     }
 
 
+_CROP_ACCOUNT_DOMAIN_SUBQUERY = """
+    SELECT DISTINCT lowerUTF8(trim(ifNull(ca.`Сайт`, '')))
+    FROM ad_analytics.gsheets_crop_targeting_account ca
+    WHERE ifNull(ca.`Сайт`, '') != ''
+"""
+
+
 def _build_crop_sql() -> str:
     return _build_lead_source_sql(
         "big_analytics_crop_targeting",
@@ -1451,13 +1460,24 @@ AND lowerUTF8(trim(ifNull(domain, ''))) IN (
     FROM raw_data.gsheet_sites gs2
     WHERE ifNull(gs2.domain, '') != ''
 )
-AND lowerUTF8(trim(ifNull(domain, ''))) NOT IN (
-    SELECT lowerUTF8(trim(ifNull(ca.`Сайт`, '')))
-    FROM ad_analytics.gsheets_crop_targeting_account ca
-    WHERE ifNull(ca.`Сайт`, '') != ''
-)
 """
-    return _build_lead_source_sql("big_analytics_seo", filt, "SEO", "Комплекс", "Victory", lead_date_filter)
+    return _build_lead_source_sql(
+        "big_analytics_seo",
+        filt,
+        "SEO",
+        "Комплекс",
+        "Victory",
+        lead_date_filter,
+        overrides={
+            "источник": (
+                "multiIf("
+                f"l.domain_key IN ({_CROP_ACCOUNT_DOMAIN_SUBQUERY}), 'Посевы_SEO', "
+                "gs.status = 'SEO Flow', 'SEO Flow', "
+                "'SEO')"
+            ),
+            "поставщик": f"if(l.domain_key IN ({_CROP_ACCOUNT_DOMAIN_SUBQUERY}), 'Посевы', 'Victory')",
+        },
+    )
 
 
 def _build_pixel_sql(lead_date_filter: str = "") -> str:
