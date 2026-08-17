@@ -4,7 +4,7 @@
 
 ---
 
-# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-15
+# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-17
 
 Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
 что живут на v5.** Метод: живая модель
@@ -31,10 +31,15 @@ cookie-страницы, поисковые запросы) — есть и по
 | — | `Dim_Distance` (DAX) | считается из `distance_km_agreg`; в физических `fact_region_*` v6 колонки нет, есть только в `bi_*`-вьюхах |
 | — | `fact_direct_feed_funnel` (по смыслу) | имя занято, но это **не** воронка по фидам — см. §0.3 |
 
-Плюс два PBI-объекта v6 существуют как **пустые заглушки**: `check_utm_fuck_direct` и
-`yandex_direct_return_commission_report` — это `CREATE VIEW … SELECT CAST(NULL, …)`, 0 строк
-(в v5: 1 828 и 45 867). Гейт `verify_big_analytics.py` непустоту проверяет, но эти два покрыты
-whitelist `PBI_EMPTY_ALLOWED`, поэтому PASS проходит штатно (#40).
+17.08 в `raw_data` появились `direct_cookie_ads_texts_master`,
+`direct_cookie_type_placement_master`, `direct_cookie_feed_urls`. Это будущая замена для
+`yandex_direct_ads_texts` и `yandex_direct_type_placement_report_master`, а также источник
+справочника фидов; переключение делать через `bi_*`-совместимые вьюхи после ночной догрузки и
+контрольной сверки с `raw_new_*`. Старые `raw_new_*` до этого не удалять. Отдельно решить
+маппинг `goals`: в новых таблицах нет раздельных `goal_all_forms` и `goal_crm_order_paid`.
+
+Пустые `bi_*`-объекты больше не разрешены. `check_utm_fuck_direct` восстановлен из `raw_data`,
+а `yandex_direct_return_commission_report` исключён из активного PBI-контракта BA6 (#40).
 
 ## §0.2 Матрица 31 таблицы
 
@@ -52,7 +57,7 @@ whitelist `PBI_EMPTY_ALLOWED`, поэтому PASS проходит штатно
 | `analytics_report_feed` | `public.arf_fact` | 91 898 | — | — | ❌ |
 | `analytics_report_placement` | `public.arp_fact` | 1 927 669 | — | — | ❌ |
 | `analytics_report_placement_links` | `arp_fact` + `yandex_direct_tp_placement_links` | 5 093 | `yandex_direct_tp_placement_links` | 7 029 | ❌ |
-| `check_utm_fuck_direct` | `public.check_utm_fuck_direct` | 1 828 | `check_utm_fuck_direct` | **0** | ⚠️ |
+| `check_utm_fuck_direct` | `public.check_utm_fuck_direct` | 1 828 | `check_utm_fuck_direct` | **3 981** | ✅ |
 | `dim_criterion` | `public.dim_criterion` | 86 076 | `dim_criterion` | 94 217 | ✅ |
 | `direct_history` | `yandex_direct_raw.yandex_direct_history` | 77 836 | `yandex_direct_history` | 35 823 | ⚠️ |
 | `fact_adformat_spend` | `public.fact_adformat_spend_light` | 3 018 471 | `fact_adformat_spend` | 3 104 439 | ⚠️ |
@@ -66,13 +71,12 @@ whitelist `PBI_EMPTY_ALLOWED`, поэтому PASS проходит штатно
 | `v_yandex_direct_minus_delta` | `yandex_direct_raw.v_yandex_direct_minus_delta` | 32 831 | `v_yandex_direct_minus_delta` | 1 546 | ⚠️ |
 | `yandex_direct_404_errors` | `yandex_direct_raw.yandex_direct_404_errors` | 11 780 | `yandex_direct_404_errors` | 13 548 | ✅ |
 | `yandex_direct_accounts_human_cyborgs` | `victoryads_direct_automation.…` | 17 | — | — | ❌ |
-| `yandex_direct_ads_texts` | `yandex_direct_raw.…_ads_texts_master_light` | 5 106 097 | — | — | ❌ |
+| `yandex_direct_ads_texts` | `yandex_direct_raw.…_ads_texts_master_light` | 5 106 097 | `raw_data.direct_cookie_ads_texts_master` | догружается | ⚠️ |
 | `yandex_direct_cookie_analytics_website_pages` | `yandex_direct_raw.…` | 1 011 518 | `yandex_direct_cookie_analytics_website_pages` | 965 764 | ✅ |
 | `yandex_direct_korrektirovki` | `yandex_direct_raw.…` | 43 603 | `yandex_direct_korrektirovki` | 190 286 | ✅ |
 | `yandex_direct_minus_snapshot` | `yandex_direct_raw.…` | 32 831 | `yandex_direct_minus_snapshot` | 1 546 | ⚠️ |
-| `yandex_direct_return_commission_report` | `yandex_direct_raw.…` | 45 867 | `yandex_direct_return_commission_report` | **0** | ⚠️ |
 | `yandex_direct_search_query_report_master` | `yandex_direct_raw.…_master_pbi` | 328 658 | `yd_search_query_report_master` | 40 136 496 | ⚠️ |
-| `yandex_direct_type_placement_report_master` | `yandex_direct_raw.…_master_light` | 7 539 230 | — | — | ❌ |
+| `yandex_direct_type_placement_report_master` | `yandex_direct_raw.…_master_light` | 7 539 230 | `raw_data.direct_cookie_type_placement_master` | догружается | ⚠️ |
 
 ## §0.3 Что означает каждая ⚠️
 
@@ -121,6 +125,13 @@ v6 строит историю из `raw_data.direct_campaigns`, а не из в
 **`yandex_direct_cookie_analytics_website_pages`** — 965 764 vs 1 011 518, свежесть до 2026-07-25
 против 2026-08-01 в v5.
 
+**`yandex_direct_ads_texts` / `yandex_direct_type_placement_report_master`** — новые
+`raw_data.direct_cookie_*` источники уже есть и догружаются. Маппинг колонок прямой по
+идентификаторам и рекламным метрикам (`scope_from/to`, `campaign_id`, `adgroup_id`, `banner_id`,
+`shows`, `clicks`, `cost`), но цель в новых данных одна (`goals`), а в старом PBI-контракте их
+две (`goal_all_forms`, `goal_crm_order_paid`). До решения этого маппинга делать только
+совместимые `bi_*`-вьюхи/fallback, не удалять `raw_new_*`.
+
 ## §0.4 Числовая сверка ядра
 
 `fact_big_analytics`, 2026-02-01…2026-07-31, ось «По дате заявки», без пикселя:
@@ -138,17 +149,22 @@ v6 строит историю из `raw_data.direct_campaigns`, а не из в
 
 ## §0.5 Что нужно сделать, чтобы отчёты собрались
 
-1. Завести в `raw_data` пять источников: `yandex_direct_feeds_report`, `yandex_direct_feed_urls`,
-   `yandex_direct_ads_texts_master`, `yandex_direct_type_placement_report_master`,
-   `yandex_direct_report_placement`. Передаточная спецификация со всеми эндпоинтами, полями,
-   расписанием и DDL — [`../../docs/DIRECT_RAW_HANDOVER.md`](../../docs/DIRECT_RAW_HANDOVER.md).
-2. Починить две пустые заглушки: `check_utm_fuck_direct` и `yandex_direct_return_commission_report`.
-3. Дать v6 расписание, иначе step14 (минус-фразы) не накапливает историю.
-4. Перевязать PBI-модель на звезду и на `bi_*`-вьюхи (иначе половина колонок и `Dim_Distance` не найдутся).
-5. Решить, что делать с `analytics_report_criterion/feed/placement` — восстанавливать или
+1. После ночной догрузки сверить `raw_data.direct_cookie_ads_texts_master` и
+   `raw_data.direct_cookie_type_placement_master` с `raw_new_ads_texts_master_pbi` /
+   `raw_new_type_placement_report_master`, затем дать PBI совместимые `bi_*`-вьюхи.
+   `direct_cookie_feed_urls` использовать как справочник фидов, но он не заменяет
+   `analytics_report_placement` сам по себе.
+2. Довести оставшиеся источники: `yandex_direct_report_placement` / `arp_fact`, готовый агрегат
+   search-query для PBI, `accounts_human_cyborgs`. Передаточная спецификация —
+   [`../../docs/DIRECT_RAW_HANDOVER.md`](../../docs/DIRECT_RAW_HANDOVER.md).
+3. Пустые `bi_*` больше не разрешены: `check_utm_fuck_direct` должен оставаться непустым, а
+   `yandex_direct_return_commission_report` / `bi_yandex_direct_return_commission_report`
+   выведены из контракта и удалены из live ClickHouse 2026-08-17.
+4. Дать v6 расписание, иначе step14 (минус-фразы) не накапливает историю.
+5. Перевязать PBI-модель на звезду и на `bi_*`-вьюхи (иначе половина колонок и `Dim_Distance` не найдутся).
+6. Решить, что делать с `analytics_report_criterion/feed/placement` — восстанавливать или
    объявить unsupported (сейчас они вычеркнуты из контракта тестом `tests/test_pbi_contract_lists.py`).
-6. Сузить `PBI_EMPTY_ALLOWED` в `data_check/verify_big_analytics.py` до двух реальных заглушек —
-   сейчас whitelist прикрывает ещё десять живых витрин (#40).
+7. Держать `PBI_EMPTY_ALLOWED` пустым: любой активный пустой `bi_*` должен падать гейтом (#40).
 
 ---
 
@@ -189,10 +205,9 @@ v6 строит историю из `raw_data.direct_campaigns`, а не из в
 | 4 | `analytics_report_placement` | `public.analytics_report_placement` | ~8.13 M | 12 GB | 47 | `date` → 2026-01-01 … тек. | **Самая тяжёлая.** Размещения (плейсменты) РСЯ по дням. 1 строка = (дата × домен × логин × плейсмент × кампания). Воронка + расход по площадкам. | TRUNCATE+INSERT, **вне `pipeline.py`** — `step_cron_night/report_placement/step2_build_analytics.py`. Источник: `yandex_direct_report_placement` LEFT JOIN `raw_leads`. |
 | 5 | `yandex_direct_korrektirovki` | `public.yandex_direct_korrektirovki` | 38 310 | 18 MB | 17 | `loaded_at` | Корректировки ставок (BidModifiers). 1 строка = корректировка на кампанию/уровень. | `step_cron_night/korrektirovki/korrektirovki.py` (ночной cron, ~25 мин). |
 | 6 | `yandex_direct_404_errors` | `public.yandex_direct_404_errors` | 9 700 | 5.3 MB | 14 | `visit_date` → 2026-01-01 … тек. | 404-ошибки по визитам (Метрика). 1 строка = визит с 404. | Инкрементально, 7-дн. перекрытие. В обоих пайплайнах (`404_errors/404_errors.py`). |
-| 7 | `yandex_direct_return_commission_report` | `public.yandex_direct_return_commission_report` | 45 867 | 63 MB | 13 | `date` | Отчёт возвратной агентской комиссии. 1 строка = (логин × дата × тип сети × слот × тип кампании). | `work/calculation_agency_commission/step2_report.py`. **Вне `pipeline.py`.** |
-| 8 | `big_analytics_full_arrival` | `public.big_analytics_full_arrival` | ~86k | ~22 MB | **73** | `"Date"` → 2026-01-01 … тек. | Воронка **по дате визита/приезда** (вместо даты заявки). Используется атрибуцией «По дате визита» в модели PBI. ⚠️ Колонок 73 (зеркало `big_analytics_full`, не 21 — расширено для PBI-совместимости). | Отдельный скрипт `step13_arrival` (`pipeline.py`, step 13 arrival). |
-| 9 | `pixel_score` | `public.pixel_score` | 13 385 | 18 MB | 38 | `month` | CPL-скоры/веса по кампаниям для атрибуции пикселя. 1 строка = (месяц × салон × домен × кампания) со скорами квал/визит/продажа. | step11_pixel_score (`pipeline.py`, ~10 c). |
-| 10 | `yandex_direct_cookie_analytics_website_pages` | `public.yandex_direct_cookie_analytics_website_pages` | 612 166 | 973 MB | 23 | `date_from` / `date_to` | Аналитика страниц сайтов (баннер → URL, расход, клики, цели). 1 строка = (логин × домен × баннер × период). | Отдельный сервис `work/yandex_direct_cookie_analytics_website_pages/`. **Вне `pipeline.py`.** |
+| 7 | `big_analytics_full_arrival` | `public.big_analytics_full_arrival` | ~86k | ~22 MB | **73** | `"Date"` → 2026-01-01 … тек. | Воронка **по дате визита/приезда** (вместо даты заявки). Используется атрибуцией «По дате визита» в модели PBI. ⚠️ Колонок 73 (зеркало `big_analytics_full`, не 21 — расширено для PBI-совместимости). | Отдельный скрипт `step13_arrival` (`pipeline.py`, step 13 arrival). |
+| 8 | `pixel_score` | `public.pixel_score` | 13 385 | 18 MB | 38 | `month` | CPL-скоры/веса по кампаниям для атрибуции пикселя. 1 строка = (месяц × салон × домен × кампания) со скорами квал/визит/продажа. | step11_pixel_score (`pipeline.py`, ~10 c). |
+| 9 | `yandex_direct_cookie_analytics_website_pages` | `public.yandex_direct_cookie_analytics_website_pages` | 612 166 | 973 MB | 23 | `date_from` / `date_to` | Аналитика страниц сайтов (баннер → URL, расход, клики, цели). 1 строка = (логин × домен × баннер × период). | Отдельный сервис `work/yandex_direct_cookie_analytics_website_pages/`. **Вне `pipeline.py`.** |
 
 ⚠ **Расхождение имён (важно!):** в PBI таблица называется `direct_history`, но в PostgreSQL она
 переименована в `yandex_direct_history` (апрель 2026). В refresh PBI обращается по старому имени
@@ -215,7 +230,7 @@ v6 строит историю из `raw_data.direct_campaigns`, а не из в
 |---|---|---|
 | `yandex_direct_report_placement` | ~4.9 GB | Источник для `analytics_report_placement` (ARP) |
 | `local_yandex` | ~1.4 GB | Источник для `raw_yandex` (step1) |
-| `big_analytics_pixel_score` | ~0.1 GB | Источник доливки в `big_analytics_full` (`_source_table='пиксель_атрибуц'`) |
+| `big_analytics_pixel_score` | ~0.1 GB | Score/diagnostics для пикселя; `big_analytics_full` получает прямой `_source_table='pixel'` |
 | `fact_region_spend` | (датамарт) | ⏳ **pending**: датамарт «расход по регионам показа» (`region_spend/`), строится дневным пайплайном между build_unified и build_star. **Добавить в PBI-модель + в `_ALL_TABLES` (refresh_powerbi.py) ТОЛЬКО ПОСЛЕ того как пользователь создаст вкладку** — иначе pipeline_powerbi-refresh упадёт «нет таблицы в датасете». См. `region_spend/CLAUDE.md`. |
 | `fact_adformat_spend` | (датамарт) | ⏳ **pending**: датамарт «расход по формату объявления» (`adformat_spend/`), грань `date×campaign_id×ad_group_id×ad_network_type×ad_format`. Строится дневным пайплайном сразу после build_region_spend (до build_star). **Регистрировать в `_ALL_TABLES` (refresh_powerbi.py) ТОЛЬКО ПОСЛЕ того как пользователь создаст вкладку** — иначе refresh упадёт. См. `adformat_spend/CLAUDE.md`. |
 | `fact_criterion_spend` | (датамарт) | ⏳ **pending**: датамарт «расход по критерию» (`criterion_spend/`), грань `…×criterion_id×criterion` + `criterion_type` (autotargeting/retargeting/interests/keyword), скоуп ниши «Авто». Строится дневным пайплайном после build_adformat_spend (до build_star). **Регистрировать в `_ALL_TABLES` (refresh_powerbi.py) ТОЛЬКО ПОСЛЕ того как пользователь создаст вкладку** — иначе refresh упадёт. См. `criterion_spend/CLAUDE.md`. |
@@ -321,7 +336,7 @@ egress Victory ~2 МБ/с; параллелизм 4 потока даёт лиш
 **Текущий `_ALL_TABLES` (refresh_powerbi.py ~193-200):** big_analytics_full, Dim_Date,
 Dim_Campaign, Dim_AdGroup, Dim_Site, analytics_report_placement, direct_history,
 check_utm_fuck_direct, yandex_direct_korrektirovki, yandex_direct_404_errors,
-yandex_direct_return_commission_report, pixel_score, yandex_direct_cookie_analytics_website_pages.
+pixel_score, yandex_direct_cookie_analytics_website_pages.
 
 ---
 
@@ -351,7 +366,6 @@ yandex_direct_return_commission_report, pixel_score, yandex_direct_cookie_analyt
 | yandex_direct_404_errors | `public.yandex_direct_404_errors` (PK id) | 10k | TABLE | целиком |
 | yandex_direct_cookie_analytics_website_pages | `public.yandex_direct_cookie_analytics_website_pages` (PK id) | 612k | TABLE | **батчи 300k** |
 | yandex_direct_korrektirovki | `public.yandex_direct_korrektirovki` (PK id) | 42k | TABLE | целиком |
-| yandex_direct_return_commission_report | `public.yandex_direct_return_commission_report` (PK id) | 46k | TABLE | целиком |
 | fact_region_spend | `public.fact_region_spend` (PK row_hash) | (датамарт) | TABLE | целиком |
 | fact_adformat_spend | `public.fact_adformat_spend` (PK row_hash) | (датамарт) | TABLE | целиком |
 | fact_criterion_spend | `public.fact_criterion_spend` (PK row_hash) | (датамарт) | TABLE | целиком |

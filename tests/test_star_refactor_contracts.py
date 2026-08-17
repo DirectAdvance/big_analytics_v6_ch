@@ -86,12 +86,30 @@ def test_dim_build_can_target_one_dimension():
     assert "Dim_Salon" in build_star.DIM_DDL
 
 
+def test_dim_date_year_month_is_russian_month_name():
+    sql = build_star.DIM_DDL["Dim_Date"]
+
+    assert "formatDateTime(`Date`, '%Y-%m')" not in sql
+    assert "'Январь'" in sql
+    assert "'Декабрь'" in sql
+    assert "toMonth(`Date`)" in sql
+    assert "month_key" in sql
+
+
 def test_dim_adgroup_uses_narrow_raw_source_before_fact_fallback():
     sql = build_star.DIM_DDL["Dim_AdGroup"]
 
     assert "raw_data.direct_adgroups" in sql
     assert "ad_analytics.big_analytics_unified" in sql
     assert sql.index("raw_data.direct_adgroups") < sql.index("ad_analytics.big_analytics_unified")
+
+
+def test_campaign_and_adgroup_default_to_single_merge_bucket():
+    signature = inspect.signature(build_star.build_dim_campaign)
+    source = inspect.getsource(build_star.build_dim_adgroup)
+
+    assert signature.parameters["bucket_count"].default == 1
+    assert "bucket_count = 1" in source
 
 
 def test_direct_feed_fact_materializes_site_key():
@@ -127,6 +145,13 @@ def test_direct_feed_pbi_view_joins_dim_site_by_materialized_site_key():
 
     assert "LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key" in sql
     assert "_site_key_expr(\"f\")" not in sql
+
+
+def test_feed_funnel_import_uses_global_pipeline_batches():
+    source = inspect.getsource(build_pbi_compat.build_pbi_import_direct_feed_funnel)
+
+    assert "day_ranges(DATE_FROM)" in source
+    assert "range_batches(DATE_FROM, days=1)" not in source
 
 
 def test_pbi_full_restores_duplicate_text_attrs_from_new_dimensions():

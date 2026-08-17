@@ -15,6 +15,7 @@ from config.ch_utils import (
     SAFE_QUERY_SETTINGS,
     apply_storage_codecs,
     count_rows,
+    day_ranges,
     range_batches,
     q,
     swap_shadow,
@@ -67,7 +68,11 @@ PBI_SOURCE_OBJECTS = [
     "yandex_direct_cookie_analytics_website_pages",
     "yandex_direct_korrektirovki",
     "yandex_direct_minus_snapshot",
-    "yandex_direct_return_commission_report",
+    # PLACEMENT_LINKS_BI_2026-08-17. Модель PBI читала ручную копию БА5
+    # `raw_new_tp_placement_links` (снимок от 16.08, сам не обновляется) — из-за этого фикс
+    # двойной кодировки площадок в отчёт не доезжал. Отчёт переведён на этот bi-слой над живой
+    # таблицей шага 139; правило «PBI ходит только через bi_*» — DB_AD_ANALYTICS.md §1.3.
+    "yandex_direct_tp_placement_links",
 ]
 
 LEGACY_BI_VIEWS = [
@@ -125,8 +130,8 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             f.`атрибуция`,
             f.`AdGroupId` AS `AdGroupId`,
             multiIf(
-                f.source_key = 'пиксель_атрибуц', 'Пиксель_атрибуц',
                 f.source_key = 'пиксель', 'Пиксель',
+                f.source_key = 'pixel', 'Пиксель',
                 dsl.`направление`
             ) AS `направление`,
             dcs.`тип_заявки`,
@@ -367,7 +372,7 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
     # Схема выводится из SELECT, поэтому кодеки вешаем на пустую shadow: замерено ZSTD(3) на
     # Float64-метриках −15.7%, Gorilla оказался хуже отсутствия кодека.
     apply_storage_codecs(client, shadow)
-    ranges = range_batches(DATE_FROM, days=1)
+    ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
         client.command(
             f"""
@@ -376,7 +381,7 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        log.info("  pbi_import_fact_direct_feed_funnel daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+        log.info("  pbi_import_fact_direct_feed_funnel batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.pbi_import_fact_direct_feed_funnel", shadow)
     return count_rows(client, "ad_analytics.pbi_import_fact_direct_feed_funnel")
 
@@ -729,14 +734,6 @@ def create_light_aliases(client) -> dict[str, int]:
             ("sum", "Nullable(Decimal(18, 6))"), ("agoalnum", "Nullable(String)"),
             ("aconv", "Nullable(Decimal(18, 6))"), ("agoalcost", "Nullable(Decimal(18, 6))"),
         ],
-        "yandex_direct_return_commission_report": [
-            ("id", "Nullable(Int64)"), ("client_login", "Nullable(String)"), ("date", "Nullable(Date)"),
-            ("ad_network_type", "Nullable(String)"), ("slot", "Nullable(String)"),
-            ("campaign_type", "Nullable(String)"), ("ad_type", "Nullable(String)"),
-            ("cost", "Nullable(Decimal(18, 6))"), ("cost_with_vat", "Nullable(Decimal(18, 6))"),
-            ("manager_login", "Nullable(String)"), ("user_login", "Nullable(String)"),
-            ("rate", "Nullable(Decimal(18, 6))"), ("commission", "Nullable(Decimal(18, 6))"),
-        ],
     }
     for table, cols in empty_views.items():
         if table_exists(client, "ad_analytics", table):
@@ -866,22 +863,9 @@ def _dim_device_pbi_sql() -> str:
 def _dim_manager_login_pbi_sql() -> str:
     return """
         SELECT
-            manager_login_key,
-            anyLast(manager_login) AS manager_login
-        FROM (
-            SELECT
-                toInt64(manager_login_key % 9223372036854775807) AS manager_login_key,
-                manager_login
-            FROM ad_analytics.Dim_ManagerLogin
-            UNION ALL
-            SELECT
-                toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
-                ifNull(manager_login, '') AS manager_login
-            FROM ad_analytics.yandex_direct_return_commission_report
-            WHERE manager_login IS NOT NULL
-              AND manager_login != ''
-        )
-        GROUP BY manager_login_key
+            toInt64(manager_login_key % 9223372036854775807) AS manager_login_key,
+            manager_login
+        FROM ad_analytics.Dim_ManagerLogin
     """
 
 
@@ -1260,26 +1244,6 @@ def _cookie_pages_pbi_sql() -> str:
     """
 
 
-def _return_commission_pbi_sql() -> str:
-    return """
-        SELECT
-            id,
-            client_login,
-            date,
-            lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
-            slot,
-            campaign_type,
-            ad_type,
-            toFloat64(cost) AS cost,
-            toFloat64(cost_with_vat) AS cost_with_vat,
-            toInt64(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))) % 9223372036854775807) AS manager_login_key,
-            user_login,
-            toFloat64(rate) AS rate,
-            toFloat64(commission) AS commission
-        FROM ad_analytics.yandex_direct_return_commission_report
-    """
-
-
 PBI_VIEW_SQL_BUILDERS = {
     "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
     "Dim_Account": _dim_account_pbi_sql,
@@ -1308,7 +1272,6 @@ PBI_VIEW_SQL_BUILDERS = {
     "yandex_direct_history": _direct_history_pbi_sql,
     "pixel_score": _pixel_score_pbi_sql,
     "yandex_direct_cookie_analytics_website_pages": _cookie_pages_pbi_sql,
-    "yandex_direct_return_commission_report": _return_commission_pbi_sql,
 }
 
 

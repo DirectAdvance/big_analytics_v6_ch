@@ -104,7 +104,7 @@ def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
             "gs.direction = 'Авто'\n"
             f"  AND lower(trim(ifNull(c.domain, ''))) NOT IN ({_CROP_DOMAIN_SUBQUERY})"
         )
-        istochnik_sql = "'Звонки'"
+        istochnik_sql = "multiIf(gs.status IN ('SEO', 'SEO Flow'), 'SEO', 'Контекст')"
         napravlenie_sql = "'Комплекс'"
     return f"""
 WITH
@@ -175,7 +175,7 @@ SELECT
     c.domain AS domain,
     toInt64(0) AS `RlAdjustmentId`,
     '' AS `RlAdjustmentId_total`,
-    CAST(NULL, 'Nullable(String)') AS campaign_code,
+    CAST('звонки', 'Nullable(String)') AS campaign_code,
     'звонки' AS tp,
     'звонки' AS cpc_cpa,
     'звонки' AS site_quiz,

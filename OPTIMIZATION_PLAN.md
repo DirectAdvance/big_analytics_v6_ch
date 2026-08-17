@@ -211,6 +211,25 @@ step3 3234 с (41%), `direct_spend_staging` 900 с, step1 898 с, step11 640 с,
 7809 → 1891 с). Крупнейшее: step3 3234 → 424 с, `direct_spend_staging` 900 → 136 с,
 step1 868 → 203 с, step11 640 → 113 с, `build_star` 536 → 236 с, step6 390 → 82 с.
 
+**Факт 2026-08-17 после дополнительной оптимизации hot spots, Victory live:**
+
+- `pipeline.py --from-step=3`, `run_id=3774d63b3312`, PASS: step3 661.2с, step10 93.1с,
+  step11 150.4с, step140 `direct_spend_staging` 150.5с, step145 `build_star` 177.5с,
+  step146 `build_pbi_compat` 167.0с.
+- `step10` crop overlay и `step146 pbi_import_fact_direct_feed_funnel` идут 37 окнами через
+  общий `day_ranges()` вместо принудительной дневной нарезки.
+- `step145`: `Dim_Campaign bucket 1/1`, `Dim_AdGroup merge bucket 1/1`; 64 повторных прохода
+  убраны. Подтайминги live: dims total 67.3с, `fact_vk_ads` 41.6с, `fact_big_analytics` 60.1с.
+- `step140` оставлен на `day_ranges()` без переписывания на `raw_yandex`: в `raw_yandex` нет
+  нужных колонок `location_of_presence_id`, `ad_format`, `criterion_id`, `placement` и goal-полей.
+- После найденного остатка `step13_arrival` хвост `pipeline.py --from-step=13`,
+  `run_id=f87cc8e52cea`, PASS: step13 40.8с, build_star 294.2с, step146 94.3с, verify PASS.
+  Этот хвост убрал источник `Звонки` из star (`Dim_Source` 31 → 30).
+
+**Что ещё реально оптимизировать:** только `step3` direct family (`direct_cascade`,
+`direct_unmatched`, `direct_zero`) через общий staging/anti-join. Это уже SQL-рефактор с риском
+воронки, не механическая настройка батча; делать отдельной задачей после фикса remaining parity.
+
 ### ⚠️ Регресс, который дало расширение окна, и его фикс
 
 Приёмка `director` поймала то, что не ловит golden: **`step11` считает веса пикселя за месяц,
@@ -229,6 +248,32 @@ step1 868 → 203 с, step11 640 → 113 с, `build_star` 536 → 236 с, step6 
 прогона невозможен — шаг 148 `cleanup_wide_intermediates` штатно удаляет широкие промежуточные
 таблицы, и step11 падает на `UNKNOWN_TABLE: ad_analytics.big_analytics_sources`. Перепрогон после
 правки любого пост-step3 шага = полный прогон (сейчас это 31 минута).
+
+**Замер 2026-08-17 после BA5-source parity фикса:** полный хвост от step3 показывает те же
+узкие места, не новый crop-маппинг. Главные кандидаты на оптимизацию:
+`step3` (502 сек, Direct batches/cascade/unmatched/zero), `step145 build_star` (303 сек),
+`step140 direct_spend_staging` (~3 мин), `step10/11/146` (дневные батчи). В полном прогоне
+также дорогой `step1 raw_yandex` (~4.5 мин). Мелкие step4/9/1451/147 не трогать: выигрыш
+меньше риска.
+
+**Batch optimization 2026-08-17:** `step10` и `step146`
+(`pbi_import_fact_direct_feed_funnel`) переведены с принудительных дневных окон на общий
+`day_ranges()` (`PIPELINE_BATCH_DAYS`, по умолчанию 7, не пересекает месяц). Probe на live CH:
+`step10` July-week copy 177 136 строк за 2.06 сек, `step146` July-week feed import 419 692
+строки за 0.81 сек, без memory error. `step11`, `step140`, `step3` уже были на `day_ranges()`;
+там исправлены только misleading log labels `daily`. `step140` нельзя читать из `raw_yandex`:
+в нём нет `location_of_presence_id`, `ad_format`, `criterion_id`, `placement`,
+`all_forms/crm_order_*`. Откат ширины батча без кода:
+`PIPELINE_BATCH_DAYS=1 python3 pipeline.py ...`.
+
+**Star merge optimization 2026-08-17:** `Dim_Campaign` и финальный merge `Dim_AdGroup`
+переведены с 64 бакетов на 1 бакет. Live probe без записи в боевые таблицы:
+`Dim_Campaign` 1/8/16 бакетов = 6.21/22.08/57.97 сек; `Dim_AdGroup` merge 1/8/16 =
+8.27/21.10/22.17 сек. Временные `_codex_opt_*` таблицы удалены. Если CH снова упрётся в
+память, вернуть split можно параметром `build_dim_campaign(..., bucket_count=N)` и
+локальной константой в `build_dim_adgroup`.
+`build_star` теперь пишет подтайминги по каждому измерению и крупному факту; следующий full
+pipeline должен показать, трогать ли `Dim_Site`, stage `Dim_AdGroup` или `fact_big_analytics`.
 
 ---
 

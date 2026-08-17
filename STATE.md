@@ -1,13 +1,69 @@
 # big_analytics_v6_ch — статус
 
-_2026-08-15, после сверки сырья и PBI-паритета v5 ↔ v6. История — `git log -p STATE.md`._
+_2026-08-17, после полного BA6 pipeline на Victory, очистки PBI/PBIP от return commission и
+дропа старых live-объектов. История — `git log -p STATE.md`._
 
 ## Где мы сейчас
 
-Прогон 31–32 минуты, `ad_analytics` 1 727 МиБ. `verify_big_analytics.py` = **PASS**
-(golden Кудерко 25 423 305.85, Δ+531.85 при допуске 1000; продажи 57 при floor 54).
-Факт свежий: `fact_big_analytics` = 5 231 242 строки, максимальная `Date` = 2026-08-15.
+Прогон 34 минуты, `ad_analytics` 2.06 ГиБ. `verify_big_analytics.py` = **PASS**
+(golden Кудерко 25 642 434.57, Δ+219 660.57 игнорируется из-за `KUDERKO_RAW_INCOMPLETE`;
+продажи 57 при floor 54). Факт свежий: `fact_big_analytics` = 5 274 040 строк,
+максимальная `Date` = 2026-08-16.
 Оптимизация и фикс двойного счёта пикселя **закоммичены** (`3c0c726`, `c0fd79c`).
+2026-08-17: `Dim_Date.year_month` переведён с `YYYY-MM` на русские названия месяцев; `month_key`
+остаётся числовым `YYYYMM` для сортировки. Код доставлен на Victory и `Dim_Date` пересобран.
+2026-08-17: ночной step 102 `check_utm` переписан на `raw_data` Direct и вручную пересобран:
+`check_utm` = 28 288 строк, `check_utm_fuck_direct` = 3 981; `bi_check_utm_fuck_direct` больше не
+пустая заглушка.
+2026-08-17: `yandex_direct_checking_report/report.py` переведён с Direct Reports API на
+`raw_data.yandex_direct_report_rows.total_cost` (расход с НДС и комиссией). PostgreSQL-таблица
+`public.yandex_direct_checking_report` перезалита: 865 строк, 261 аккаунт, 651 319 874.51 ₽.
+2026-08-17: `step_cron_night/pipeline_night.py` поставлен в cron Victory на `10 18 * * *` UTC
+(23:10 Екб) с `/tmp/ba6_night.lock`; проверочный ручной прогон PASS за 14м15с.
+2026-08-17: `yandex_direct_return_commission_report` выведен из BA5/BA6 PBI-контрактов.
+`PBI_EMPTY_ALLOWED` и `PBI_EMPTY_BY_DESIGN` в BA6 теперь пустые: любой активный пустой `bi_*` = FAIL.
+2026-08-17: `Пиксель_атрибуц` выведен из BA5/BA6 контрактов. Канон: BA6 `_source_table='pixel'`,
+BA5 `_source_table='пиксель'`; `pixel_score` остаётся score/diagnostics, full получает прямой пиксель.
+2026-08-17: BA6 runtime задеплоен на Victory (md5 + remote py_compile), полный pipeline завершился
+`big_analytics_v6_ch pipeline OK`. BA6 PBIP очищен от `return_commission`; live ClickHouse-вьюхи
+`ad_analytics.yandex_direct_return_commission_report` и
+`ad_analytics.bi_yandex_direct_return_commission_report` удалены. Post-drop verify — PASS.
+2026-08-17: исправлен BA5-паритет источников для BA6: обычные `calls` снова
+классифицируются как `Контекст`/`SEO`, crop-лиды получают BA5-типы
+`telegram`/`social_посевы`/`vk_ads`/`vk_zero`/`vk_perform`, чтобы расход step10 overlay и
+воронка агрегировались в одном источнике. Код доставлен на Victory; пересборка `--from-step=3`
+дошла до `step146`, затем хвост перезапущен с `--from-step=146` и завершился
+`verify_big_analytics.py` **PASS**. Живая сверка: `calls/Звонки` = 0; `calls` =
+`Контекст` 60 284, `SEO` 3 394, `Посевы_Звонки` 2 092; crop `источник='Посевы'` = 0.
+2026-08-17: в `raw_data` появились Direct cookie-источники
+`direct_cookie_ads_texts_master`, `direct_cookie_type_placement_master`,
+`direct_cookie_feed_urls`. Они заменяют часть временных `raw_new_*` по смыслу, но переключать
+PBI нужно через совместимые `bi_*`-вьюхи после ночной догрузки и сверки сумм; не покрыты
+`raw_new_arp_fact`, `raw_new_search_query_report_master_pbi`, `raw_new_human_cyborgs`.
+На момент проверки новые таблицы уже растут: ads-texts >16M строк, type-placement >2.6M,
+feed-url 5 923 строки; зерно дневное (`scope_from = scope_to`).
+2026-08-17: оптимизированы безопасные горячие батчи: `step10` overlay full-copy и `step146`
+`pbi_import_fact_direct_feed_funnel` переведены с принудительных дневных окон на общий
+`day_ranges()` (`PIPELINE_BATCH_DAYS=7`, месяц не пересекается, откат `PIPELINE_BATCH_DAYS=1`).
+Live probe на недельном окне прошёл без memory error. `step11`, `step140`, `step3` уже были
+на `day_ranges()`; там исправлены только misleading log labels.
+2026-08-17: оптимизирован `step145 build_star`: `Dim_Campaign` и merge `Dim_AdGroup` больше
+не сканируют данные 64 бакетами. Live probe: `Dim_Campaign` 1 бакет 6.21 сек против 22.08
+на 8 и 57.97 на 16; `Dim_AdGroup` merge 1 бакет 8.27 сек против 21.10/22.17. Временные
+probe-таблицы удалены. В `build_star` добавлены подтайминги по измерениям и крупным фактам
+для следующего full pipeline.
+2026-08-17: оптимизации и BA5-паритет источников доставлены на Victory и проверены живыми
+прогонами. `--from-step=3` (`run_id=3774d63b3312`) завершился PASS: step3 661.2с, step10 93.1с,
+step11 150.4с, step140 150.5с, build_star 177.5с, build_pbi_compat 167.0с. Дополнительно найден
+и исправлен остаток старой классификации на визитной оси: `step13_arrival` больше не ставит
+`источник='Звонки'` для calls, а использует `Контекст`/`SEO`/`Посевы_Звонки` как step6.
+Хвост `--from-step=13` (`run_id=f87cc8e52cea`) завершился PASS; live-сверка:
+`big_analytics_full` bad-source tuple `(calls/Звонки, crop/Посевы, null_source, before_2026)` =
+`(0,0,0,0)`, `fact_big_analytics` по источнику `Звонки` = 0, `Dim_Source` = 30.
+Остаточные v5↔v6 дельты Feb-Jul без пикселя остаются data/source parity: cost +3.84 млн ₽
+(+0.365%), обращения +4 450 (+1.52%), korr +5 207 (+3.52%), kval −1 238 (−2.79%),
+приезды −18, продажи +2. Самые большие очаги: `Контекст` +3.61 млн ₽ и +5 992 обращений,
+`Посевы_Звонки` −1 844 обращения, `SEO` +1 212 обращений.
 
 Сегодняшний замер: [`RAW_DIFF_FINDINGS.md`](RAW_DIFF_FINDINGS.md) — сырьё,
 [`PBI_TABLES.md`](PBI_TABLES.md) §0 — паритет 31 таблицы Power BI.
@@ -35,19 +91,10 @@ Feb–Jul без пикселя — cost +0.36%, приезды −0.08%, про
 3. **Фаза 3 `OPTIMIZATION_PLAN.md` (−85 МиБ) не начата** — упирается в ручной шаг: в Power BI
    Desktop добавить связь факта с `bi_Dim_PlacementFeed` и опубликовать датасет. До публикации
    не деплоить, иначе refresh упадёт.
-4. **Пиксель в v5 выключен с 12.08** (`work/big_analytics_v5/config/pixel_attribution.py`,
-   `PIXEL_ATTRIBUTION_DISABLED = True`). Поэтому `seoadvanced.ru/work/` показывает ноль пикселя,
-   а v6 показывает 134 127 заявок. Пауза не закрыта решением; любые сверки осей делать
-   с исключением пикселя.
-5. **PBI-модель не прочёсана после разведения пикселя:** мера, режущая
-   `источник='Пиксель_атрибуц'` на заявочной оси, покажет ноль (там теперь `Пиксель`).
-6. **Фикс #41 применён, но не подтверждён на данных.** `cleanup_wide_intermediates.py` теперь
-   пересоздаёт `big_analytics_reviews` по обоим тегам. Вьюху строит шаг 148, поэтому проверить
-   можно только полным прогоном; ожидаемо 4 996 строк вместо 0.
-7. **Сужение `PBI_EMPTY_ALLOWED` ждёт решения** (#40). Whitelist прикрывает 10 живых витрин —
-   их обнуление пройдёт гейт молча. Сузить до двух заглушек = превратить пустоту в FAIL
-   прод-прогона, а `bi_*minus*` зависят от выключенного step14. Пока добавлен только WARNING.
-
+4. **Опубликовать BA6 PBIP в Power BI Service.** Локальный PBIP очищен, но cloud-service dataset
+   не публиковался и не проверялся через API.
+5. **PBI-модель прочёсана только по `return_commission`.** По пикселю live-данные уже каноничны
+   (`Пиксель`), но визуальные меры/фильтры Power BI Service нужно проверить после публикации.
 ## Что важно знать, чтобы не наступить
 
 - **Свежесть v6 нельзя проверять по `raw_data.etl_runs` и `leads_all.updated_at`** — оба врут
@@ -59,26 +106,29 @@ Feb–Jul без пикселя — cost +0.36%, приезды −0.08%, про
 - **`big_analytics_pixel_score` — физическая таблица, её нельзя удалять по дороге.** Исключена
   из `FACT_SWAP_COMPAT_OBJECTS`, `cleanup_wide_intermediates` и `WIDE_COMPAT_VIEWS`. Пропустить
   одно из трёх мест = `UNKNOWN_TABLE` в `build_pbi_compat` — так сгорели два прогона 15.08.
-- **`--from-step=` выше step3 после успешного прогона не работает**: шаг 148
-  `cleanup_wide_intermediates` штатно удаляет `big_analytics_sources`, step11 падает на
-  `UNKNOWN_TABLE`. Перепрогон любого пост-step3 шага = полный прогон.
+- **`--from-step=` выше step3 после cleanup опасен, если шаг читает `big_analytics_sources`**:
+  шаг 148 штатно заменяет wide-таблицы view и удаляет часть промежуточного source-слоя; step10/11
+  могут упасть на `UNKNOWN_TABLE`. Хвост от step13 доказанно работает (`run_id=f87cc8e52cea`),
+  потому что читает `big_analytics_full`/arrival/star, а не `big_analytics_sources`.
 - **v6 не отвязан от PostgreSQL полностью**: step3 (`_fetch_reviews_rows_from_postgres`) ходит
   на Victory PG за отзывами, потому что их нет в `raw_data`.
 - **Инстанс ClickHouse — 2 vCPU / 8.33 ГБ**, серверный потолок 7.49 ГБ, запрос ограничен 2 ГБ
   (`SAFE_QUERY_SETTINGS`), `max_threads=2`. На месячных окнах step3 падает по памяти — неделя
   это потолок ширины.
 - **Дневной прогон в кроне с 16.08:** `0 2 * * *` UTC = 07:00 Екб, через обёртку `cron_run.py`
-  (сам `pipeline.py` в Telegram не пишет ничего). Ночной пайплайн и step14 — по-прежнему руками (#42).
+  (сам `pipeline.py` в Telegram не пишет ничего). **Ночной прогон в кроне с 17.08:**
+  `10 18 * * *` UTC = 23:10 Екб, через `step_cron_night/pipeline_night.py`.
 - **Код на Victory сверен с HEAD 16.08: 143/143 совпали.** Ничто не синкает его туда автоматически
   (Mutagen ходит на LXC 101) — дрейф копится молча: Victory отставал на три ETL-коммита от 13–14.08
   (`status_sql`, `corrections`, `step6`). Сверка md5 — `RUNBOOK.md` §3a, гонять перед доверием к прогону.
-- Golden-дельта `+531.85 ₽` по Кудерко — не новая, root-cause #37 (неполное сырьё, 29/67 логинов),
-  допуск в этом репо `GOLDEN_COST_TOL=1000`.
+- Golden-дельта по Кудерко — не новая, root-cause #37 (неполное сырьё, 29/67 логинов).
+  В текущем прогоне Δ+219 660.57 ₽ переведена verify-гейтом в warning и не валит PASS.
 
 ## Открытые дефекты
 
-`KNOWN_ISSUES.md`: к прежним добавлены **#39** (7 таблиц PBI без источника), **#40** (две пустые
-заглушки, гейт даёт PASS), **#41** (`big_analytics_reviews` = 0 из-за рассинхрона тега),
-**#42** (минус-фразы: один день вместо 30), **#43** (врущие индикаторы свежести),
+`KNOWN_ISSUES.md`: к прежним добавлены **#39** (7 таблиц PBI без источника), **#40** (FIXED:
+whitelist пустоты сужен до одной заглушки), **#41** (`big_analytics_reviews` = 0 из-за рассинхрона тега),
+**#42** (минус-фразы в night cron, 30-дневная история ещё наполняется),
+**#43** (врущие индикаторы свежести),
 **#44** (`domains` −322, `gsheet_sites` −52, `crm_status_mapping` −5).
 Из прежних актуальны #37 (бэкфил Кудерко) и #38 (`data_check/compare` не работает после star).

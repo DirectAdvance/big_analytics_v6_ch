@@ -21,7 +21,7 @@ logger = logging.getLogger("pipeline.step11")
 def _key_expr(alias: str = "s") -> str:
     return (
         f"concat(ifNull(toString({alias}.`Date`), ''), '|', ifNull({alias}.domain, ''), '|', "
-        f"'пиксель_атрибуц', '|', ifNull(toString({alias}.`CampaignId`), ''))"
+        f"'pixel', '|', ifNull(toString({alias}.`CampaignId`), ''))"
     )
 
 
@@ -196,7 +196,7 @@ attributed AS
         '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4, '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
         ifNull(ca.`марки авто`, '') AS `марки авто`,
         ifNull(ca.`Название crm`, '') AS `Название crm`,
-        'Пиксель_атрибуц' AS `тип_заявки`,
+        'Пиксель' AS `тип_заявки`,
         p.px_zayavki * sw.weight AS kol_vo_zayavok,
         p.px_korr * sw.weight AS korr,
         p.px_kval * sw.weight AS kval,
@@ -222,8 +222,8 @@ attributed AS
         coalesce(nullIf(ca.`проджект`, ''), gs_pix.project_manager) AS `проджект`,
         coalesce(nullIf(ca.`id_салона`, ''), gs_pix.client_id) AS `id_салона`,
         coalesce(nullIf(ca.`менеджер`, ''), gs_pix.sales_manager) AS `менеджер`,
-        'Пиксель_атрибуц' AS `источник`,
-        'Пиксель_атрибуц' AS `направление`,
+        'Пиксель' AS `источник`,
+        'Пиксель' AS `направление`,
         ifNull(ca.`номер кампании | название кампании`, concat(toString(sw.`CampaignId`), '|')) AS `номер кампании | название кампании`,
         '' AS `номер группы | название группы`,
         CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
@@ -232,11 +232,11 @@ attributed AS
         CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
         CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
         ifNull(ca.`поставщик`, 'Victory') AS `поставщик`,
-        'пиксель_атрибуц' AS `_source_table`,
+        'pixel' AS `_source_table`,
         CAST(NULL, 'Nullable(String)') AS cascade_level,
         ca.campaign_status,
         ca.payment_model,
-        concat(toString(p.`Date`), '|', ifNull(p.domain, ''), '|пиксель_атрибуц|', toString(sw.`CampaignId`)) AS key_pixel_score
+        concat(toString(p.`Date`), '|', ifNull(p.domain, ''), '|pixel|', toString(sw.`CampaignId`)) AS key_pixel_score
     FROM pixel_daily p
     INNER JOIN score_weights sw
       ON sw.month = p.month AND sw.`салон` = p.`салон` AND sw.domain = p.domain
@@ -272,7 +272,7 @@ leftovers AS
         '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4, '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
         '' AS `марки авто`,
         '' AS `Название crm`,
-        'Пиксель_атрибуц' AS `тип_заявки`,
+        'Пиксель' AS `тип_заявки`,
         p.px_zayavki AS kol_vo_zayavok,
         p.px_korr AS korr,
         p.px_kval AS kval,
@@ -298,8 +298,8 @@ leftovers AS
         gs_pix.project_manager AS `проджект`,
         gs_pix.client_id AS `id_салона`,
         gs_pix.sales_manager AS `менеджер`,
-        'Пиксель_атрибуц' AS `источник`,
-        'Пиксель_атрибуц' AS `направление`,
+        'Пиксель' AS `источник`,
+        'Пиксель' AS `направление`,
         '' AS `номер кампании | название кампании`,
         '' AS `номер группы | название группы`,
         CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
@@ -308,11 +308,11 @@ leftovers AS
         CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
         CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
         'Victory' AS `поставщик`,
-        'пиксель_атрибуц' AS `_source_table`,
+        'pixel' AS `_source_table`,
         CAST(NULL, 'Nullable(String)') AS cascade_level,
         CAST(NULL, 'LowCardinality(Nullable(String))') AS campaign_status,
         CAST(NULL, 'LowCardinality(Nullable(String))') AS payment_model,
-        concat(toString(p.`Date`), '|', ifNull(p.domain, ''), '|пиксель_атрибуц|0') AS key_pixel_score
+        concat(toString(p.`Date`), '|', ifNull(p.domain, ''), '|pixel|0') AS key_pixel_score
     FROM pixel_daily p
     LEFT JOIN gs_domain gs_pix ON gs_pix.domain_key = lower(trim(ifNull(p.domain, '')))
     -- PIXEL_SALON_JOIN_2026-08-05: ключ остатка обязан совпадать с ключом джойна выше,
@@ -355,7 +355,7 @@ def _rebuild_pixel_score(client) -> int:
     pixel_ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(pixel_ranges, start=1):
         client.command(_insert_weighted_pixel_sql(shadow, lo, hi), settings=SAFE_QUERY_SETTINGS)
-        logger.info("  pixel_score daily batch %d/%d inserted: %s -> %s", idx, len(pixel_ranges), lo, hi)
+        logger.info("  pixel_score batch %d/%d inserted: %s -> %s", idx, len(pixel_ranges), lo, hi)
     swap_shadow(client, "ad_analytics.big_analytics_pixel_score", shadow)
     return count_rows(client, "ad_analytics.big_analytics_pixel_score")
 
@@ -378,7 +378,7 @@ def _rebuild_full_with_pixel(client) -> int:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        logger.info("  full keep daily batch %d/%d inserted: %s -> %s", idx, len(full_ranges), lo, hi)
+        logger.info("  full keep batch %d/%d inserted: %s -> %s", idx, len(full_ranges), lo, hi)
 
     # PIXEL_DEDUP_2026-08-15: attributed pixel rows (`пиксель_атрибуц`) are no longer
     # copied into big_analytics_full — they duplicated the same leads/cost already
@@ -401,7 +401,7 @@ def _rebuild_full_with_pixel(client) -> int:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        logger.info("  full direct pixel daily batch %d/%d inserted: %s -> %s", idx, len(source_ranges), lo, hi)
+        logger.info("  full direct pixel batch %d/%d inserted: %s -> %s", idx, len(source_ranges), lo, hi)
 
     swap_shadow(client, "ad_analytics.big_analytics_full", shadow)
     return count_rows(client, "ad_analytics.big_analytics_full")

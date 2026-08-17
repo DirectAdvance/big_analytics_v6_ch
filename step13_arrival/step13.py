@@ -118,6 +118,7 @@ from step3_build_sources.step3 import (
     _metric_expr,
     _weekday_expr,
 )
+from step6_build_full.step6 import _CROP_DOMAIN_SUBQUERY
 
 logger = logging.getLogger("pipeline.step13")
 
@@ -585,14 +586,14 @@ def _calls_branch_columns() -> dict[str, str]:
         "проджект": "g.`проджект`",
         "id_салона": "g.`id_салона`",
         "менеджер": "g.`менеджер`",
-        "источник": "'Звонки'",
+        "источник": "g.source_label",
         "направление": "'Комплекс'",
         "аккаунт|сайт": "concat(g.account_login, '|', ifNull(g.domain, ''))",
         "priezd_arrival_date": "toInt64(0)",
         "prodazhi_arrival_date": "toInt64(0)",
         "поставщик": "'звонки'",
         "_source_table": "'calls'",
-        "key_pixel_score": "concat(toString(g.eff_arrival_date), '|', ifNull(g.domain, ''), '|Звонки|0')",
+        "key_pixel_score": "concat(toString(g.eff_arrival_date), '|', ifNull(g.domain, ''), '|', g.source_label, '|0')",
     }
 
 
@@ -632,6 +633,13 @@ call_visits AS
         coalesce(nullIf(gs_ma.project_manager, ''), gs.project_manager) AS `проджект`,
         coalesce(nullIf(gs_ma.client_id, ''), gs.client_id) AS `id_салона`,
         coalesce(nullIf(gs_ma.sales_manager, ''), gs.sales_manager) AS `менеджер`,
+        multiIf(
+            lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), ''))) IN ({_CROP_DOMAIN_SUBQUERY}),
+            'Посевы_Звонки',
+            coalesce(nullIf(gs_ma.status, ''), gs.status) IN ('SEO', 'SEO Flow'),
+            'SEO',
+            'Контекст'
+        ) AS source_label,
         {metrics}
     FROM
     (
@@ -682,6 +690,7 @@ SELECT
     `проджект`,
     `id_салона`,
     `менеджер`,
+    source_label,
     sum(kol_vo_zayavok) AS kol_vo_zayavok,
     sum(korr) AS korr,
     sum(kval) AS kval,
@@ -698,7 +707,7 @@ FROM call_visits
 GROUP BY
     eff_arrival_date, domain, account_login, manager_login, crm_name, `статус`,
     specialist_raw, `тип_сайта`, `шаблон`, `салон`, `город`, `регион`, direction,
-    `проджект`, `id_салона`, `менеджер`
+    `проджект`, `id_салона`, `менеджер`, source_label
 HAVING priezd > 0 OR prodazhi > 0
 """
 
@@ -899,7 +908,7 @@ def _pixel_branch_columns() -> dict[str, str]:
         "id_салона": "g.`id_салона`",
         "менеджер": "g.`менеджер`",
         "источник": "g.`источник`",
-        "направление": "'Пиксель_атрибуц'",
+        "направление": "'Пиксель'",
         "номер кампании | название кампании": "g.`номер кампании | название кампании`",
         "номер группы | название группы": "g.`номер группы | название группы`",
         "аккаунт|сайт": "g.`аккаунт|сайт`",

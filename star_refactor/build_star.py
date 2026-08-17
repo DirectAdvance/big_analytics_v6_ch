@@ -243,7 +243,10 @@ DIM_DDL = {
                 toYear(`Date`) AS year,
                 toMonth(`Date`) AS month,
                 toYYYYMM(`Date`) AS month_key,
-                formatDateTime(`Date`, '%Y-%m') AS year_month,
+                toLowCardinality(arrayElement([
+                    'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+                    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+                ], toMonth(`Date`))) AS year_month,
                 toDayOfMonth(`Date`) AS day
             FROM ad_analytics.big_analytics_unified
             WHERE `Date` IS NOT NULL
@@ -807,8 +810,15 @@ def build_dim_adgroup(client) -> int:
         settings=SAFE_QUERY_SETTINGS,
     )
 
-    bucket_count = 64
+    # Probe 2026-08-17: one merge bucket passed under the CH memory cap and was
+    # faster than 8/16 buckets. Re-split only if this join starts hitting memory.
+    bucket_count = 1
     for bucket in range(bucket_count):
+        raw_filter = "group_id != 0"
+        fact_filter = "1 = 1"
+        if bucket_count > 1:
+            raw_filter += f" AND modulo(group_id, {bucket_count}) = {bucket}"
+            fact_filter = f"modulo(AdGroupId, {bucket_count}) = {bucket}"
         client.command(
             f"""
             INSERT INTO {shadow}
@@ -820,8 +830,7 @@ def build_dim_adgroup(client) -> int:
                     argMax(group_name, synced_at) AS AdGroupName,
                     argMax(campaign_id, synced_at) AS parent_CampaignId
                 FROM raw_data.direct_adgroups
-                WHERE group_id != 0
-                  AND modulo(group_id, {bucket_count}) = {bucket}
+                WHERE {raw_filter}
                 GROUP BY AdGroupId
             ),
             fact_adgroups AS
@@ -842,7 +851,7 @@ def build_dim_adgroup(client) -> int:
                     anyLast(`неверный_кодер_new`) AS `неверный_кодер_new`,
                     anyLast(parent_CampaignId) AS parent_CampaignId
                 FROM {stage}
-                WHERE modulo(AdGroupId, {bucket_count}) = {bucket}
+                WHERE {fact_filter}
                 GROUP BY AdGroupId
             )
             SELECT
@@ -895,8 +904,8 @@ def build_dim_adgroup(client) -> int:
     return rows
 
 
-def build_dim_campaign(client, bucket_count: int = 64) -> int:
-    """Build Dim_Campaign in disjoint CampaignId buckets to stay under CH memory cap."""
+def build_dim_campaign(client, bucket_count: int = 1) -> int:
+    """Build Dim_Campaign, optionally split by CampaignId buckets if memory requires it."""
     table = "Dim_Campaign"
     shadow = f"ad_analytics.{table}_new"
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
@@ -924,6 +933,9 @@ def build_dim_campaign(client, bucket_count: int = 64) -> int:
         settings=SAFE_QUERY_SETTINGS,
     )
     for bucket in range(bucket_count):
+        bucket_filter = "`CampaignId` IS NOT NULL"
+        if bucket_count > 1:
+            bucket_filter += f" AND modulo(ifNull(`CampaignId`, 0), {bucket_count}) = {bucket}"
         client.command(
             f"""
             INSERT INTO {shadow}
@@ -939,8 +951,7 @@ def build_dim_campaign(client, bucket_count: int = 64) -> int:
                 anyLast(payment_model) AS payment_model,
                 anyLast(`номер кампании | название кампании`) AS `номер кампании | название кампании`
             FROM ad_analytics.big_analytics_unified
-            WHERE `CampaignId` IS NOT NULL
-              AND modulo(ifNull(`CampaignId`, 0), {bucket_count}) = {bucket}
+            WHERE {bucket_filter}
             GROUP BY `CampaignId`
             """,
             settings=SAFE_QUERY_SETTINGS,
@@ -973,7 +984,9 @@ def build_dim(client, table: str) -> int:
 def build_dims(client, tables: list[str] | None = None) -> dict[str, int]:
     rows: dict[str, int] = {}
     for table in (tables or list(DIM_DDL)):
+        t_table = time.perf_counter()
         rows[table] = build_dim(client, table)
+        log.info("  %s built in %.1f sec", table, time.perf_counter() - t_table)
     return rows
 
 
@@ -1357,12 +1370,18 @@ def build_vk_dims(client) -> dict[str, int]:
 def build_extension_dims(client) -> dict[str, int]:
     from star_refactor import build_star_extensions
 
-    return {
-        "Dim_AdFormat": build_star_extensions.build_dim_adformat(client),
-        "Dim_AdNetworkType": build_star_extensions.build_dim_adnetwork(client),
-        "Dim_Device": build_star_extensions.build_dim_device(client),
-        "Dim_Source": build_star_extensions.build_dim_source(client),
+    builders = {
+        "Dim_AdFormat": build_star_extensions.build_dim_adformat,
+        "Dim_AdNetworkType": build_star_extensions.build_dim_adnetwork,
+        "Dim_Device": build_star_extensions.build_dim_device,
+        "Dim_Source": build_star_extensions.build_dim_source,
     }
+    rows: dict[str, int] = {}
+    for table, builder in builders.items():
+        t_table = time.perf_counter()
+        rows[table] = builder(client)
+        log.info("  %s built in %.1f sec", table, time.perf_counter() - t_table)
+    return rows
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
@@ -1371,12 +1390,24 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     t0 = time.perf_counter()
     if not table_exists(client, "ad_analytics", "big_analytics_unified"):
         raise RuntimeError("ad_analytics.big_analytics_unified отсутствует")
+    t_part = time.perf_counter()
     dim_rows = build_dims(client)
+    log.info("build_star dims total %.1f sec", time.perf_counter() - t_part)
+    t_part = time.perf_counter()
     extension_dim_rows = build_extension_dims(client)
+    log.info("build_star extension dims total %.1f sec", time.perf_counter() - t_part)
+    t_part = time.perf_counter()
     vk_rows = build_vk_ads_fact(client)
+    log.info("build_star fact_vk_ads total %.1f sec", time.perf_counter() - t_part)
+    t_part = time.perf_counter()
     vk_dim_rows = build_vk_dims(client)
+    log.info("build_star vk dims total %.1f sec", time.perf_counter() - t_part)
+    t_part = time.perf_counter()
     ml_rows = build_ml_korrektirovki_fact(client)
+    log.info("build_star fact_ml_korrektirovki total %.1f sec", time.perf_counter() - t_part)
+    t_part = time.perf_counter()
     fact_rows = build_fact(client)
+    log.info("build_star fact_big_analytics total %.1f sec", time.perf_counter() - t_part)
     parts = [
         f"fact_big_analytics={fact_rows:,}",
         *[f"{k}={v:,}" for k, v in dim_rows.items()],

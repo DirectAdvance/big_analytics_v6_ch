@@ -26,6 +26,7 @@ logger = logging.getLogger("pipeline.step3")
 SOURCE_STORE = "big_analytics_sources"
 LEADS_DEDUPED_STAGE = "_step3_leads_deduped"
 DIRECT_SOURCE_TYPES = ("direct", "tp8", "tp9", "tp10")
+CROP_SOURCE_TYPES = ("crop_targeting", "telegram", "social_посевы", "vk_ads", "vk_zero", "vk_perform")
 
 # source_type (raw_leads/raw_calls/raw_perform_leads) -> ключ `crm` в raw_data.crm_status_mapping.
 # Сверено с живой БД 2026-08-05: raw_leads / raw_data.leads_all / raw_calls дают базовые
@@ -1389,9 +1390,53 @@ WHERE 0
 """
 
 
+def _crop_source_expr(prefix: str = "l.") -> str:
+    return f"""
+        multiIf(
+            lowerUTF8(ifNull({prefix}utm_source, '')) = 'vkads', 'VK Ads',
+            lowerUTF8(ifNull({prefix}utm_source, '')) = 'max', 'Посевы_Max',
+            lowerUTF8(ifNull({prefix}utm_source, '')) IN ('vk', 'vk_groups', 'vk_storis'), 'Посевы_VK',
+            match(lowerUTF8(ifNull({prefix}utm_campaign, '')), '(^|_)vk($|_|[0-9])'), 'Посевы_VK',
+            match(lowerUTF8(ifNull({prefix}utm_campaign, '')), '(^|_)max($|_|[0-9])'), 'Посевы_Max',
+            lowerUTF8(ifNull({prefix}utm_source, '')) IN ('telegram', 'stories_tg', 'telegram_storis', 'instagram'), 'Посевы_Telegram',
+            ifNull({prefix}utm_source, '') = '', 'Посевы_Telegram',
+            concat('Посевы_', ifNull({prefix}utm_source, ''))
+        )
+    """
+
+
+def _crop_source_table_expr(prefix: str = "l.") -> str:
+    return f"""
+        multiIf(
+            ifNull({prefix}utm_source, '') IN ('telegram', 'stories_tg'), 'telegram',
+            ifNull({prefix}utm_source, '') IN ('max', 'vk', 'vk_groups', 'vk_storis', 'telegram_storis'), 'social_посевы',
+            ifNull({prefix}utm_source, '') = 'vkads' AND match(ifNull({prefix}utm_campaign, ''), '^[0-9]+$'), 'vk_ads',
+            ifNull({prefix}utm_source, '') = 'vkads', 'vk_zero',
+            'crop_targeting'
+        )
+    """
+
+
+def _crop_provider_expr(prefix: str = "l.") -> str:
+    return f"if(ifNull({prefix}utm_source, '') = 'vkads', 'ВК Реклама', 'Посевы')"
+
+
+def _crop_overrides(prefix: str = "l.") -> dict[str, str]:
+    return {
+        "источник": _crop_source_expr(prefix),
+        "_source_table": _crop_source_table_expr(prefix),
+        "поставщик": _crop_provider_expr(prefix),
+    }
+
+
 def _build_crop_sql() -> str:
     return _build_lead_source_sql(
-        "big_analytics_crop_targeting", _crop_source_filter(), "Посевы", "Комплекс", "Посевы"
+        "big_analytics_crop_targeting",
+        _crop_source_filter(),
+        "Посевы",
+        "Комплекс",
+        "Посевы",
+        overrides=_crop_overrides(),
     )
 
 
@@ -1672,7 +1717,13 @@ def _build_direct_zero_sql(lo: str, hi: str) -> str:
 
 def _build_crop_sql_batched(lead_date_filter: str = "") -> str:
     return _build_lead_source_sql(
-        "big_analytics_crop_targeting", _crop_source_filter(), "Посевы", "Комплекс", "Посевы", lead_date_filter
+        "big_analytics_crop_targeting",
+        _crop_source_filter(),
+        "Посевы",
+        "Комплекс",
+        "Посевы",
+        lead_date_filter,
+        overrides=_crop_overrides(),
     )
 
 
@@ -1716,6 +1767,7 @@ def _source_types_sql(source_types: tuple[str, ...]) -> str:
 
 def recreate_source_views(client) -> None:
     direct_types = _source_types_sql(DIRECT_SOURCE_TYPES)
+    crop_types = _source_types_sql(CROP_SOURCE_TYPES)
     replace_view(
         client,
         "ad_analytics.big_analytics_direct",
@@ -1734,7 +1786,7 @@ def recreate_source_views(client) -> None:
     replace_view(
         client,
         "ad_analytics.big_analytics_crop_targeting",
-        f"SELECT * FROM ad_analytics.{SOURCE_STORE} WHERE _source_table = 'crop_targeting'",
+        f"SELECT * FROM ad_analytics.{SOURCE_STORE} WHERE _source_table IN ({crop_types})",
     )
     replace_view(
         client,
@@ -2005,7 +2057,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         _select_from_create(_build_direct_sql(SOURCE_STORE, f"AND ry.`Date` >= toDate('{lo}') AND ry.`Date` < toDate('{hi}')"))
         for lo, hi in direct_ranges
     ]
-    logger.info("  rebuild ad_analytics.%s (%d direct daily batches)", SOURCE_STORE, len(direct_batches))
+    logger.info("  rebuild ad_analytics.%s (%d direct batches)", SOURCE_STORE, len(direct_batches))
     client = _command_with_retry(client, f"DROP TABLE IF EXISTS {shadow} SYNC", label=f"{SOURCE_STORE} shadow drop")
     client = _command_with_retry(
         client,
@@ -2045,7 +2097,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     for table, builder in lead_builders:
         t_table = time.perf_counter()
         batch_selects = [_select_from_create(builder(lo, hi)) for lo, hi in lead_ranges]
-        logger.info("  append %s into ad_analytics.%s (%d daily batches)", table, SOURCE_STORE, len(batch_selects))
+        logger.info("  append %s into ad_analytics.%s (%d batches)", table, SOURCE_STORE, len(batch_selects))
         for idx, select_sql in enumerate(batch_selects, start=1):
             t_batch = time.perf_counter()
             client = _command_with_retry(

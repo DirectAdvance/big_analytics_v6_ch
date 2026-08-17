@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, range_batches, replace_view, swap_shadow, table_exists
-from step3_build_sources.step3 import SOURCE_STORE, _metric_expr
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
+from step3_build_sources.step3 import CROP_SOURCE_TYPES, SOURCE_STORE, _metric_expr
 
 logger = logging.getLogger("pipeline.step10")
 
@@ -28,6 +28,7 @@ COST_OVERLAY_TABLE = "big_analytics_cost_overlays"
 TELEGA_PRICE_OVERRIDES = "telega_in_order_price_overrides"
 TELEGA_FIELD_OVERRIDES = "telega_in_order_field_overrides"
 JOIN_QUERY_SETTINGS = {**SAFE_QUERY_SETTINGS, "join_use_nulls": 1}
+CROP_TYPES_SQL = ", ".join(f"'{source_type}'" for source_type in CROP_SOURCE_TYPES)
 
 
 _GS_DATE = "assumeNotNull(toDate(parseDateTimeBestEffortOrNull(ifNull(g.`Дата`, ''))))"
@@ -917,9 +918,9 @@ def _rebuild_cost_overlays(client) -> tuple[int, float]:
         client,
         "ad_analytics.big_analytics_crop_targeting",
         f"""
-        SELECT * FROM ad_analytics.{SOURCE_STORE} WHERE _source_table = 'crop_targeting'
+        SELECT * FROM ad_analytics.{SOURCE_STORE} WHERE _source_table IN ({CROP_TYPES_SQL})
         UNION ALL
-        SELECT * FROM ad_analytics.{COST_OVERLAY_TABLE} WHERE _source_table = 'crop_targeting'
+        SELECT * FROM ad_analytics.{COST_OVERLAY_TABLE} WHERE _source_table IN ({CROP_TYPES_SQL})
         """,
     )
     row = client.query(
@@ -957,9 +958,9 @@ def _overlay_full(client) -> tuple[int, float, float]:
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
-    # Keep the wide full-table copy under the current managed CH memory limit
-    # (~488 MiB). Weekly batches are too close to the cap on the July slice.
-    full_ranges = range_batches(DATE_FROM, days=1)
+    # Uses global month-safe pipeline batches. Emergency rollback:
+    # PIPELINE_BATCH_DAYS=1 python3 pipeline.py --from-step=10.
+    full_ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(full_ranges, start=1):
         client.command(
             f"""
@@ -972,7 +973,7 @@ def _overlay_full(client) -> tuple[int, float, float]:
             """,
             settings=SAFE_QUERY_SETTINGS,
         )
-        logger.info("  full crop-overlay keep weekly batch %d/%d: %s -> %s", idx, len(full_ranges), lo, hi)
+        logger.info("  full crop-overlay keep batch %d/%d: %s -> %s", idx, len(full_ranges), lo, hi)
     client.command(
         f"""
         INSERT INTO ad_analytics.big_analytics_full_new

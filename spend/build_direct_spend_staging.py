@@ -102,7 +102,7 @@ def build(client) -> int:
     ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
         _insert_batch(client, shadow, lo, hi)
-        logger.info("  direct staging daily batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+        logger.info("  direct staging batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, STAGING_TABLE, shadow)
     return count_rows(client, STAGING_TABLE)
 

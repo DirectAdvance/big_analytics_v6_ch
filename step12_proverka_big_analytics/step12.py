@@ -11,13 +11,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_utils import count_rows, table_exists
-from step3_build_sources.step3 import SOURCE_STORE, _CROP_UTM_FILTER, _direct_lead_universe_filter
+from step3_build_sources.step3 import CROP_SOURCE_TYPES, SOURCE_STORE, _CROP_UTM_FILTER, _direct_lead_universe_filter
 
 logger = logging.getLogger("pipeline.step12")
 
 
 def _scalar(client, sql: str):
     return client.query(sql).result_rows[0][0]
+
+
+def _source_types_sql(source_types: tuple[str, ...]) -> str:
+    return ", ".join(f"'{source_type}'" for source_type in source_types)
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
@@ -49,7 +53,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             # 203 совпадения key3 (51 по паре key3+domain) с абсолютно легальными
             # посевными лидами. Проверка бы падала всегда. Реальный инвариант для
             # zero-ветки закрывает `direct_crop_universe_overlap` ниже.
-            "direct_crop_key_overlap": """
+            "direct_crop_key_overlap": f"""
                 SELECT count()
                 FROM
                 (
@@ -61,7 +65,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
                     SELECT key3
                     FROM ad_analytics.big_analytics_sources
                     WHERE ifNull(key3, '') != ''
-                      AND _source_table = 'crop_targeting'
+                      AND _source_table IN ({_source_types_sql(CROP_SOURCE_TYPES)})
                 )
             """,
             # DIRECT_CROP_DISJOINT_2026-08-05: дизъюнктность универсов НА УРОВНЕ
