@@ -59,6 +59,25 @@ def table_engine(client, database: str, table: str) -> str | None:
     return rows[0][0] if rows else None
 
 
+# MOJIBAKE_2026-08-17. `raw_data` отдаёт часть текстовых значений в двойной кодировке: UTF-8
+# прочитан как ISO-8859-1 («FMCG Инсайдер» → «FMCG Ð˜Ð½ÑÐ°Ð¹Ð´ÐµÑ€»). Замер на
+# `raw_data.yandex_direct_report_rows.placement`: 7 522 строки / 847 площадок / 16 логинов за
+# январь-июль 2026. Чиним у себя на чтении, чинить у источника — отдельная просьба владельцу
+# `raw_data` (`RAW_DATA_REQUEST.md`).
+def fix_mojibake_sql(col: str) -> str:
+    """SQL-выражение, разворачивающее двойное кодирование UTF-8 → ISO-8859-1.
+
+    Round-trip-проверка гарантирует, что чистая строка не пострадает: переписываем только то,
+    что кодируется обратно в исходное значение. Строку, обрезанную источником посреди символа,
+    не трогаем — после раскодирования она перестаёт быть валидным UTF-8.
+    """
+    decoded = f"convertCharset({col}, 'UTF-8', 'ISO-8859-1')"
+    return (
+        f"if(isValidUTF8({decoded}) AND convertCharset({decoded}, 'ISO-8859-1', 'UTF-8') = {col},"
+        f" {decoded}, {col})"
+    )
+
+
 def column_names(client, database: str, table: str) -> list[str]:
     rows = client.query(
         """

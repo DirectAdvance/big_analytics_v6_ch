@@ -23,7 +23,7 @@ import urllib3
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, fix_mojibake_sql, swap_shadow, table_exists
 from config.cookies import ensure_cookies_alive_or_stop
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -487,22 +487,36 @@ def _fetch_cube_placements(
 def _load_raw_placements(client, only_login: str | None = None) -> list[RawPlacement]:
     only_sql = "AND client_login = {only_login:String}" if only_login else ""
     params = {"only_login": only_login} if only_login else None
+    # Площадка чинится ДО группировки: битая и целая запись одного канала должны схлопнуться в одну
+    # строку с общим расходом, иначе расход делится пополам и ломает сверку с расходом из Grid.
+    fixed_placement = fix_mojibake_sql("ifNull(placement, '')")
+    placement_sql = f"trim(BOTH ' ' FROM {fixed_placement})"
     rows = client.query(
         f"""
         SELECT
             client_login,
             replaceRegexpOne(any(manager_login), '@yandex\\\\.ru$', '') AS manager_key,
             campaign_id,
-            any(ifNull(campaign_name, '')) AS campaign_name_any,
-            trim(BOTH ' ' FROM ifNull(placement, '')) AS placement,
-            sum(ifNull(cost, toDecimal128(0, 9))) AS spend,
-            min(toDate(day)) AS period_from,
-            max(toDate(day)) AS period_to
-        FROM raw_data.yandex_direct_report_rows
-        WHERE match(ifNull(campaign_name, ''), '(?i)tp(8|9|10)')
-          AND trim(BOTH ' ' FROM ifNull(placement, '')) != ''
-          AND campaign_id != 0
-          {only_sql}
+            any(campaign_name) AS campaign_name_any,
+            placement,
+            sum(cost) AS spend,
+            min(day) AS period_from,
+            max(day) AS period_to
+        FROM (
+            SELECT
+                client_login,
+                manager_login,
+                campaign_id,
+                ifNull(campaign_name, '') AS campaign_name,
+                {placement_sql} AS placement,
+                ifNull(cost, toDecimal128(0, 9)) AS cost,
+                toDate(day) AS day
+            FROM raw_data.yandex_direct_report_rows
+            WHERE match(ifNull(campaign_name, ''), '(?i)tp(8|9|10)')
+              AND trim(BOTH ' ' FROM ifNull(placement, '')) != ''
+              AND campaign_id != 0
+              {only_sql}
+        )
         GROUP BY client_login, campaign_id, placement
         ORDER BY client_login, campaign_id, placement
         """,
@@ -527,11 +541,17 @@ def _load_raw_placements(client, only_login: str | None = None) -> list[RawPlace
 def _load_existing_links(client, trust_cache: bool) -> dict[str, str | None]:
     if not trust_cache or not table_exists(client, "ad_analytics", "yandex_direct_tp_placement_links"):
         return {}
+    # Кэш чинится тем же выражением: иначе битые ключи, накопленные прошлыми прогонами, живут
+    # вечно — `_write_final_links` начинает сборку именно с них. `max` вместо `any` схлопывает
+    # битого и целого близнеца в одну ссылку детерминированно (NULL игнорируется).
     rows = client.query(
         f"""
-        SELECT placement, any(placement_link)
-        FROM {TARGET_TABLE}
-        WHERE ifNull(placement, '') != ''
+        SELECT placement, max(placement_link)
+        FROM (
+            SELECT {fix_mojibake_sql("ifNull(placement, '')")} AS placement, placement_link
+            FROM {TARGET_TABLE}
+            WHERE ifNull(placement, '') != ''
+        )
         GROUP BY placement
         """,
         settings=SAFE_QUERY_SETTINGS,
