@@ -1,7 +1,7 @@
 # big_analytics_v6_ch — статус
 
-_2026-08-17, после полного BA6 pipeline на Victory, очистки PBI/PBIP от return commission и
-дропа старых live-объектов. История — `git log -p STATE.md`._
+_2026-08-18, после перевязки части Power BI на `*_star`/`bi_*`, push BA6/PBIP и live-обновления
+direct-cookie PBI views. История — `git log -p STATE.md`._
 
 ## Где мы сейчас
 
@@ -37,9 +37,9 @@ BA5 `_source_table='пиксель'`; `pixel_score` остаётся score/diagn
 `Контекст` 60 284, `SEO` 3 394, `Посевы_Звонки` 2 092; crop `источник='Посевы'` = 0.
 2026-08-17: в `raw_data` появились Direct cookie-источники
 `direct_cookie_ads_texts_master`, `direct_cookie_type_placement_master`,
-`direct_cookie_feed_urls`. Они заменяют часть временных `raw_new_*` по смыслу, но переключать
-PBI нужно через совместимые `bi_*`-вьюхи после ночной догрузки и сверки сумм; не покрыты
-`raw_new_arp_fact`, `raw_new_search_query_report_master_pbi`, `raw_new_human_cyborgs`.
+`direct_cookie_feed_urls`. `ads_texts` и `type_placement` уже переключены через совместимые
+`bi_*`-вьюхи; не покрыты `raw_new_arp_fact`, `raw_new_search_query_report_master_pbi`,
+`raw_new_human_cyborgs`.
 На момент проверки новые таблицы уже растут: ads-texts >16M строк, type-placement >2.6M,
 feed-url 5 923 строки; зерно дневное (`scope_from = scope_to`).
 2026-08-17: оптимизированы безопасные горячие батчи: `step10` overlay full-copy и `step146`
@@ -68,16 +68,29 @@ step11 150.4с, step140 150.5с, build_star 177.5с, build_pbi_compat 167.0с. �
 Сегодняшний замер: [`RAW_DIFF_FINDINGS.md`](RAW_DIFF_FINDINGS.md) — сырьё,
 [`PBI_TABLES.md`](PBI_TABLES.md) §0 — паритет 31 таблицы Power BI.
 
+2026-08-18: локальный BA6 git-хвост закрыт: все 12 коммитов по БА6 проверены по составу и
+запушены в `origin/main`, затем добавлены и запушены `e8dd18f`/`b92f400` для direct-cookie PBI.
+`build_pbi_compat.py` доставлен на Victory (md5 `f830b0ee61143ae3646a7a00b5d128f1`, remote
+`py_compile` OK). Live ClickHouse-вьюхи `bi_yandex_direct_ads_texts` и
+`bi_yandex_direct_type_placement_report_master` пересозданы: обе агрегируют данные в ClickHouse,
+`type_placement_ru` больше не зависит от `raw_new_type_placement_types`.
+BA6 PBIP `powerbi_ba6` запушен коммитом `2569252`: `yandex_direct_ads_texts` и
+`yandex_direct_type_placement_report_master` читают `bi_*`, `return_commission` и его визуалы
+удалены. Desktop/Service refresh после этого не запускался.
+
 ## Главное, что выяснилось 15.08
 
 **Сырьё v6 не беднее v5 — оно богаче.** Директ +354 258 строк и +10.54 млн ₽; 99 «пропавших»
 аккаунтов несут 0.00 ₽. CRM-лиды больше v5 в каждом месяце 2026. Витрина сошлась: заявочная ось
 Feb–Jul без пикселя — cost +0.36%, приезды −0.08%, продажи −0.03%.
 
-**Отчёты Power BI на v6 сегодня не соберутся: 7 таблиц модели из 31 не имеют источника.**
-Нет `analytics_report_placement/criterion/feed` (+ `placement_links`), `ads_texts`,
-`type_placement_report_master`, `accounts_human_cyborgs`. Плюс `fact_direct_feed_funnel` в v6 —
-это площадки РСЯ, а не воронка по фидам (имя совпадает, смысл другой). Подробности — #39.
+**Отчёты Power BI на v6 ещё не финализированы.** После 18.08 `ads_texts` и
+`type_placement_report_master` технически закрыты через `bi_*` над `raw_data.direct_cookie_*`.
+Остаются `analytics_report_placement/criterion/feed` (+ `placement_links`),
+`accounts_human_cyborgs`, а также временные `raw_new_arp_fact`,
+`raw_new_search_query_report_master_pbi`, `raw_new_human_cyborgs` в PBIP. Плюс
+`fact_direct_feed_funnel` в v6 — это площадки РСЯ, а не воронка по фидам (имя совпадает, смысл
+другой). Подробности — `PBI_TABLES.md` §0.
 
 ## Не сделано / ждёт решения Семёна
 
@@ -88,13 +101,16 @@ Feb–Jul без пикселя — cost +0.36%, приезды −0.08%, про
    `docs/DIRECT_RAW_HANDOVER.md` — 12 потоков, что мы тянем из Директа руками. Шесть блокируют
    перевод отчётов на v6. ⚠️ Половина потоков идёт через Grid **на куках** — без инфраструктуры
    кук они остаются у нас, проговорить сразу.
-3. **Фаза 3 `OPTIMIZATION_PLAN.md` (−85 МиБ) не начата** — упирается в ручной шаг: в Power BI
-   Desktop добавить связь факта с `bi_Dim_PlacementFeed` и опубликовать датасет. До публикации
-   не деплоить, иначе refresh упадёт.
+3. **Фаза 3 `OPTIMIZATION_PLAN.md` частично сделана** — PBIP перевязан на
+   `fact_direct_feed_funnel_star`, `fact_region_spend_star`, `fact_criterion_spend_star` и
+   direct-cookie `bi_*`. Остался ручной шаг: открыть Power BI Desktop/Service, выполнить полный
+   refresh и опубликовать датасет.
 4. **Опубликовать BA6 PBIP в Power BI Service.** Локальный PBIP очищен, но cloud-service dataset
    не публиковался и не проверялся через API.
-5. **PBI-модель прочёсана только по `return_commission`.** По пикселю live-данные уже каноничны
-   (`Пиксель`), но визуальные меры/фильтры Power BI Service нужно проверить после публикации.
+5. **`analytics_report_placement` не перевязан.** Проверенный кандидат через
+   `fact_direct_feed_funnel` не совпал с `raw_new_arp_fact` на периоде 2026-07-01..2026-08-13:
+   2.53M строк / 315.7M cost против 1.91M / 179.6M. Нужен отдельный ARP-источник или решение
+   менять смысл вкладки.
 ## Что важно знать, чтобы не наступить
 
 - **Свежесть v6 нельзя проверять по `raw_data.etl_runs` и `leads_all.updated_at`** — оба врут
@@ -126,8 +142,8 @@ Feb–Jul без пикселя — cost +0.36%, приезды −0.08%, про
 
 ## Открытые дефекты
 
-`KNOWN_ISSUES.md`: к прежним добавлены **#39** (7 таблиц PBI без источника), **#40** (FIXED:
-whitelist пустоты сужен до одной заглушки), **#41** (`big_analytics_reviews` = 0 из-за рассинхрона тега),
+`KNOWN_ISSUES.md`: к прежним добавлены **#39** (часть PBI ещё на `raw_new_*`), **#40** (FIXED:
+whitelist пустоты убран), **#41** (`big_analytics_reviews` = 0 из-за рассинхрона тега),
 **#42** (минус-фразы в night cron, 30-дневная история ещё наполняется),
 **#43** (врущие индикаторы свежести),
 **#44** (`domains` −322, `gsheet_sites` −52, `crm_status_mapping` −5).

@@ -1,6 +1,6 @@
 # PBI_REFRESH_OPTIMIZATION_RECOMMENDATIONS_2026-08-18
 
-Проверено на живом ClickHouse 2026-08-18 после деплоя `18b4782`.
+Проверено на живом ClickHouse 2026-08-18 после деплоя `b92f400`.
 
 ## Короткий вывод
 
@@ -32,14 +32,14 @@ Import (`SELECT * FROM ...`) без `WHERE`. Главный выигрыш — �
 
 | View | Engine | Строк |
 |---|---|---:|
-| `bi_yandex_direct_ads_texts` | View | агрегат в ClickHouse |
+| `bi_yandex_direct_ads_texts` | View | 53 488 831 |
 | `bi_yandex_direct_type_placement_report_master` | View | 8 398 376 |
 
-Эти две view пока не добавлены в `_ALL_TABLES`: это правильно до проверки опубликованной PBI-модели.
+Эти две view уже используются PBIP напрямую, но пока не добавлены в `_ALL_TABLES`: это правильно до
+проверки опубликованной PBI-модели и фактического refresh в Service.
 
-Дополнительно подготовлены безопасные future-star слои для тяжёлых вкладок. Они не заменяют старые
-`bi_*`: текущая Power BI модель продолжает получать совместимые объекты, а новые view/table нужны
-для перевязки модели на звезду без риска сломать действующий refresh.
+Подготовленные star-слои уже подключены в BA6 PBIP для feed/region/criterion. Старые совместимые
+`bi_*` остаются fallback-объектами до успешного Desktop/Service refresh.
 
 | Объект | Строк | Колонок | Диск |
 |---|---:|---:|---:|
@@ -71,9 +71,9 @@ SELECT * FROM ad_analytics.bi_yandex_direct_ads_texts
 
 Источник `raw_data.direct_cookie_ads_texts_master`.
 
-Сырых строк 65.2M. Индекс не поможет: полный импорт всё равно прочитает все строки. Поэтому
-`bi_yandex_direct_ads_texts` теперь отдаёт уже агрегированный набор в гранулярности PBIP
-`loaded_at/client_login/campaign_id/ad_group_id/ad_type/status/title/text`.
+Сырых строк 65.2M, агрегированная view отдаёт 53.5M. Индекс не поможет: полный импорт всё равно
+прочитает все строки. Поэтому `bi_yandex_direct_ads_texts` теперь отдаёт набор в гранулярности
+PBIP `loaded_at/client_login/campaign_id/ad_group_id/ad_type/status/title/text`.
 
 Что поможет:
 
@@ -145,9 +145,10 @@ ORDER BY (date, campaign_id, ad_group_id, ad_network_type_key, id_location)
 
 ## Следующий практический шаг
 
-1. Снять из Power BI Service/Desktop фактические M-запросы и список используемых колонок для самых
-   тяжёлых таблиц.
-2. Первым перевязать Power BI на `bi_fact_direct_feed_funnel_star` + `bi_Dim_PlacementFeed`.
-3. Следом перевязать `region` и `criterion` на `*_star` views + dimensions.
-4. Новые `yandex_direct_ads_texts` не включать в selective refresh до решения: сырые 65M строк или
-   отдельный агрегат/звезда по `ad_id`.
+1. Открыть BA6 PBIP в Power BI Desktop и выполнить полный refresh.
+2. После успешного Desktop refresh опубликовать датасет в Power BI Service.
+3. По Query Diagnostics проверить, какие из оставшихся тяжёлых таблиц реально тормозят:
+   `analytics_report_placement`, `analytics_report_placement_links`,
+   `yandex_direct_search_query_report_master`.
+4. Для `analytics_report_placement` не использовать `fact_direct_feed_funnel` как замену без
+   отдельного пересчёта: проверка 2026-07-01..2026-08-13 показала разные суммы.

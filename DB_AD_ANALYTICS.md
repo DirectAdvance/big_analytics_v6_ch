@@ -158,16 +158,19 @@
    5 180 → 5 527, иначе отчёт потерял бы 299 ссылок, которые знал только БА5. Проверено прогоном
    шага 139: обогащение удержано кэшем (`matched` 49 681 → 50 381, `missing` 1 290 → 590).
 
-   **Осталось:** ещё 6 вкладок (`analytics_report_placement`, `yandex_direct_type_placement_report_master`,
-   `yandex_direct_search_query_report_master`, `yandex_direct_ads_texts`,
-   `yandex_direct_accounts_human_cyborgs` и их справочники) читают `raw_new_*` напрямую, минуя
-   `bi_*`. 17.08 появились новые `raw_data.direct_cookie_ads_texts_master`,
-   `raw_data.direct_cookie_type_placement_master`, `raw_data.direct_cookie_feed_urls`: они
-   закрывают ads-texts/type-placement/feed-url слой после ночной догрузки и сверки сумм.
-   Точный blocker для автопереключения: в новых ads/type таблицах одна колонка `goals`, а в
-   старом PBI-контракте отдельно `goal_all_forms` и `goal_crm_order_paid`.
-   `analytics_report_placement`, готовый search-query aggregate и `accounts_human_cyborgs`
-   всё ещё требуют отдельного источника.
+   **18.08 закрыто:** `yandex_direct_ads_texts` и
+   `yandex_direct_type_placement_report_master` переведены в BA6 PBIP с `raw_new_*` на
+   `bi_yandex_direct_ads_texts` / `bi_yandex_direct_type_placement_report_master`. Эти view читают
+   `raw_data.direct_cookie_ads_texts_master` и `raw_data.direct_cookie_type_placement_master`,
+   агрегируют данные в ClickHouse и сохраняют `type_placement_ru` без
+   `raw_new_type_placement_types`. `goal_crm_order_paid` пока = 0, потому что новый источник
+   отдаёт только общий `goals`.
+
+   **Осталось:** `analytics_report_placement` и `analytics_report_placement_links` читают
+   `raw_new_arp_fact`; `yandex_direct_search_query_report_master` читает
+   `raw_new_search_query_report_master_pbi`; `yandex_direct_accounts_human_cyborgs` читает
+   `raw_new_human_cyborgs`. Для ARP проверенный кандидат через `fact_direct_feed_funnel` не
+   совпадает по суммам, поэтому нужен отдельный совместимый источник, а не простая подмена.
 2. **`ar_*` и `yd_search_query_report_master`** — ✅ решено 2026-08-17: оба остаются как
    признанные исключения, условия в §1.2. Кода-писателя `ar_*` в репозитории нет (записаны
    16.08 в 19:38 юзером `clickhouse_avto`) — при следующем касании прототипа писателя нужно
@@ -176,11 +179,12 @@
    `bi_Dim_AdFormat` собирает измерение напрямую из `fact_adformat_spend`, минуя таблицу.
    Либо подключить таблицу к bi-слою, либо убрать из звезды.
 4. **Дубли данных:**
-   - 7 таблиц `raw_new_*` (20.9 млн строк, ~490 МиБ) — ручные копии PG БА5, заявлены временными
-     в `tools/copy_pg_to_raw_new.py`; ads-texts/type-placement заменяются новыми
-     `raw_data.direct_cookie_*` после контрольной сверки, остальные остаются без живой замены;
+   - оставшиеся `raw_new_*` в активном PBIP: `raw_new_arp_fact`,
+     `raw_new_search_query_report_master_pbi`, `raw_new_human_cyborgs`. Direct-cookie
+     `raw_new_ads_texts_master_pbi`, `raw_new_type_placement_report_master` и
+     `raw_new_type_placement_types` активным PBIP больше не читаются;
      `raw_new_tp_placement_links` с 17.08 не читает никто, кроме маппинга
-     `powerbi_ba6/tools/add_table_from_ba5.py:43` — первый готовый к удалению объект;
+     `powerbi_ba6/tools/add_table_from_ba5.py:43`;
    - `pixel_score` + `big_analytics_pixel_score` — по 243 258 строк, по имени неотличимы
      (названо в скиле `db-rules` §3 как известное нарушение);
    - `raw_yandex` (26.3 млн / 231 МиБ) — третья форма отчёта Директа после

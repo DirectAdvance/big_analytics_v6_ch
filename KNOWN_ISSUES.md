@@ -638,15 +638,17 @@ wide-проекцию через dimensions, либо сверял факт по
 
 ---
 
-### 🔴 #39 — 7 таблиц модели Power BI в v6 не собираются
+### 🟡 #39 — часть таблиц Power BI ещё держится на `raw_new_*`
 
-**Суть.** Живая модель `Большая аналитика_v00` тянет 31 таблицу-источник. В ClickHouse v6 есть
-эквивалент для 24 из них.
+**Суть.** Живая модель `Большая аналитика_v00` тянет 31 таблицу-источник. После перевязки
+18.08 direct-cookie таблицы `yandex_direct_ads_texts` и
+`yandex_direct_type_placement_report_master` читают совместимые `bi_*` над
+`raw_data.direct_cookie_*`, а не `raw_new_*`.
 
-Нет источника в `raw_data` вообще: `analytics_report_placement` (v5 `arp_fact`, 1 927 669 строк),
-`analytics_report_placement_links`, `yandex_direct_ads_texts` (5 106 097),
-`yandex_direct_type_placement_report_master` (7 539 230),
-`yandex_direct_accounts_human_cyborgs` (17, схема `victoryads_direct_automation`).
+Остаются пробелы/временные источники: `analytics_report_placement` и
+`analytics_report_placement_links` читают `raw_new_arp_fact`,
+`yandex_direct_search_query_report_master` читает `raw_new_search_query_report_master_pbi`,
+`yandex_direct_accounts_human_cyborgs` читает `raw_new_human_cyborgs`.
 Вычеркнуты из контракта решением: `analytics_report_criterion` (`arc_fact`),
 `analytics_report_feed` (`arf_fact`) — закреплено тестом `tests/test_pbi_contract_lists.py`.
 
@@ -656,39 +658,55 @@ wide-проекцию через dimensions, либо сверял факт по
 
 **Где.** Матрица со строками и колонками — `PBI_TABLES.md` §0. Запрос владельцу сырья —
 `RAW_DATA_REQUEST.md`.
-**Статус.** OPEN. Блокирует перевод отчётов Power BI с v5 на v6.
+**Статус.** PARTIAL. Блокирует финальный перевод отчётов Power BI с v5 на v6 до refresh-проверки
+и замены оставшихся `raw_new_*`.
 
 ---
 
-### 🔴 #40 — две пустые заглушки PBI + слишком широкий whitelist пустоты в гейте
+### ✅ #40 — PBI empty whitelist убран
 
-**Суть, часть 1.** `ad_analytics.check_utm_fuck_direct` и
-`ad_analytics.yandex_direct_return_commission_report` созданы как
-`CREATE VIEW … AS SELECT CAST(NULL, 'Nullable(…)') AS …` — правильная схема, 0 строк.
-В v5: 1 828 и 45 867 строк. Источника в ClickHouse нет.
+**Суть, часть 1.** До 2026-08-17 `ad_analytics.check_utm_fuck_direct` и
+`ad_analytics.yandex_direct_return_commission_report` были созданы как
+`CREATE VIEW … AS SELECT CAST(NULL, 'Nullable(…)') AS …` — правильная схема, 0 строк. В v5:
+1 828 и 45 867 строк.
+
+2026-08-17 UTM-аудит восстановлен в БА6: `step_cron_night/step13_utm_direct_audit/run.py`
+собирает `check_utm` и `check_utm_fuck_direct` из `raw_data.direct_adgroups`,
+`raw_data.direct_campaigns`, `raw_data.gsheet_sites` и `raw_data.yandex_direct_report_rows`.
+Живой прогон: `check_utm` = 28 288 строк (`OK` 27 930, `ДРУГОЙ_UTM` 204, `НЕТ_UTM` 154),
+`check_utm_fuck_direct` = 3 981 строка за 2026-05-19..2026-08-16.
 
 **Суть, часть 2 (уточнено 2026-08-16).** Гейт непустоту PBI-объектов **проверяет**
-(`verify_big_analytics.py`, `empty_pbi_view:`), но у проверки есть whitelist `PBI_EMPTY_ALLOWED`
-на 12 имён. Реально пусты только две заглушки выше; остальные десять — живые витрины
-(`bi_fact_criterion_zayavki`=137 890, `bi_fact_region_zayavki`=188 691, `bi_Dim_Location`=16 317,
-`bi_fact_ml_korrektirovki`=15 396, `bi_yandex_direct_404_errors`=13 548, `bi_fact_vk_ads`=783,
-`bi_yandex_direct_cookie_analytics_website_pages`=965 764, `bi_yandex_direct_korrektirovki`=190 286,
-`bi_yandex_direct_minus_snapshot` и `bi_v_yandex_direct_minus_delta`=1 546).
-Пока whitelist их покрывает, регрессия «витрина обнулилась» пройдёт гейт молча.
+(`verify_big_analytics.py`, `empty_pbi_view:`), но до 2026-08-17 у проверки был whitelist
+`PBI_EMPTY_ALLOWED` на 11 имён. Реально пустая только заглушка return commission; остальные десять —
+живые витрины (`bi_fact_criterion_zayavki`, `bi_fact_region_zayavki`, `bi_Dim_Location`,
+`bi_fact_ml_korrektirovki`, `bi_yandex_direct_404_errors`, `bi_fact_vk_ads`,
+`bi_yandex_direct_cookie_analytics_website_pages`, `bi_yandex_direct_korrektirovki`,
+`bi_yandex_direct_minus_snapshot`, `bi_v_yandex_direct_minus_delta`). Пока whitelist их покрывал,
+регрессия «витрина обнулилась» проходила гейт молча.
 
 _Прежняя формулировка «гейт непустоту не проверяет» была неверной — проверка есть, проблема
 в широте исключений._
 
-**Сделано 2026-08-16.** Пустой whitelisted-объект теперь логируется
-`WARNING PBI_VIEW_EMPTY_WHITELISTED`; две заглушки вынесены в `PBI_EMPTY_BY_DESIGN` и молчат
-штатно. Вердикт гейта не изменился (PASS остаётся PASS).
+**Сделано.** 2026-08-16 пустой whitelisted-объект стал логироваться
+`WARNING PBI_VIEW_EMPTY_WHITELISTED`; заглушки были вынесены в `PBI_EMPTY_BY_DESIGN`. 2026-08-17
+после восстановления UTM-аудита `bi_check_utm_fuck_direct` убран из `PBI_EMPTY_ALLOWED` и
+`PBI_EMPTY_BY_DESIGN`. Вердикт гейта для текущих данных не изменился (PASS остаётся PASS), но
+повторное обнуление этой витрины теперь будет FAIL.
 
-**Что осталось.** Сузить `PBI_EMPTY_ALLOWED` до двух заглушек — правка на одну строку, но она
-делает пустоту десяти витрин FAIL для прод-прогона. Риск: `bi_yandex_direct_minus_snapshot` и
-`bi_v_yandex_direct_minus_delta` зависят от step14, который по умолчанию выключен (#42) — в
-свежем окружении гейт покраснеет законно, но неожиданно. Ждёт решения Семёна (правило корневого
-`CLAUDE.md`: новые инварианты в `verify_big_analytics.py` — только после согласования).
-**Статус.** PARTIAL.
+**Закрыто 2026-08-17.** По новому решению Семёна
+`yandex_direct_return_commission_report` выведен из активного PBI-контракта BA6, а
+`PBI_EMPTY_ALLOWED` и `PBI_EMPTY_BY_DESIGN` стали пустыми множествами. Добавлен тест
+`test_pbi_empty_whitelist_is_empty`. Теперь пустота любого активного `bi_*` — FAIL. Если свежая
+среда ещё не прогнала night step14 и `bi_*minus*` пустые, это тоже честный FAIL, а не скрытый
+пропуск.
+
+**Live-cleanup 2026-08-17.** После очистки BA6 PBIP (`powerbi_ba6`) и проверки отсутствия
+зависимых объектов в ClickHouse удалены старые live-вьюхи
+`ad_analytics.yandex_direct_return_commission_report` и
+`ad_analytics.bi_yandex_direct_return_commission_report`. Повторный
+`data_check/verify_big_analytics.py` после дропа — PASS.
+**Статус.** FIXED.
 
 ---
 
@@ -711,21 +729,23 @@ _Прежняя формулировка «гейт непустоту не пр
 
 ---
 
-### 🔴 #42 — минус-фразы в v6 хранят один день вместо тридцати
+### 🟡 #42 — минус-фразы в v6 переведены в night cron, 30-дневная история ещё наполняется
 
-**Суть.** `ad_analytics.yandex_direct_minus_snapshot` = 1 546 строк за 2026-07-31; в v5 —
-32 831 строка за 2026-07-17…2026-08-15. Как следствие `v_yandex_direct_minus_delta` в v6
-бессмысленна: дельта считается между снапшотами, а снапшот один.
+**Суть.** До 2026-08-17 `ad_analytics.yandex_direct_minus_snapshot` хранил один старый день:
+1 546 строк за 2026-07-31; в v5 было 32 831 строка за 2026-07-17…2026-08-15. Как следствие
+`v_yandex_direct_minus_delta` в v6 была бессмысленна: дельта считается между снапшотами, а снапшот
+был один.
 
 **Корень.** step14 лежит в `NIGHTLY_DEFAULT_STEPS` (по умолчанию выключен в дневном прогоне),
 `RETENTION_DAYS = 30` без ежедневных запусков не наполняется.
 
-**Частично снято 2026-08-16:** дневной прогон поставлен в крон Victory (`0 2 * * *` UTC = 07:00 Екб,
-через `cron_run.py`). Но step14 в него по-прежнему не входит — крон гоняет дефолтный набор шагов,
-а `NIGHTLY_DEFAULT_STEPS` из него исключены.
-**Что осталось.** Либо добавить `--include-nightly` в крон-строку, либо завести отдельное
-расписание для `step_cron_night/pipeline_night.py`. Второе честнее: там ещё Метрика, 404 и
-корректировки, которые тоже сейчас не обновляются автоматически.
+**Сделано 2026-08-17.** Завели отдельное расписание для `step_cron_night/pipeline_night.py`:
+`10 18 * * *` UTC = 23:10 Екб, `/tmp/ba6_night.lock`. Проверочный ручной прогон PASS за 14м15с;
+step114 вставил 1 806 строк, total snapshot = 3 352, `failed_logins=0`.
+
+**Что осталось.** 30-дневная история наполнится только после ежедневных прогонов. Поток всё ещё
+наш OAuth-загрузчик; запрос владельцу `raw_data` на минус-фразы остаётся актуален
+(`RAW_DATA_REQUEST.md` §3.1), чтобы в будущем убрать сетевой вызов из БА6.
 **Статус.** 🟡 PARTIAL.
 
 ---

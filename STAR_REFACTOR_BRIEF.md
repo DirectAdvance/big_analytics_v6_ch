@@ -134,7 +134,7 @@ normalize_salons / backfill / corrections — ровно то, что показ
 
 ### `star."Dim_Date"` — PK "Date" — 156 строк / 72 кБ
 `"Date"(date)`, `week_start(date)`, `"День недели"(text)`, `year/month/day(smallint)`,
-`year_month(text 'YYYY-MM')`. → пометить как таблицу дат в PBI.
+`month_key(int YYYYMM)`, `year_month(text: русское название месяца)`. → пометить как таблицу дат в PBI.
 
 ### `star."Dim_Campaign"` — PK CampaignId — 15 937 строк / 10 МБ
 `CampaignId(bigint)`, `CampaignName`, `account_login`, `статус_кампании`, `специалист`,

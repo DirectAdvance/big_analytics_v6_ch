@@ -4,7 +4,7 @@
 
 ---
 
-# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-17
+# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-18
 
 Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
 что живут на v5.** Метод: живая модель
@@ -14,10 +14,10 @@
 
 ## §0.1 Короткий ответ
 
-**Нет, не хватает — на сегодня v6 закрывает 24 таблицы модели из 31.** Ядро отчёта (главная
+**Нет, не финал — но direct-cookie хвост 18.08 закрыт через `bi_*`.** Ядро отчёта (главная
 витрина, звезда, spend-витрины по регионам/форматам/критериям, воронки, корректировки, 404,
 cookie-страницы, поисковые запросы) — есть и по числам сходится с v5 в пределах ±3.5%.
-Не соберутся 7 таблиц и 2 расчётные:
+После перевязки PBIP на `*_star` и direct-cookie `bi_*` остаются такие пробелы:
 
 | # | Таблица модели | Причина |
 |---|---|---|
@@ -25,18 +25,19 @@ cookie-страницы, поисковые запросы) — есть и по
 | 2 | `analytics_report_placement_links` | зависит от `arp_fact` (сам справочник `tp_placement_links` в v6 есть — 7 029 строк) |
 | 3 | `analytics_report_criterion` | `arc_fact` удалён из контракта v6 (`tests/test_pbi_contract_lists.py`) |
 | 4 | `analytics_report_feed` | `arf_fact` удалён из контракта v6 |
-| 5 | `yandex_direct_ads_texts` | нет источника `yandex_direct_ads_texts_master_*` (v5: 5.1 M строк) |
-| 6 | `yandex_direct_type_placement_report_master` | нет источника (v5: 7.5 M строк) |
-| 7 | `yandex_direct_accounts_human_cyborgs` | справочника нет в ClickHouse (v5: 17 строк, схема `victoryads_direct_automation`) |
+| 5 | `yandex_direct_accounts_human_cyborgs` | справочника нет в `raw_data`; PBIP пока читает `raw_new_human_cyborgs` |
 | — | `Dim_Distance` (DAX) | считается из `distance_km_agreg`; в физических `fact_region_*` v6 колонки нет, есть только в `bi_*`-вьюхах |
 | — | `fact_direct_feed_funnel` (по смыслу) | имя занято, но это **не** воронка по фидам — см. §0.3 |
 
-17.08 в `raw_data` появились `direct_cookie_ads_texts_master`,
-`direct_cookie_type_placement_master`, `direct_cookie_feed_urls`. Это будущая замена для
-`yandex_direct_ads_texts` и `yandex_direct_type_placement_report_master`, а также источник
-справочника фидов; переключение делать через `bi_*`-совместимые вьюхи после ночной догрузки и
-контрольной сверки с `raw_new_*`. Старые `raw_new_*` до этого не удалять. Отдельно решить
-маппинг `goals`: в новых таблицах нет раздельных `goal_all_forms` и `goal_crm_order_paid`.
+18.08 `yandex_direct_ads_texts` и `yandex_direct_type_placement_report_master` переведены в PBIP
+на `bi_yandex_direct_ads_texts` и `bi_yandex_direct_type_placement_report_master`. Обе view читают
+новые `raw_data.direct_cookie_*` и агрегируют в ClickHouse то, что раньше группировал Power Query.
+Временные `raw_new_ads_texts_master_pbi`, `raw_new_type_placement_report_master` и
+`raw_new_type_placement_types` больше не читаются активным PBIP. `goal_crm_order_paid` пока
+заполняется нулём: в новых cookie-таблицах есть только общий `goals`.
+
+Оставшиеся прямые `raw_new` в BA6 PBIP на 18.08: `raw_new_arp_fact`,
+`raw_new_search_query_report_master_pbi`, `raw_new_human_cyborgs`.
 
 Пустые `bi_*`-объекты больше не разрешены. `check_utm_fuck_direct` восстановлен из `raw_data`,
 а `yandex_direct_return_commission_report` исключён из активного PBI-контракта BA6 (#40).
@@ -71,12 +72,12 @@ cookie-страницы, поисковые запросы) — есть и по
 | `v_yandex_direct_minus_delta` | `yandex_direct_raw.v_yandex_direct_minus_delta` | 32 831 | `v_yandex_direct_minus_delta` | 1 546 | ⚠️ |
 | `yandex_direct_404_errors` | `yandex_direct_raw.yandex_direct_404_errors` | 11 780 | `yandex_direct_404_errors` | 13 548 | ✅ |
 | `yandex_direct_accounts_human_cyborgs` | `victoryads_direct_automation.…` | 17 | — | — | ❌ |
-| `yandex_direct_ads_texts` | `yandex_direct_raw.…_ads_texts_master_light` | 5 106 097 | `raw_data.direct_cookie_ads_texts_master` | догружается | ⚠️ |
+| `yandex_direct_ads_texts` | `yandex_direct_raw.…_ads_texts_master_light` | 5 106 097 | `bi_yandex_direct_ads_texts` | 53 488 831 | ⚠️ |
 | `yandex_direct_cookie_analytics_website_pages` | `yandex_direct_raw.…` | 1 011 518 | `yandex_direct_cookie_analytics_website_pages` | 965 764 | ✅ |
 | `yandex_direct_korrektirovki` | `yandex_direct_raw.…` | 43 603 | `yandex_direct_korrektirovki` | 190 286 | ✅ |
 | `yandex_direct_minus_snapshot` | `yandex_direct_raw.…` | 32 831 | `yandex_direct_minus_snapshot` | 1 546 | ⚠️ |
 | `yandex_direct_search_query_report_master` | `yandex_direct_raw.…_master_pbi` | 328 658 | `yd_search_query_report_master` | 40 136 496 | ⚠️ |
-| `yandex_direct_type_placement_report_master` | `yandex_direct_raw.…_master_light` | 7 539 230 | `raw_data.direct_cookie_type_placement_master` | догружается | ⚠️ |
+| `yandex_direct_type_placement_report_master` | `yandex_direct_raw.…_master_light` | 7 539 230 | `bi_yandex_direct_type_placement_report_master` | 8 398 376 | ⚠️ |
 
 ## §0.3 Что означает каждая ⚠️
 
@@ -125,12 +126,11 @@ v6 строит историю из `raw_data.direct_campaigns`, а не из в
 **`yandex_direct_cookie_analytics_website_pages`** — 965 764 vs 1 011 518, свежесть до 2026-07-25
 против 2026-08-01 в v5.
 
-**`yandex_direct_ads_texts` / `yandex_direct_type_placement_report_master`** — новые
-`raw_data.direct_cookie_*` источники уже есть и догружаются. Маппинг колонок прямой по
-идентификаторам и рекламным метрикам (`scope_from/to`, `campaign_id`, `adgroup_id`, `banner_id`,
-`shows`, `clicks`, `cost`), но цель в новых данных одна (`goals`), а в старом PBI-контракте их
-две (`goal_all_forms`, `goal_crm_order_paid`). До решения этого маппинга делать только
-совместимые `bi_*`-вьюхи/fallback, не удалять `raw_new_*`.
+**`yandex_direct_ads_texts` / `yandex_direct_type_placement_report_master`** — закрыты через
+совместимые `bi_*` над `raw_data.direct_cookie_ads_texts_master` и
+`raw_data.direct_cookie_type_placement_master`. Группировка перенесена из Power Query в
+ClickHouse. `type_placement_ru` теперь маппится внутри view; `goal_crm_order_paid` остаётся 0,
+потому что новый источник отдаёт только общий `goals`.
 
 ## §0.4 Числовая сверка ядра
 
@@ -149,19 +149,17 @@ v6 строит историю из `raw_data.direct_campaigns`, а не из в
 
 ## §0.5 Что нужно сделать, чтобы отчёты собрались
 
-1. После ночной догрузки сверить `raw_data.direct_cookie_ads_texts_master` и
-   `raw_data.direct_cookie_type_placement_master` с `raw_new_ads_texts_master_pbi` /
-   `raw_new_type_placement_report_master`, затем дать PBI совместимые `bi_*`-вьюхи.
-   `direct_cookie_feed_urls` использовать как справочник фидов, но он не заменяет
-   `analytics_report_placement` сам по себе.
-2. Довести оставшиеся источники: `yandex_direct_report_placement` / `arp_fact`, готовый агрегат
+1. Довести оставшиеся источники: `yandex_direct_report_placement` / `arp_fact`, готовый агрегат
    search-query для PBI, `accounts_human_cyborgs`. Передаточная спецификация —
    [`../../docs/DIRECT_RAW_HANDOVER.md`](../../docs/DIRECT_RAW_HANDOVER.md).
+2. `direct_cookie_feed_urls` использовать как справочник фидов, но он не заменяет
+   `analytics_report_placement` сам по себе.
 3. Пустые `bi_*` больше не разрешены: `check_utm_fuck_direct` должен оставаться непустым, а
    `yandex_direct_return_commission_report` / `bi_yandex_direct_return_commission_report`
    выведены из контракта и удалены из live ClickHouse 2026-08-17.
-4. Дать v6 расписание, иначе step14 (минус-фразы) не накапливает историю.
-5. Перевязать PBI-модель на звезду и на `bi_*`-вьюхи (иначе половина колонок и `Dim_Distance` не найдутся).
+4. Проверить полный Power BI Desktop/Service refresh после перевязки на `*_star` и direct-cookie
+   `bi_*`.
+5. Дать 30-дневной истории step14 наполниться ночным cron; до этого `minus_delta` короткая.
 6. Решить, что делать с `analytics_report_criterion/feed/placement` — восстанавливать или
    объявить unsupported (сейчас они вычеркнуты из контракта тестом `tests/test_pbi_contract_lists.py`).
 7. Держать `PBI_EMPTY_ALLOWED` пустым: любой активный пустой `bi_*` должен падать гейтом (#40).
