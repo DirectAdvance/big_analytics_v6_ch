@@ -12,14 +12,27 @@ Import (`SELECT * FROM ...`) без `WHERE`. Главный выигрыш — �
 3. не импортировать 40M/65M сырых строк, если странице нужен агрегат;
 4. материализовать только те PBI-проекции, где VIEW каждый refresh заново делает дорогие join/cast.
 
+## Обновление 2026-08-18
+
+Сделано после перевязки spend/feed на `*_star`:
+
+- `yandex_direct_ads_texts` и `yandex_direct_type_placement_report_master` в PBIP переведены с
+  `raw_new_*` на `bi_*`;
+- группировка этих двух источников перенесена из Power Query в ClickHouse view, чтобы Power BI не
+  импортировал сырые 65M строк `direct_cookie_ads_texts_master`;
+- `analytics_report_placement` не перевязан на `fact_direct_feed_funnel`: на одинаковом периоде
+  2026-07-01…2026-08-13 суммы не совпадают (`raw_new_arp_fact`: 1.91M строк / 179.6M cost;
+  candidate: 2.53M строк / 315.7M cost). Нужен отдельный совместимый ARP-источник или явное
+  решение менять смысл вкладки.
+
 ## Текущий PBI-контур
 
 `refresh_powerbi._ALL_TABLES` сейчас содержит 25 таблиц. Новый слой `build_pbi_compat.PBI_SOURCE_OBJECTS`
-содержит 42 `bi_*` view, включая добавленные:
+содержит 42 `bi_*` view, включая direct-cookie совместимые view:
 
 | View | Engine | Строк |
 |---|---|---:|
-| `bi_yandex_direct_ads_texts` | View | 65 241 324 |
+| `bi_yandex_direct_ads_texts` | View | агрегат в ClickHouse |
 | `bi_yandex_direct_type_placement_report_master` | View | 8 398 376 |
 
 Эти две view пока не добавлены в `_ALL_TABLES`: это правильно до проверки опубликованной PBI-модели.
@@ -56,17 +69,16 @@ SELECT * FROM ad_analytics.bi_yandex_direct_ads_texts
 
 ### P0. `bi_yandex_direct_ads_texts`
 
-65.2M строк, 18 колонок, источник `raw_data.direct_cookie_ads_texts_master`.
+Источник `raw_data.direct_cookie_ads_texts_master`.
 
-Это слишком много для прямого Import, особенно если в отчёте нужна не каждая строка объявления за
-день, а агрегаты. Индекс не поможет: полный импорт всё равно прочитает все 65.2M строк.
+Сырых строк 65.2M. Индекс не поможет: полный импорт всё равно прочитает все строки. Поэтому
+`bi_yandex_direct_ads_texts` теперь отдаёт уже агрегированный набор в гранулярности PBIP
+`loaded_at/client_login/campaign_id/ad_group_id/ad_type/status/title/text`.
 
 Что поможет:
 
 - не добавлять в `_ALL_TABLES`, пока PBI-модель не доказала, что ей реально нужна эта таблица;
-- если таблица нужна, сделать отдельный PBI-агрегат под фактическую страницу: например
-  `date_from/date_to, client_login, campaign_id, ad_group_id, ad_type, state/status` без текстов
-  объявления, либо держать тексты в `Dim_AdText` по `ad_id`;
+- если refresh всё ещё тяжелый, держать тексты в `Dim_AdText` по `ad_id`;
 - `title`, `text`, `banner_href` вынести в dimension, если они нужны только для детализации.
 
 ### P0. `bi_fact_direct_feed_funnel`

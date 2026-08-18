@@ -1365,24 +1365,20 @@ def _direct_ads_texts_pbi_sql() -> str:
     return """
         SELECT
             loaded_at,
-            scope_from AS date_from,
-            scope_to AS date_to,
             client_login,
-            banner_id AS ad_id,
             campaign_id,
             adgroup_id AS ad_group_id,
             banner_type AS ad_type,
-            banner_status AS state,
             banner_status AS status,
             banner_title AS title,
-            CAST(NULL, 'Nullable(String)') AS title2,
             banner_body AS text,
-            shows AS impressions,
-            clicks,
-            cost,
-            toInt64(round(goals)) AS goal_all_forms,
+            toInt64(sum(shows)) AS impressions,
+            toInt64(sum(clicks)) AS clicks,
+            sum(cost) AS cost,
+            toInt64(round(sum(goals))) AS goal_all_forms,
             toInt64(0) AS goal_crm_order_paid
         FROM raw_data.direct_cookie_ads_texts_master
+        GROUP BY loaded_at, client_login, campaign_id, ad_group_id, ad_type, status, title, text
     """
 
 
@@ -1390,25 +1386,27 @@ def _direct_type_placement_pbi_sql() -> str:
     return """
         SELECT
             toInt64(cityHash64(
-                toString(scope_from),
+                toString(toStartOfMonth(scope_from)),
                 client_login,
                 toString(ifNull(campaign_id, 0)),
                 toString(ifNull(adgroup_id, 0)),
                 position_type
             ) % 9223372036854775807) AS id,
             loaded_at,
-            scope_from AS date,
+            toStartOfMonth(scope_from) AS date,
             client_login,
             campaign_id,
             adgroup_id AS ad_group_id,
             CAST(NULL, 'Nullable(String)') AS ad_network_type,
             position_type AS type_placement,
-            shows AS impressions,
-            clicks,
-            cost,
-            toInt64(round(goals)) AS goal_all_forms,
+            position_type AS type_placement_ru,
+            toInt64(sum(shows)) AS impressions,
+            toInt64(sum(clicks)) AS clicks,
+            sum(cost) AS cost,
+            toInt64(round(sum(goals))) AS goal_all_forms,
             toInt64(0) AS goal_crm_order_paid
         FROM raw_data.direct_cookie_type_placement_master
+        GROUP BY loaded_at, date, client_login, campaign_id, ad_group_id, type_placement, type_placement_ru
     """
 
 
