@@ -254,7 +254,7 @@ def test_direct_cookie_sources_have_pbi_views():
     )
     placement_sql = build_pbi_compat._pbi_view_select_sql("yandex_direct_type_placement_report_master")
     assert "toStartOfMonth(scope_from) AS date" in placement_sql
-    assert "position_type AS type_placement_ru" in placement_sql
+    assert "position_type = 'PRIME_POSITION_TYPE', 'Спецразмещение'" in placement_sql
     assert "GROUP BY loaded_at, date, client_login, campaign_id, ad_group_id, type_placement, type_placement_ru" in placement_sql
 
 
