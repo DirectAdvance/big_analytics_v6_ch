@@ -1,6 +1,7 @@
 import inspect
 
 import pipeline
+import refresh_powerbi
 from data_check import verify_big_analytics
 from star_refactor import build_pbi_compat, build_star, build_star_extensions, cleanup_wide_intermediates
 from direct_feed_funnel import build as direct_feed_build
@@ -163,11 +164,32 @@ def test_direct_feed_pbi_view_joins_dim_site_by_materialized_site_key():
     assert "_site_key_expr(\"f\")" not in sql
 
 
+def test_direct_feed_star_import_keeps_only_keys_and_metrics():
+    sql = build_pbi_compat._feed_funnel_star_sql()
+    dim_sql = build_pbi_compat._dim_placement_feed_pbi_sql()
+
+    assert "FROM ad_analytics.fact_direct_feed_funnel_light f" in sql
+    assert "p.placement_feed_id" in sql
+    assert "site_key" in sql
+    assert "LEFT JOIN placement_feed_ids p ON p.placement_feed_key_hash = f.placement_feed_key_hash" in sql
+    assert "f.placement_feed_key AS placement_feed_key" not in sql
+    assert "coalesce(nullIf(f.domain" not in sql
+    assert "toInt64(0)" not in sql
+    assert "toUInt32(row_number() OVER (ORDER BY placement_feed_key)) AS placement_feed_id" in dim_sql
+    assert "cityHash64(placement_feed_key) AS placement_feed_key_hash" in dim_sql
+    assert "fact_direct_feed_funnel_star" in build_pbi_compat.PBI_SOURCE_OBJECTS
+    assert "fact_direct_feed_funnel_star" in build_pbi_compat.PBI_VIEW_SQL_BUILDERS
+
+
 def test_feed_funnel_import_uses_global_pipeline_batches():
     source = inspect.getsource(build_pbi_compat.build_pbi_import_direct_feed_funnel)
 
     assert "day_ranges(DATE_FROM)" in source
     assert "range_batches(DATE_FROM, days=1)" not in source
+
+
+def test_heavy_direct_ads_texts_is_not_in_selective_powerbi_refresh():
+    assert "yandex_direct_ads_texts" not in refresh_powerbi._ALL_TABLES
 
 
 def test_vk_ads_filters_use_raw_date_sort_key():

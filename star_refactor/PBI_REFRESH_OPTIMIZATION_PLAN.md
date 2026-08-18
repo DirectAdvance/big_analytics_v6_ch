@@ -18,6 +18,8 @@ Implemented in code, to be run only after ClickHouse is healthy:
 
 - `ad_analytics.pbi_import_big_analytics_full` -> `pbi_big_analytics_full` view.
 - `ad_analytics.pbi_import_fact_direct_feed_funnel` -> `arf_fact` and `bi_fact_direct_feed_funnel`.
+- `ad_analytics.pbi_import_fact_direct_feed_funnel_star` -> `bi_fact_direct_feed_funnel_star`
+  for the future star-shaped Power BI model; the current model still reads the compatibility object.
 - `ad_analytics.pbi_import_region_spend` -> `bi_fact_region_spend`.
 - `ad_analytics.pbi_import_fact_direct_feed_funnel` is physical; Direct placement import reads
   the compatibility `fact_direct_feed_funnel` view over `fact_direct_feed_funnel_light`.
@@ -62,14 +64,14 @@ Attributes:
 - `ad_network_type`
 - `AdNetworkType`
 
-Fact should keep only:
+Implemented future-star object:
 
 - `date`
 - `campaign_id`
-- `ad_group_id` / `adgroup_id`
-- `domain`
-- `placement_feed_key`
-- metrics: cost, clicks, impressions, all forms / CRM goals / funnel metrics
+- `adgroup_id`
+- `placement_feed_id`
+- `site_key`
+- metrics: cost, clicks, impressions, all forms / CRM goals
 
 Remove from fact only after PBI remap and aggregate parity:
 

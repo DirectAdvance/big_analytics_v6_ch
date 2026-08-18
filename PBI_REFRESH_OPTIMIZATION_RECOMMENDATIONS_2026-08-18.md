@@ -24,6 +24,17 @@ Import (`SELECT * FROM ...`) без `WHERE`. Главный выигрыш — �
 
 Эти две view пока не добавлены в `_ALL_TABLES`: это правильно до проверки опубликованной PBI-модели.
 
+Дополнительно подготовлен безопасный star-слой для самой тяжёлой вкладки «Фиды»:
+
+| Объект | Строк | Колонок | Диск |
+|---|---:|---:|---:|
+| `pbi_import_fact_direct_feed_funnel` | 13 475 572 | 29 | 144.45 MiB |
+| `pbi_import_fact_direct_feed_funnel_star` | 13 475 572 | 11 | 115.16 MiB |
+
+`bi_fact_direct_feed_funnel_star` не заменяет старый `bi_fact_direct_feed_funnel`: текущая Power BI
+модель продолжает получать совместимый 29-колоночный объект. Новый слой нужен для перевязки модели
+на звезду без риска сломать действующий refresh.
+
 ## Где индексы не помогут
 
 Power BI Import обычно читает таблицу целиком. При таком запросе ClickHouse не может отсечь части
@@ -61,14 +72,14 @@ SELECT * FROM ad_analytics.bi_yandex_direct_ads_texts
 
 Что поможет:
 
-- закончить фазу 3 из `OPTIMIZATION_PLAN.md`: факт оставить числовым, `placement_feed_key` и URL
-  держать в `Dim_PlacementFeed`;
-- убрать из import константные нули и дубли (`goal_all_forms = kol_vo_zayavok`,
-  `goal_crm_order_paid = prodazhi`, CRM-canceled/spam всегда 0);
-- в PBI связать fact по `placement_feed_key_hash`/суррогатному ключу с `Dim_PlacementFeed`.
+- уже создан `bi_fact_direct_feed_funnel_star`: факт оставляет только ключи и метрики;
+- `bi_Dim_PlacementFeed` отдаёт `placement_feed_id`, `placement_feed_key_hash` и текстовые атрибуты;
+- следующий шаг — в Power BI добавить связь
+  `fact_direct_feed_funnel_star.placement_feed_id -> Dim_PlacementFeed.placement_feed_id`, после
+  чего можно заменить старый 29-колоночный import в модели.
 
-Индекс не поможет: текущий `ORDER BY (date, campaign_id, adgroup_id, placement_feed_key, domain)`
-уже нормальный, но refresh читает весь факт.
+Индекс не поможет: текущий `ORDER BY` у обоих физических слоёв date-first, но refresh читает весь
+факт. Выигрыш даёт не индекс, а меньше колонок и вынос строк в dimension.
 
 ### P1. `bi_fact_region_spend`
 
@@ -119,7 +130,6 @@ ORDER BY (date, campaign_id, ad_group_id, ad_network_type_key, id_location)
 
 1. Снять из Power BI Service/Desktop фактические M-запросы и список используемых колонок для самых
    тяжёлых таблиц.
-2. Первым резать `fact_direct_feed_funnel`: это уже описанная фаза 3 и самый понятный переход на
-   звезду.
+2. Первым перевязать Power BI на `bi_fact_direct_feed_funnel_star` + `bi_Dim_PlacementFeed`.
 3. Новые `yandex_direct_ads_texts` не включать в selective refresh до решения: сырые 65M строк или
    отдельный агрегат/звезда по `ad_id`.

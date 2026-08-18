@@ -58,6 +58,7 @@ PBI_SOURCE_OBJECTS = [
     "fact_criterion_spend",
     "fact_criterion_zayavki",
     "fact_direct_feed_funnel",
+    "fact_direct_feed_funnel_star",
     "fact_ml_korrektirovki",
     "fact_region_spend",
     "fact_region_zayavki",
@@ -318,6 +319,23 @@ def build_dim_placement_feed(client) -> int:
     return count_rows(client, "ad_analytics.Dim_PlacementFeed")
 
 
+def _dim_placement_feed_pbi_sql() -> str:
+    return """
+        SELECT
+            toUInt32(row_number() OVER (ORDER BY placement_feed_key)) AS placement_feed_id,
+            placement_feed_key,
+            cityHash64(placement_feed_key) AS placement_feed_key_hash,
+            placement,
+            feed_name,
+            feed_url,
+            feed_key,
+            feed_url_key,
+            ad_network_type,
+            AdNetworkType
+        FROM ad_analytics.Dim_PlacementFeed
+    """
+
+
 def _feed_funnel_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
@@ -356,6 +374,33 @@ def _feed_funnel_pbi_sql(where_sql: str = "") -> str:
     """
 
 
+def _feed_funnel_star_sql(where_sql: str = "") -> str:
+    return f"""
+        WITH placement_feed_ids AS
+        (
+            SELECT
+                cityHash64(placement_feed_key) AS placement_feed_key_hash,
+                toUInt32(row_number() OVER (ORDER BY placement_feed_key)) AS placement_feed_id
+            FROM ad_analytics.Dim_PlacementFeed
+        )
+        SELECT
+            f.date,
+            f.campaign_id,
+            f.ad_group_id AS adgroup_id,
+            p.placement_feed_id,
+            f.site_key,
+            toFloat64(f.cost) AS cost,
+            toFloat64(f.clicks) AS clicks,
+            toFloat64(f.impressions) AS impressions,
+            toFloat64(f.all_forms) AS all_forms,
+            toFloat64(f.crm_order_created) AS crm_order_created,
+            toFloat64(f.crm_order_paid) AS crm_order_paid
+        FROM ad_analytics.fact_direct_feed_funnel_light f
+        LEFT JOIN placement_feed_ids p ON p.placement_feed_key_hash = f.placement_feed_key_hash
+        {where_sql}
+    """
+
+
 def build_pbi_import_direct_feed_funnel(client) -> int:
     shadow = "ad_analytics.pbi_import_fact_direct_feed_funnel_new"
     client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
@@ -386,6 +431,35 @@ def build_pbi_import_direct_feed_funnel(client) -> int:
         log.info("  pbi_import_fact_direct_feed_funnel batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
     swap_shadow(client, "ad_analytics.pbi_import_fact_direct_feed_funnel", shadow)
     return count_rows(client, "ad_analytics.pbi_import_fact_direct_feed_funnel")
+
+
+def build_pbi_import_direct_feed_funnel_star(client) -> int:
+    shadow = "ad_analytics.pbi_import_fact_direct_feed_funnel_star_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        PARTITION BY toYYYYMM(date)
+        ORDER BY (date, campaign_id, adgroup_id, placement_feed_id, site_key)
+        AS
+        {_feed_funnel_star_sql("WHERE 0")}
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    apply_storage_codecs(client, shadow)
+    ranges = day_ranges(DATE_FROM)
+    for idx, (lo, hi) in enumerate(ranges, start=1):
+        client.command(
+            f"""
+            INSERT INTO {shadow}
+            {_feed_funnel_star_sql(f"WHERE f.date >= toDate('{lo}') AND f.date < toDate('{hi}')")}
+            """,
+            settings=SAFE_QUERY_SETTINGS,
+        )
+        log.info("  pbi_import_fact_direct_feed_funnel_star batch %d/%d: %s -> %s", idx, len(ranges), lo, hi)
+    swap_shadow(client, "ad_analytics.pbi_import_fact_direct_feed_funnel_star", shadow)
+    return count_rows(client, "ad_analytics.pbi_import_fact_direct_feed_funnel_star")
 
 
 def _region_spend_pbi_sql(where_sql: str = "") -> str:
@@ -1299,6 +1373,7 @@ def _direct_type_placement_pbi_sql() -> str:
 
 PBI_VIEW_SQL_BUILDERS = {
     "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
+    "fact_direct_feed_funnel_star": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel_star",
     "Dim_Account": _dim_account_pbi_sql,
     "Dim_Date": _dim_date_pbi_sql,
     "Dim_AdFormat": _dim_ad_format_pbi_sql,
@@ -1311,6 +1386,7 @@ PBI_VIEW_SQL_BUILDERS = {
     "Dim_Source": _dim_source_pbi_sql,
     "Dim_Campaign": _dim_campaign_pbi_sql,
     "Dim_AdGroup": _dim_adgroup_pbi_sql,
+    "Dim_PlacementFeed": _dim_placement_feed_pbi_sql,
     "Dim_Site": _dim_site_pbi_sql,
     "fact_region_spend": _region_spend_pbi_sql,
     "fact_adformat_spend": _adformat_spend_pbi_sql,
@@ -1357,6 +1433,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         "pixel_score": build_pixel_score(client),
         "Dim_PlacementFeed": build_dim_placement_feed(client),
         "pbi_import_fact_direct_feed_funnel": build_pbi_import_direct_feed_funnel(client),
+        "pbi_import_fact_direct_feed_funnel_star": build_pbi_import_direct_feed_funnel_star(client),
         "pbi_import_region_spend": build_pbi_import_region_spend(client),
         "Dim_Criterion": build_dim_criterion(client),
     }
