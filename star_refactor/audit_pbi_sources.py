@@ -79,9 +79,10 @@ def _read_refresh_tables() -> list[str]:
 
 
 def _candidate_names(pbi_name: str) -> list[str]:
-    names = [pbi_name]
+    names = []
     names.extend(PBI_NAME_ALIASES.get(pbi_name, []))
     names.append(f"bi_{pbi_name}")
+    names.append(pbi_name)
     return list(dict.fromkeys(names))
 
 
@@ -158,7 +159,7 @@ def _fmt_bytes(value: int | None) -> str:
 
 
 def _view_source(create_query: str) -> str:
-    m = re.search(r"FROM\\s+ad_analytics\\.(`?)([A-Za-z0-9_]+)\\1", create_query, flags=re.IGNORECASE)
+    m = re.search(r"FROM\s+ad_analytics\.(`?)([A-Za-z0-9_]+)\1", create_query, flags=re.IGNORECASE)
     return m.group(2) if m else ""
 
 
@@ -168,7 +169,9 @@ def _recommendation(meta: ObjectMeta) -> str:
         if source.startswith("pbi_import_"):
             return "OK: view over physical import"
         if source:
-            return f"materialize view source: {source}"
+            if meta.columns >= 30 or meta.attr_columns >= 5:
+                return f"star/materialize candidate: source {source}"
+            return f"OK: projection view over {source}"
         return "review: complex view may recalc on refresh"
     if (meta.rows or 0) >= 1_000_000 and meta.attr_columns >= 5:
         return "star candidate: move text attrs to Dim_*"

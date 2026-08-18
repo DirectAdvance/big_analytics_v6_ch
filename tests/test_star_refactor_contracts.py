@@ -3,7 +3,7 @@ import inspect
 import pipeline
 import refresh_powerbi
 from data_check import verify_big_analytics
-from star_refactor import build_pbi_compat, build_star, build_star_extensions, cleanup_wide_intermediates
+from star_refactor import audit_pbi_sources, build_pbi_compat, build_star, build_star_extensions, cleanup_wide_intermediates
 from direct_feed_funnel import build as direct_feed_build
 from step10_crop_targeting import step10
 
@@ -213,6 +213,18 @@ def test_feed_funnel_import_uses_global_pipeline_batches():
 
 def test_heavy_direct_ads_texts_is_not_in_selective_powerbi_refresh():
     assert "yandex_direct_ads_texts" not in refresh_powerbi._ALL_TABLES
+
+
+def test_pbi_audit_prefers_bi_contract_before_physical_object():
+    candidates = audit_pbi_sources._candidate_names("fact_region_spend")
+
+    assert candidates.index("bi_fact_region_spend") < candidates.index("fact_region_spend")
+
+
+def test_pbi_audit_extracts_view_source():
+    create_query = "CREATE VIEW ad_analytics.bi_x AS SELECT * FROM ad_analytics.pbi_import_x"
+
+    assert audit_pbi_sources._view_source(create_query) == "pbi_import_x"
 
 
 def test_vk_ads_filters_use_raw_date_sort_key():
