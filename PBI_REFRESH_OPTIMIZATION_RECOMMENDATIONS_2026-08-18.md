@@ -15,7 +15,7 @@ Import (`SELECT * FROM ...`) без `WHERE`. Главный выигрыш — �
 ## Текущий PBI-контур
 
 `refresh_powerbi._ALL_TABLES` сейчас содержит 25 таблиц. Новый слой `build_pbi_compat.PBI_SOURCE_OBJECTS`
-содержит 39 `bi_*` view, включая добавленные:
+содержит 42 `bi_*` view, включая добавленные:
 
 | View | Engine | Строк |
 |---|---|---:|
@@ -24,16 +24,19 @@ Import (`SELECT * FROM ...`) без `WHERE`. Главный выигрыш — �
 
 Эти две view пока не добавлены в `_ALL_TABLES`: это правильно до проверки опубликованной PBI-модели.
 
-Дополнительно подготовлен безопасный star-слой для самой тяжёлой вкладки «Фиды»:
+Дополнительно подготовлены безопасные future-star слои для тяжёлых вкладок. Они не заменяют старые
+`bi_*`: текущая Power BI модель продолжает получать совместимые объекты, а новые view/table нужны
+для перевязки модели на звезду без риска сломать действующий refresh.
 
 | Объект | Строк | Колонок | Диск |
 |---|---:|---:|---:|
 | `pbi_import_fact_direct_feed_funnel` | 13 475 572 | 29 | 144.45 MiB |
 | `pbi_import_fact_direct_feed_funnel_star` | 13 475 572 | 11 | 115.16 MiB |
+| `bi_fact_region_spend_star` | 14 384 620 | 14 | view |
+| `bi_fact_criterion_spend_star` | 5 042 536 | 9 | view |
 
-`bi_fact_direct_feed_funnel_star` не заменяет старый `bi_fact_direct_feed_funnel`: текущая Power BI
-модель продолжает получать совместимый 29-колоночный объект. Новый слой нужен для перевязки модели
-на звезду без риска сломать действующий refresh.
+`region` и `criterion` оставлены view, а не физическими таблицами: это простые проекции без join и
+агрегаций, поэтому материализация только увеличила бы диск ClickHouse.
 
 ## Где индексы не помогут
 
@@ -93,9 +96,10 @@ ORDER BY (date, campaign_id, ad_group_id, ad_network_type_key, id_location)
 
 Что поможет:
 
-- не индекс, а убрать из import всё, что восстанавливается из `Dim_Location`/`Dim_Site`;
-- проверить DAX/визуалы на фактическое использование `domain`, `updated_at`, `distance_km`;
-- если они не нужны, сделать более узкую `bi_fact_region_spend_light`.
+- уже создан `bi_fact_region_spend_star`: без `domain`, `updated_at`, `distance_km`, с
+  `id_location` и `site_key`;
+- в Power BI связать `id_location -> Dim_Location.id_location` и `site_key -> Dim_Site.site_key`;
+- после перевязки заменить старый 17-колоночный import.
 
 ### P1. `bi_fact_criterion_spend`
 
@@ -104,9 +108,10 @@ ORDER BY (date, campaign_id, ad_group_id, ad_network_type_key, id_location)
 
 Что поможет:
 
-- PBI должен читать `criterion_key` + `Dim_Criterion`, а не тянуть строковый `criterion` в каждый
-  ряд факта;
-- убрать нулевые funnel-колонки из import после проверки DAX.
+- уже создан `bi_fact_criterion_spend_star`: 9 колонок, без строкового `criterion`, `domain`,
+  `updated_at` и нулевых funnel-колонок;
+- в Power BI связать `criterion_key -> Dim_Criterion.criterion_key` и `site_key -> Dim_Site.site_key`;
+- после перевязки заменить старый 22-колоночный import.
 
 ### P2. `bi_pbi_big_analytics_full`
 
@@ -131,5 +136,6 @@ ORDER BY (date, campaign_id, ad_group_id, ad_network_type_key, id_location)
 1. Снять из Power BI Service/Desktop фактические M-запросы и список используемых колонок для самых
    тяжёлых таблиц.
 2. Первым перевязать Power BI на `bi_fact_direct_feed_funnel_star` + `bi_Dim_PlacementFeed`.
-3. Новые `yandex_direct_ads_texts` не включать в selective refresh до решения: сырые 65M строк или
+3. Следом перевязать `region` и `criterion` на `*_star` views + dimensions.
+4. Новые `yandex_direct_ads_texts` не включать в selective refresh до решения: сырые 65M строк или
    отдельный агрегат/звезда по `ad_id`.

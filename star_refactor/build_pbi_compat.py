@@ -56,11 +56,13 @@ PBI_SOURCE_OBJECTS = [
     "yandex_direct_history",
     "fact_adformat_spend",
     "fact_criterion_spend",
+    "fact_criterion_spend_star",
     "fact_criterion_zayavki",
     "fact_direct_feed_funnel",
     "fact_direct_feed_funnel_star",
     "fact_ml_korrektirovki",
     "fact_region_spend",
+    "fact_region_spend_star",
     "fact_region_zayavki",
     "fact_vk_ads",
     "pixel_score",
@@ -489,6 +491,28 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
     """
 
 
+def _region_spend_star_pbi_sql(where_sql: str = "") -> str:
+    return f"""
+        SELECT
+            f.date,
+            f.campaign_id,
+            f.ad_group_id,
+            f.ad_network_type_key,
+            f.id_location,
+            f.site_key,
+            toFloat64(f.cost) AS cost,
+            toFloat64(f.clicks) AS clicks,
+            toFloat64(f.impressions) AS impressions,
+            toFloat64(f.all_forms) AS all_forms,
+            toFloat64(f.crm_order_created) AS crm_order_created,
+            toFloat64(f.crm_order_paid) AS crm_order_paid,
+            toFloat64(f.crm_spam_order) AS crm_spam_order,
+            toFloat64(f.crm_order_canceled) AS crm_order_canceled
+        FROM ad_analytics.fact_region_spend f
+        {where_sql}
+    """
+
+
 def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
     return f"""
         SELECT
@@ -541,6 +565,23 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
         FROM ad_analytics.fact_criterion_spend f
         LEFT JOIN ad_analytics.Dim_Criterion dcr ON dcr.criterion_key = f.criterion_key
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
+        {where_sql}
+    """
+
+
+def _criterion_spend_star_pbi_sql(where_sql: str = "") -> str:
+    return f"""
+        SELECT
+            f.date,
+            f.campaign_id,
+            f.ad_group_id,
+            f.ad_network_type_key,
+            f.criterion_key,
+            f.site_key,
+            toFloat64(f.cost) AS cost,
+            toFloat64(f.clicks) AS clicks,
+            toFloat64(f.impressions) AS impressions
+        FROM ad_analytics.fact_criterion_spend f
         {where_sql}
     """
 
@@ -1389,8 +1430,10 @@ PBI_VIEW_SQL_BUILDERS = {
     "Dim_PlacementFeed": _dim_placement_feed_pbi_sql,
     "Dim_Site": _dim_site_pbi_sql,
     "fact_region_spend": _region_spend_pbi_sql,
+    "fact_region_spend_star": _region_spend_star_pbi_sql,
     "fact_adformat_spend": _adformat_spend_pbi_sql,
     "fact_criterion_spend": _criterion_spend_pbi_sql,
+    "fact_criterion_spend_star": _criterion_spend_star_pbi_sql,
     "fact_region_zayavki": _region_zayavki_pbi_sql,
     "fact_vk_ads": _vk_ads_pbi_sql,
     "fact_criterion_zayavki": _criterion_zayavki_pbi_sql,

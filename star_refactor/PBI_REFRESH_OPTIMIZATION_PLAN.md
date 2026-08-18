@@ -21,6 +21,8 @@ Implemented in code, to be run only after ClickHouse is healthy:
 - `ad_analytics.pbi_import_fact_direct_feed_funnel_star` -> `bi_fact_direct_feed_funnel_star`
   for the future star-shaped Power BI model; the current model still reads the compatibility object.
 - `ad_analytics.pbi_import_region_spend` -> `bi_fact_region_spend`.
+- `ad_analytics.bi_fact_region_spend_star` and `ad_analytics.bi_fact_criterion_spend_star`
+  are future-star views, not tables: they are simple projections without joins.
 - `ad_analytics.pbi_import_fact_direct_feed_funnel` is physical; Direct placement import reads
   the compatibility `fact_direct_feed_funnel` view over `fact_direct_feed_funnel_light`.
 
@@ -118,6 +120,12 @@ Remove from fact only after PBI remap and aggregate parity:
 - `шаблон`
 - `статус`
 
+Future-star view implemented:
+
+- `bi_fact_region_spend_star`
+- keeps `date`, campaign/adgroup/ad-network keys, `id_location`, `site_key`, and metrics;
+- removes `domain`, `updated_at`, `distance_km`; PBI should read them from dimensions.
+
 ### Criterion
 
 Use `dim_criterion` for:
@@ -135,6 +143,12 @@ Fact should keep only:
 - metrics
 
 Remove descriptive criterion text from large spend facts only after model remap.
+
+Future-star view implemented:
+
+- `bi_fact_criterion_spend_star`
+- keeps `date`, campaign/adgroup/ad-network keys, `criterion_key`, `site_key`, and spend metrics;
+- removes text `criterion`, `domain`, `updated_at`, and zero funnel compatibility columns.
 
 ### Common dimensions
 

@@ -75,8 +75,9 @@
    `fact_direct_feed_funnel_light`). Рядом есть облегчённый future-star слой
    `pbi_import_fact_direct_feed_funnel_star` (13.4 млн строк, 11 колонок, 115 МиБ) для перевязки
    Power BI на `Dim_PlacementFeed` по `placement_feed_id`; текущая модель пока читает старый
-   compatibility-объект. Материализация обязана быть помечена замером, который её оправдал, иначе
-   она неотличима от случайной копии.
+   compatibility-объект. `bi_fact_region_spend_star` и `bi_fact_criterion_spend_star` сделаны
+   view, потому что это простые проекции без join. Материализация обязана быть помечена замером,
+   который её оправдал, иначе она неотличима от случайной копии.
 4. **Больше двух этажей вьюх — запрещено.** Цепочка
    `bi_pbi_big_analytics_full` → `pbi_big_analytics_full` → `pbi_import_big_analytics_full` →
    `fact_big_analytics` — три этажа на одну сущность, и параллельно существует независимая

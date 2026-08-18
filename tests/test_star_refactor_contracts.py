@@ -181,6 +181,29 @@ def test_direct_feed_star_import_keeps_only_keys_and_metrics():
     assert "fact_direct_feed_funnel_star" in build_pbi_compat.PBI_VIEW_SQL_BUILDERS
 
 
+def test_region_and_criterion_star_views_keep_only_keys_and_metrics():
+    region_sql = build_pbi_compat._region_spend_star_pbi_sql()
+    criterion_sql = build_pbi_compat._criterion_spend_star_pbi_sql()
+
+    assert "FROM ad_analytics.fact_region_spend f" in region_sql
+    assert "FROM ad_analytics.fact_criterion_spend f" in criterion_sql
+    assert "f.site_key" in region_sql
+    assert "f.site_key" in criterion_sql
+    assert "f.id_location" in region_sql
+    assert "f.criterion_key" in criterion_sql
+    for sql in [region_sql, criterion_sql]:
+        assert "JOIN" not in sql
+        assert "domain" not in sql
+        assert "updated_at" not in sql
+        assert "toInt64(0)" not in sql
+    assert "Dim_Criterion" not in criterion_sql
+    assert " AS criterion" not in criterion_sql
+    assert "ifNull(dcr.criterion" not in criterion_sql
+    for name in ["fact_region_spend_star", "fact_criterion_spend_star"]:
+        assert name in build_pbi_compat.PBI_SOURCE_OBJECTS
+        assert name in build_pbi_compat.PBI_VIEW_SQL_BUILDERS
+
+
 def test_feed_funnel_import_uses_global_pipeline_batches():
     source = inspect.getsource(build_pbi_compat.build_pbi_import_direct_feed_funnel)
 
