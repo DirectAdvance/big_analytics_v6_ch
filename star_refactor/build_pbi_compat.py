@@ -68,6 +68,8 @@ PBI_SOURCE_OBJECTS = [
     "yandex_direct_cookie_analytics_website_pages",
     "yandex_direct_korrektirovki",
     "yandex_direct_minus_snapshot",
+    "yandex_direct_ads_texts",
+    "yandex_direct_type_placement_report_master",
     # PLACEMENT_LINKS_BI_2026-08-17. Модель PBI читала ручную копию БА5
     # `raw_new_tp_placement_links` (снимок от 16.08, сам не обновляется) — из-за этого фикс
     # двойной кодировки площадок в отчёт не доезжал. Отчёт переведён на этот bi-слой над живой
@@ -1244,6 +1246,57 @@ def _cookie_pages_pbi_sql() -> str:
     """
 
 
+def _direct_ads_texts_pbi_sql() -> str:
+    return """
+        SELECT
+            loaded_at,
+            scope_from AS date_from,
+            scope_to AS date_to,
+            client_login,
+            banner_id AS ad_id,
+            campaign_id,
+            adgroup_id AS ad_group_id,
+            banner_type AS ad_type,
+            banner_status AS state,
+            banner_status AS status,
+            banner_title AS title,
+            CAST(NULL, 'Nullable(String)') AS title2,
+            banner_body AS text,
+            shows AS impressions,
+            clicks,
+            cost,
+            toInt64(round(goals)) AS goal_all_forms,
+            toInt64(0) AS goal_crm_order_paid
+        FROM raw_data.direct_cookie_ads_texts_master
+    """
+
+
+def _direct_type_placement_pbi_sql() -> str:
+    return """
+        SELECT
+            toInt64(cityHash64(
+                toString(scope_from),
+                client_login,
+                toString(ifNull(campaign_id, 0)),
+                toString(ifNull(adgroup_id, 0)),
+                position_type
+            ) % 9223372036854775807) AS id,
+            loaded_at,
+            scope_from AS date,
+            client_login,
+            campaign_id,
+            adgroup_id AS ad_group_id,
+            CAST(NULL, 'Nullable(String)') AS ad_network_type,
+            position_type AS type_placement,
+            shows AS impressions,
+            clicks,
+            cost,
+            toInt64(round(goals)) AS goal_all_forms,
+            toInt64(0) AS goal_crm_order_paid
+        FROM raw_data.direct_cookie_type_placement_master
+    """
+
+
 PBI_VIEW_SQL_BUILDERS = {
     "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
     "Dim_Account": _dim_account_pbi_sql,
@@ -1272,6 +1325,8 @@ PBI_VIEW_SQL_BUILDERS = {
     "yandex_direct_history": _direct_history_pbi_sql,
     "pixel_score": _pixel_score_pbi_sql,
     "yandex_direct_cookie_analytics_website_pages": _cookie_pages_pbi_sql,
+    "yandex_direct_ads_texts": _direct_ads_texts_pbi_sql,
+    "yandex_direct_type_placement_report_master": _direct_type_placement_pbi_sql,
 }
 
 

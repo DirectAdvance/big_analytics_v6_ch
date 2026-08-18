@@ -1208,7 +1208,7 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(NULL, 'LowCardinality(Nullable(String))') AS `тип_сайта`,
             CAST(NULL, 'LowCardinality(Nullable(String))') AS `специалист`
         FROM raw_data.vk_ads_stats_day s
-        WHERE toDateOrNull(s.date) >= toDate('{DATE_FROM}')
+        WHERE s.date >= '{DATE_FROM}'
           {stats_where_sql}
           AND (ifNull(s.shows, 0) != 0 OR ifNull(s.clicks, 0) != 0 OR ifNull(s.spent, 0) != 0)
           -- VK_AUTO_ACCOUNT_SCOPE_2026-08-05: рекламная сторона — только свои Авто-аккаунты.
@@ -1290,7 +1290,7 @@ def build_vk_ads_fact(client) -> int:
             INSERT INTO {shadow}
             {_vk_ads_sql(
                 metrics,
-                f"AND toDateOrNull(s.date) >= toDate('{lo}') AND toDateOrNull(s.date) < toDate('{hi}')",
+                f"AND s.date >= '{lo}' AND s.date < '{hi}'",
                 (
                     f"AND ((created_date >= toDate('{lo}') AND created_date < toDate('{hi}')) "
                     f"OR (arrival_date >= toDate('{lo}') AND arrival_date < toDate('{hi}')))"

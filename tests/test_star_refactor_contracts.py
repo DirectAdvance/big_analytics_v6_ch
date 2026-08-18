@@ -4,6 +4,7 @@ import pipeline
 from data_check import verify_big_analytics
 from star_refactor import build_pbi_compat, build_star, build_star_extensions, cleanup_wide_intermediates
 from direct_feed_funnel import build as direct_feed_build
+from step10_crop_targeting import step10
 
 
 def test_build_fact_materializes_site_key():
@@ -167,6 +168,30 @@ def test_feed_funnel_import_uses_global_pipeline_batches():
 
     assert "day_ranges(DATE_FROM)" in source
     assert "range_batches(DATE_FROM, days=1)" not in source
+
+
+def test_vk_ads_filters_use_raw_date_sort_key():
+    star_source = inspect.getsource(build_star.build_vk_ads_fact)
+    step10_source = inspect.getsource(step10._insert_vk_ads_costs)
+
+    assert "toDateOrNull(s.date) >=" not in star_source
+    assert "s.date >= " in star_source
+    assert "WHERE toDateOrNull(date)" not in step10_source
+    assert "WHERE date >=" in step10_source
+
+
+def test_direct_cookie_sources_have_pbi_views():
+    expected = {
+        "yandex_direct_ads_texts",
+        "yandex_direct_type_placement_report_master",
+    }
+
+    assert expected <= set(build_pbi_compat.PBI_SOURCE_OBJECTS)
+    assert expected <= set(build_pbi_compat.PBI_VIEW_SQL_BUILDERS)
+    assert "raw_data.direct_cookie_ads_texts_master" in build_pbi_compat._pbi_view_select_sql("yandex_direct_ads_texts")
+    assert "raw_data.direct_cookie_type_placement_master" in build_pbi_compat._pbi_view_select_sql(
+        "yandex_direct_type_placement_report_master"
+    )
 
 
 def test_pbi_full_restores_duplicate_text_attrs_from_new_dimensions():

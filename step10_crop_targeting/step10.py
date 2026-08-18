@@ -869,7 +869,7 @@ def _insert_vk_ads_costs(client, target: str) -> None:
                     ad_plan_name,
                     ifNull(spent, 0) AS spent
                 FROM raw_data.vk_ads_stats_day
-                WHERE toDateOrNull(date) >= toDate('{DATE_FROM}')
+                WHERE date >= '{DATE_FROM}'
                   AND ifNull(spent, 0) != 0
                   AND account_id IN ({VK_AUTO_ACCOUNTS_SQL})
             )
