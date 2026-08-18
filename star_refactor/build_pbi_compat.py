@@ -1169,9 +1169,9 @@ def _dim_adgroup_pbi_sql() -> str:
 def _dim_site_pbi_sql() -> str:
     return """
         SELECT
-            domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`, `направление`,
-            `статус`, status, `специалист`, `проджект`, project_manager, `id_салона`,
-            `менеджер`, `Название crm`
+            site_key, domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`,
+            `направление`, `статус`, status, `специалист`, `проджект`, project_manager,
+            `id_салона`, `менеджер`, `Название crm`
         FROM ad_analytics.Dim_Site
     """
 
@@ -1204,7 +1204,7 @@ def _vk_ads_pbi_sql() -> str:
 
 def _dim_criterion_pbi_sql() -> str:
     return """
-        SELECT criterion, criterion_type, criterion_raw
+        SELECT criterion_key, criterion, criterion_type, criterion_raw
         FROM ad_analytics.Dim_Criterion
     """
 
