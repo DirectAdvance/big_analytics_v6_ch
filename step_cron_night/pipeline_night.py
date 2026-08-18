@@ -18,7 +18,8 @@ sys.path.insert(0, str(BASE_DIR))
 from config.ch_db import get_client  # noqa: E402
 from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS  # noqa: E402
 from notifications.telegram import build_pipeline_error_message, render_html, send_html  # noqa: E402
-from pipeline import ensure_quality_log, log_step  # noqa: E402
+from pipeline import BA6_PIPELINE_LOCK_PATH, ensure_quality_log, log_step  # noqa: E402
+import pipeline_mutex  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -128,6 +129,15 @@ def main(argv: list[str] | None = None) -> int:
     steps = _selected_steps(args.only_step)
     if not steps:
         raise SystemExit(f"Night step not found: {args.only_step}")
+
+    try:
+        _lock_fd = pipeline_mutex.acquire("ba6_night", lock_path=BA6_PIPELINE_LOCK_PATH)
+    except pipeline_mutex.PipelineBusy as busy:
+        text = f"🌙 <b>big_analytics_v6 night</b> пропущен\nАктивен другой BA6 pipeline: <code>{busy}</code>"
+        logger.warning("BA6 night skipped: pipeline lock busy (%s)", busy)
+        if not args.no_tg:
+            _send_tg(text)
+        return 0
 
     run_id = uuid.uuid4().hex[:12]
     started = datetime.now()

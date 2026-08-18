@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config.ch_db import get_client
+import pipeline_mutex
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +24,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("pipeline")
+
+BA6_PIPELINE_LOCK_PATH = os.environ.get("BA6_PIPELINE_LOCK_PATH", "/tmp/ba6_pipeline.lock")
+BUSY_EXIT_CODE = 75
 
 STEPS = [
     (0, "step0_sync_local.step0", "step0"),
@@ -203,6 +207,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Disable safe background steps such as Direct minus snapshot.",
     )
     args = parser.parse_args(argv)
+
+    try:
+        _lock_fd = pipeline_mutex.acquire("ba6_pipeline", lock_path=BA6_PIPELINE_LOCK_PATH)
+    except pipeline_mutex.PipelineBusy as busy:
+        logger.warning("BA6 pipeline lock busy (%s) — выходим без старта", busy)
+        return BUSY_EXIT_CODE
 
     run_id = uuid.uuid4().hex[:12]
     client = get_client()
