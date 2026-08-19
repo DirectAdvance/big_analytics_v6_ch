@@ -4,7 +4,7 @@
 
 ---
 
-# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-18
+# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-18, обновлено 2026-08-19
 
 Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
 что живут на v5.** Метод: живая модель
@@ -38,6 +38,14 @@ cookie-страницы, поисковые запросы) — есть и по
 
 Оставшиеся прямые `raw_new` в BA6 PBIP на 18.08: `raw_new_arp_fact`,
 `raw_new_search_query_report_master_pbi`, `raw_new_human_cyborgs`.
+
+19.08 локальный код PBI hidden keys переведён: `bi_fact_criterion_spend_star`,
+`bi_Dim_Criterion` / `bi_dim_criterion`, `bi_Dim_Site`, `bi_fact_region_spend_star` и
+`bi_fact_direct_feed_funnel_star` отдают `criterion_key` / `site_key` как signed-safe `Int64`
+через `reinterpretAsInt64(UInt64)`, без modulo-коллизий. До деплоя и пересоздания live `bi_*`
+Victory продолжает работать по уже развернутым view. Старый вариант через
+`% 9223372036854775807` давал дубль `criterion_key=3943490909` в `dim_criterion` на стороне
+Power BI.
 
 Пустые `bi_*`-объекты больше не разрешены. `check_utm_fuck_direct` восстановлен из `raw_data`,
 а `yandex_direct_return_commission_report` исключён из активного PBI-контракта BA6 (#40).
@@ -115,9 +123,10 @@ all_forms/crm_order_*`, **воронки нет вообще**). Причина 
 v6 строит историю из `raw_data.direct_campaigns`, а не из внутреннего API Директа.
 
 **`yandex_direct_minus_snapshot` / `v_yandex_direct_minus_delta`** — 1 546 строк за **один день**
-(2026-07-31) против 32 831 за 2026-07-17…2026-08-15 в v5. Причина: step14 в v6 в
-`NIGHTLY_DEFAULT_STEPS` (по умолчанию выключен), крона для v6 нет, `RETENTION_DAYS=30` не работает
-без ежедневных запусков. Дельта минус-фраз в v6 бессмысленна, пока не появится расписание.
+(2026-07-31) против 32 831 за 2026-07-17…2026-08-15 в v5. Step14 в дневном `pipeline.py`
+остаётся в `NIGHTLY_DEFAULT_STEPS`, но с 2026-08-17 выполняется ночным cron
+`10 18 * * *` UTC = 23:10 Екб. Дельта минус-фраз станет полноценной после наполнения
+30-дневной истории.
 
 **`yandex_direct_search_query_report_master`** — в v6 лежит сырьё (40 M строк, 2026-01-01…2026-08-03),
 в v5 в PBI шёл готовый агрегат `…_master_pbi` (328 658). Данные есть, но объект в PBI-контракт v6 не

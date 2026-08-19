@@ -1,7 +1,8 @@
 # big_analytics_v6_ch — ClickHouse-пайплайн аналитики
 
-`big_analytics_v6_ch` — локальный Mac-контур миграции `big_analytics_v5` на ClickHouse.
-Он запускается вручную из этого репозитория и пишет в Yandex Cloud ClickHouse:
+`big_analytics_v6_ch` — ClickHouse-контур миграции `big_analytics_v5`.
+Локально его можно запускать из этого репозитория; рабочий дневной контур стоит в cron на Victory
+через `~/venv-v6/bin/python3 ~/big_analytics_v6_ch/cron_run.py` и пишет в Yandex Cloud ClickHouse:
 `raw_data` — сырьё, `ad_analytics` — рабочие таблицы и витрины. Victory
 `~/big_analytics_v5/` — это отдельный production-контур v5 на PostgreSQL; команды v5
 не являются командами запуска v6.
@@ -76,7 +77,7 @@
 
 > ⚠️ **UTM-аудит** (`check_utm` / `check_utm_fuck_direct`) — это НЕ дневной шаг 5.
 > Он уехал в `step_cron_night/step13_utm_direct_audit/` и запускается ночным
-> пайплайном (cron 03:00 МСК). Подробности — [`PIPELINES.md`](PIPELINES.md).
+> пайплайном (`10 18 * * *` UTC = 23:10 Екб). Подробности — [`PIPELINES.md`](PIPELINES.md).
 
 ---
 
@@ -102,11 +103,9 @@ UNION ALL всех источников → `big_analytics_full`.
 ---
 
 **Шаг 9 — История изменений Директа** (`step9_direct_history`)
-Двухфазная работа:
-- **Фаза A (фон, с шага 0)** — инкрементально загружает историю изменений по активным
-  логинам (status='Контекст активно') через внутренний API direct.yandex.ru.
-- **Фаза B (шаг 9)** — ждёт завершения фазы A, обогащает `direct_history` данными
-  директолога, домена, салона из `local_gsheet_sites`.
+В v6 это ClickHouse snapshot-view, а не старый GraphQL-журнал. `prefetch_history()` — no-op для
+совместимости; `run()` строит `ad_analytics.yandex_direct_history` из `raw_data.direct_campaigns`
+и обогащает `директолог` / `domain` / `salon` через `raw_data.gsheet_sites`.
 
 ---
 

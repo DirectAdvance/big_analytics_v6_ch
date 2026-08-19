@@ -79,7 +79,7 @@ verify PASS/нет, golden Кудерко; при падении — номер 
 | 10 | `step10_crop_targeting.step10` | `step10` | Посевы Telega/VK/MAX и связанные локальные CH-таблицы. |
 | 11 | `step11_pixel_score.step11` | `step11` | Pixel score + прямая доливка пикселя. Канон: `_source_table='pixel'` / `источник='Пиксель'`; отдельная ветка `Пиксель_атрибуц` выведена из контракта. |
 | 115 | `spec_fallback` | `spec_fallback` | Каскад `специалист` по домену без окна дат после step10/step11. |
-| 12 | `step12_proverka_big_analytics.step12` | `step12` | Проверка CRM-маппингов. |
+| 12 | `step12_proverka_big_analytics.step12` | `step12` | ClickHouse quality gate: full/source existence, dates, source, funnel nesting, direct/crop disjoint. |
 | 13 | `step13_arrival.step13` | `step13` | Воронка по дате визита → `big_analytics_full_arrival`. |
 | 131 | `step13_arrival.build_unified` | `build_unified` | UNION заявочной и визитной осей → `big_analytics_unified`. |
 | 139 | `direct_placement_links.build` | `direct_placement_links` | Справочник placement links для Direct/посевных разрезов. |
@@ -125,13 +125,15 @@ PostgreSQL за `yandex_direct_raw.yandex_direct_reports_reviews` + `yandex_dire
 Даёт `_source_table='direct_account_reviews'` — 4 996 строк / 1 041 642.40 ₽, совпадает с v5.
 
 ⚠️ **Не портированы вообще (нет источника в `raw_data`), из-за чего в v6 не собираются
-соответствующие страницы Power BI:** `report_placement` (`analytics_report_placement`),
-`sync_direct_ads_texts_master`, `sync_direct_type_placement_report_master`, фид-воронка
-(`yandex_direct_feeds_report` / `yandex_direct_feed_urls`). Список и последствия —
+соответствующие страницы Power BI:** `report_placement` (`analytics_report_placement`) и
+фид-воронка (`yandex_direct_feeds_report`). Direct-cookie `ads_texts` и `type_placement` закрыты
+через `raw_data.direct_cookie_*` → `bi_*`; `direct_cookie_feed_urls` есть как справочник, но не
+заменяет ARP/feed-факт сам по себе. Список и последствия —
 [`PBI_TABLES.md`](PBI_TABLES.md) §0.
 
-⚠️ **Ночного крона у v6 нет.** Ночной пайплайн и step14 запускаются только руками, поэтому
-`yandex_direct_minus_snapshot` держит один день вместо `RETENTION_DAYS=30`.
+⚠️ **Ночной cron у v6 есть с 2026-08-17:** `10 18 * * *` UTC = 23:10 Екб,
+`/tmp/ba6_night.lock`. `yandex_direct_minus_snapshot` ещё короткий, пока 30-дневная история
+наполняется ежедневными ночными прогонами.
 
 ## Проверки после прогона
 

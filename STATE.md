@@ -87,6 +87,11 @@ BA6 PBIP `powerbi_ba6` запушен коммитом `2569252`: `yandex_direct
 `bi_fact_direct_feed_funnel_star` отдают `criterion_key`/`site_key` как signed-safe `Int64`.
 Live-вьюхи пересозданы точечно; overflow=0, уникальность `Dim_Criterion`/`Dim_Site` сохранена.
 `pytest` 168 passed, `verify_big_analytics.py` PASS. Desktop refresh ещё не запускался.
+2026-08-19: Desktop refresh показал, что прежний signed-safe вариант через
+`key % 9223372036854775807` всё равно даёт modulo-коллизию:
+`dim_criterion.criterion_key=3943490909` повторяется на стороне связи Power BI. Локальный код
+переведён на bijective `reinterpretAsInt64(UInt64)`; до деплоя и пересоздания live `bi_*` это
+исправление не действует на Victory.
 
 ## Главное, что выяснилось 15.08
 

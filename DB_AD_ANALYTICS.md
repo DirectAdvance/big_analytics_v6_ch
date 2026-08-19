@@ -5,6 +5,8 @@
 > Правила уровня всего проекта — скил `db-rules`; здесь то, что специфично для `ad_analytics`.
 >
 > Замер, на котором построен документ: 2026-08-17, 123 объекта (65 таблиц + 58 вьюх, 2.06 ГиБ).
+> Обновление 2026-08-19: локальный код PBI hidden keys в `bi_*_star` переведён на
+> `reinterpretAsInt64(UInt64)`; до деплоя live `bi_*` остаются как на Victory.
 
 ## §1. Владение и границы схемы
 
@@ -129,9 +131,10 @@
 
 **Не обновляется автоматически** (замер 2026-08-17, данные не писались с 31.07):
 `gsheets_crop_targeting_account`, `..._leads`, `..._pravilo_utm`, `local_pixel_config`,
-`local_pixel_price_history`, `telega_in_order_price_overrides`, `yandex_direct_404_errors`,
-`yandex_direct_minus_snapshot`. Плюс `yandex_direct_cookie_analytics_website_pages` и
-`yd_search_query_report_master` — 12.08.
+`local_pixel_price_history`, `telega_in_order_price_overrides`. Ночной cron с 2026-08-17 обновляет
+`yandex_direct_404_errors` и `yandex_direct_minus_snapshot`; 30-дневная история минус-фраз ещё
+наполняется. `yandex_direct_cookie_analytics_website_pages` и `yd_search_query_report_master` —
+12.08.
 
 ## §5. Обязательные требования при создании объекта
 

@@ -26,15 +26,12 @@ from spend.build_direct_spend_staging import STAGING_TABLE
 
 log = logging.getLogger("build_pbi_compat")
 
-PBI_INT64_MAX = 9223372036854775807
-
-
 def _site_key_expr(alias: str = "f") -> str:
     return f"cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull({alias}.domain, ''))))"
 
 
 def _pbi_int64_key(expr: str) -> str:
-    return f"toInt64({expr} % {PBI_INT64_MAX})"
+    return f"reinterpretAsInt64({expr})"
 
 
 PBI_SOURCE_OBJECTS = [

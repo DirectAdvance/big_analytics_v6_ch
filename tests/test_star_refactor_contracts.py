@@ -187,10 +187,10 @@ def test_region_and_criterion_star_views_keep_only_keys_and_metrics():
 
     assert "FROM ad_analytics.fact_region_spend f" in region_sql
     assert "FROM ad_analytics.fact_criterion_spend f" in criterion_sql
-    assert "toInt64(f.site_key % 9223372036854775807) AS site_key" in region_sql
-    assert "toInt64(f.site_key % 9223372036854775807) AS site_key" in criterion_sql
+    assert "reinterpretAsInt64(f.site_key) AS site_key" in region_sql
+    assert "reinterpretAsInt64(f.site_key) AS site_key" in criterion_sql
     assert "f.id_location" in region_sql
-    assert "toInt64(f.criterion_key % 9223372036854775807) AS criterion_key" in criterion_sql
+    assert "reinterpretAsInt64(f.criterion_key) AS criterion_key" in criterion_sql
     for sql in [region_sql, criterion_sql]:
         assert "JOIN" not in sql
         assert "domain" not in sql
@@ -205,16 +205,16 @@ def test_region_and_criterion_star_views_keep_only_keys_and_metrics():
 
 
 def test_pbi_hash_keys_fit_powerbi_int64():
-    assert "toInt64(criterion_key % 9223372036854775807) AS criterion_key" in (
+    assert "reinterpretAsInt64(criterion_key) AS criterion_key" in (
         build_pbi_compat._dim_criterion_pbi_sql()
     )
-    assert "toInt64(site_key % 9223372036854775807) AS site_key" in (
+    assert "reinterpretAsInt64(site_key) AS site_key" in (
         build_pbi_compat._dim_site_pbi_sql()
     )
-    assert "toInt64(f.site_key % 9223372036854775807) AS site_key" in (
+    assert "reinterpretAsInt64(f.site_key) AS site_key" in (
         build_pbi_compat._feed_funnel_star_sql()
     )
-    assert "toInt64(site_key % 9223372036854775807) AS site_key" in (
+    assert "reinterpretAsInt64(site_key) AS site_key" in (
         build_pbi_compat._pbi_view_select_sql("fact_direct_feed_funnel_star")
     )
 
