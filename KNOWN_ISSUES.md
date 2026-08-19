@@ -238,7 +238,7 @@ v5 — ровно это). Частично закрыто в самих шаг�
 shared key3; 883=victory-crm.ru`). Числовой `domain_id` **не переносится** между PostgreSQL (v5) и
 ClickHouse (v6) — своя нумерация в каждой системе:
 
-| id | v5 `domains.name` | v6 `raw_data.domains.domain` |
+| id | v5 `domains.name` | v6 `reference_data.domains.domain` |
 |---|---|---|
 | 883 | `victory-crm.ru` (тестовый, должен исключаться) | `multiautos-23.ru` (реальный клиент — ошибочно исключался) |
 | 1645 | не существует (id-gap 1322..3953 в текущей v5 БД) | `rt-avtomarket-geely.ru` (реальный клиент — ошибочно исключался, но за всё время в CH 0 лидов, так что фикс тут структурный, не числовой) |
@@ -258,7 +258,7 @@ BI.** Изначально в этом пункте было записано, �
 доходит максимум 221 обращение / 59 заявок**, и из них **203 обращения / 51 заявка идут веткой
 `calls`**, которую этот фикс вообще не трогает (`raw_calls` фильтром `EXCLUDED_DOMAIN_NAMES` не
 затронут, см. ниже). Остальное отсеивалось ниже по потоку ещё ДО фикса: SEO-ветка требует
-присутствие домена в белом списке `raw_data.gsheet_sites` (`victory-crm.ru` там нет), а
+присутствие домена в белом списке `reference_data.gsheet_sites` (`victory-crm.ru` там нет), а
 Direct-ветка требует совпадение `key3` с реальным расходом Директа (совпало 122 строки из
 170 084). **Расхождение витрины +7.95% обращений / +8.75% заявок этой правкой не объясняется и
 остаётся открытым** — не закрывать расследование причины расхождения этим фиксом, искать
@@ -266,7 +266,7 @@ Direct-ветка требует совпадение `key3` с реальным
 
 **Фикс 2026-08-06.** `EXCLUDED_DOMAIN_IDS` → `EXCLUDED_DOMAIN_NAMES = ("victory-crm.ru",)`
 (`config/ch_settings.py`). `step1_load_raw/step1.py::_raw_leads_select_sql` матчит теперь по
-`lowerUTF8(trim(ifNull(d.domain, '')))` через уже существующий `LEFT JOIN raw_data.domains AS d`,
+`lowerUTF8(trim(ifNull(d.domain, '')))` через уже существующий `LEFT JOIN reference_data.domains AS d`,
 а не по числовому `domain_id`. Замер после фикса: victory-crm.ru = 0 строк, multiautos-23.ru = 3
 строки (паритет с их фактическим наличием в источнике). Затрагивает `raw_leads` И
 `raw_perform_leads` (обе строятся через одну и ту же `_raw_leads_select_sql`); `raw_yandex` и
@@ -296,7 +296,7 @@ Direct-ветка требует совпадение `key3` с реальным
 
 **Суть — баг 1 (инвертированный гейт).** `step6_build_full/step6.py::_calls_select` (было L195)
 использовал `ifNull(gs.direction, 'Авто') = 'Авто'` — при отсутствии матча домена звонка в
-`raw_data.gsheet_sites` (`gs.*` = NULL из LEFT JOIN) `ifNull` подставлял `'Авто'`, и звонок
+`reference_data.gsheet_sites` (`gs.*` = NULL из LEFT JOIN) `ifNull` подставлял `'Авто'`, и звонок
 ПРОХОДИЛ фильтр. v5 (`step6_build_full/step6.py:239-240`) требует обратное — LEFT JOIN, у которого
 отсутствие матча ДРОПАЕТ строку: `gs."domain" IS NOT NULL AND gs."direction" = 'Авто'`. Семантика
 была инвертирована относительно v5.
@@ -473,11 +473,11 @@ Minor по объёму, но в v5 это сделано НАМЕРЕННО (п
 
 ---
 
-### 🟡 #35 — 9 708 строк (6.29 млн ₽) вообще без домена в v6 против 367 строк в v5 — отсутствующие аккаунты в `raw_data.gsheet_sites`
+### 🟡 #35 — 9 708 строк (6.29 млн ₽) вообще без домена в v6 против 367 строк в v5 — отсутствующие аккаунты в `reference_data.gsheet_sites`
 
 **Суть.** Найдено попутно read-only диагностикой при разборе Dim_Site/pbi-проекции (#31/#32 соседние).
 В v6 `9 708` строк `big_analytics_full` идут с пустым/NULL `domain` (**6 290 000 ₽** расхода), в v5 тот
-же класс строк — только **367**. Причина — отсутствующие аккаунты в `raw_data.gsheet_sites`
+же класс строк — только **367**. Причина — отсутствующие аккаунты в `reference_data.gsheet_sites`
 (master-справочник домен↔аккаунт неполон относительно того, что видит v5 на PostgreSQL-стороне).
 
 **Почему НЕ лечится правками #35.1/#35.2 (проекция + тай-брейк Dim_Site).** Обе правки работают
@@ -485,7 +485,7 @@ Minor по объёму, но в v5 это сделано НАМЕРЕННО (п
 между конфликтующими значениями атрибута для непустого домена). Пустой `domain` — это отсутствие
 самого ключа join'а, а не конфликт/потеря атрибута по существующему ключу; ни JOIN к `Dim_Site`,
 ни прямая проекция с факта тут ничего не восстановят — восстанавливать нужно сам маппинг
-аккаунт→домен на стороне источника (`raw_data.gsheet_sites` / чем он наполняется).
+аккаунт→домен на стороне источника (`reference_data.gsheet_sites` / чем он наполняется).
 
 **Статус.** Заведено отдельной задачей, здесь только зафиксировано — НЕ чинить попутно.
 
@@ -671,8 +671,8 @@ wide-проекцию через dimensions, либо сверял факт по
 1 828 и 45 867 строк.
 
 2026-08-17 UTM-аудит восстановлен в БА6: `step_cron_night/step13_utm_direct_audit/run.py`
-собирает `check_utm` и `check_utm_fuck_direct` из `raw_data.direct_adgroups`,
-`raw_data.direct_campaigns`, `raw_data.gsheet_sites` и `raw_data.yandex_direct_report_rows`.
+собирает `check_utm` и `check_utm_fuck_direct` из `reference_data.direct_adgroups`,
+`reference_data.direct_campaigns`, `reference_data.gsheet_sites` и `raw_data.yandex_direct_report_rows`.
 Живой прогон: `check_utm` = 28 288 строк (`OK` 27 930, `ДРУГОЙ_UTM` 204, `НЕТ_UTM` 154),
 `check_utm_fuck_direct` = 3 981 строка за 2026-05-19..2026-08-16.
 
@@ -769,14 +769,14 @@ step114 вставил 1 806 строк, total snapshot = 3 352, `failed_logins=
 
 ### 🟡 #44 — три справочника в v6 отстают от v5
 
-**Суть.** Замер 2026-08-15: `raw_data.domains` 4 866 против 5 188 (−322, загрузчик встал —
-max `created_at` 2026-07-21 07:33 против 2026-08-15 00:22 в v5); `raw_data.gsheet_sites`
-5 051 против 5 103 (−52, `_loaded_at` 2026-08-07); `raw_data.crm_status_mapping` 791 против 796
+**Суть.** Замер 2026-08-15: `reference_data.domains` 4 866 против 5 188 (−322, загрузчик встал —
+max `created_at` 2026-07-21 07:33 против 2026-08-15 00:22 в v5); `reference_data.gsheet_sites`
+5 051 против 5 103 (−52, `_loaded_at` 2026-08-07); `reference_data.crm_status_mapping` 791 против 796
 (−5 строк маппинга воронки).
 
 **Почему важно.** `domains` участвует в доменных join/атрибуции, `crm_status_mapping` — источник
 правды по воронке (`FUNNEL.md`). Отставание маппинга статусов тихо смещает `korr/kval/priezd`.
-**Статус.** OPEN, вне зоны репозитория — владелец `raw_data`.
+**Статус.** OPEN, вне зоны репозитория — владелец `reference_data`.
 
 ---
 

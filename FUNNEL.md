@@ -1,11 +1,11 @@
-# FUNNEL.md — воронка заявок (`raw_data.crm_status_mapping`)
+# FUNNEL.md — воронка заявок (`reference_data.crm_status_mapping`)
 
 > Источник правды по воронке статусов. Вынесено из `CLAUDE.md` (lazy-load).
 > Высокоуровневые инварианты воронки — также в `PROJECT_CHARTER.md` §5.
 
 ---
 
-Источник активного ClickHouse-контура: `raw_data.crm_status_mapping`. Локальный
+Источник активного ClickHouse-контура: `reference_data.crm_status_mapping`. Локальный
 PostgreSQL-генератор `config/status_sql.py` оставлен как legacy/порт v5 и не является
 источником расчёта `big_analytics_full` в v6.
 
@@ -38,13 +38,13 @@ Reason-сторона полностью отдельная от status — пр
 | Метрика | lead_status | kind | Источник |
 |---------|------------|------|----------|
 | **kol_vo_zayavok** | — | — | `status IS NOT NULL` (хардкод) |
-| **korr** | `correct` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
-| **kval** | `qualified` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
-| **priezd** | `visit` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
-| **prodazhi** | `sale` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
-| **nekorr** | `incorrect` | `status` | raw_data.crm_status_mapping / CODE_STATUS_CATEGORY |
-| **dohod_do_kredita** | `credit` | `reason` | raw_data.crm_status_mapping |
-| **dobro** | `approved` | `reason` | raw_data.crm_status_mapping |
+| **korr** | `correct` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **kval** | `qualified` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **priezd** | `visit` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **prodazhi** | `sale` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **nekorr** | `incorrect` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **dohod_do_kredita** | `credit` | `reason` | reference_data.crm_status_mapping |
+| **dobro** | `approved` | `reason` | reference_data.crm_status_mapping |
 
 ## Хардкод (не из таблицы)
 
@@ -55,7 +55,7 @@ Reason-сторона полностью отдельная от status — пр
 | **nedozvon** | `'Недозвон'` | status |
 | **priedet** | `'Приедет'` | status |
 
-`kval` считается **прямо из категории `qualified`** в `raw_data.crm_status_mapping`
+`kval` считается **прямо из категории `qualified`** в `reference_data.crm_status_mapping`
 / `CODE_STATUS_CATEGORY` (раньше в v5 была формула `korr − ne_otvechaet − filtr − nedozvon`).
 
 > ✅ Это **корректная** формула (не регрессия). На golden-срезе Кудерко даёт **kval ≈ 677**
@@ -103,7 +103,7 @@ dobro            = reason category approved
 
 ```sql
 -- Канонический путь: добавить строку в ClickHouse-справочник
--- raw_data.crm_status_mapping (crm, status, reason, salon, category).
+-- reference_data.crm_status_mapping (crm, status, reason, salon, category).
 -- Если у pipeline-роли нет GRANT на запись или нужен временный мост,
 -- добавить пару в step3_build_sources/step3.py::CODE_STATUS_CATEGORY
 -- и держать ее там до появления строки в справочнике.
@@ -117,8 +117,8 @@ dobro            = reason category approved
 Модуль `crm_mappings_check/check.py` запускается автоматически после step12. Считает 3 сверки, но
 Telegram-отчёт (с 2026-08-14) шлёт только 2 секции — **UNUSED** остаётся в логе (Семён не хочет шум
 по неиспользуемым маппингам), в Telegram не идёт:
-1. (лог, не в Telegram) **UNUSED** — маппинги в `raw_data.crm_status_mapping` без записей в leads
-2. **UNMAPPED status** — статусы в `leads.status` без маппинга в `raw_data.crm_status_mapping`/`CODE_STATUS_CATEGORY`
+1. (лог, не в Telegram) **UNUSED** — маппинги в `reference_data.crm_status_mapping` без записей в leads
+2. **UNMAPPED status** — статусы в `leads.status` без маппинга в `reference_data.crm_status_mapping`/`CODE_STATUS_CATEGORY`
 3. **UNMAPPED reason** — значения в `leads.reason` без маппинга
 
 ## История изменений
@@ -144,7 +144,7 @@ Telegram-отчёт (с 2026-08-14) шлёт только 2 секции — **U
 SELECT
     lead_record_id,
     argMin(status, prio) AS status
-FROM raw_data.gsheet_priezdi_marcar
+FROM reference_data.gsheet_priezdi_marcar
 WHERE link LIKE '%crm.marcar.ru%'
   AND status IN ('Продажа', 'Дошел в КО', 'Одобрение', 'Приехал')
 GROUP BY lead_record_id
@@ -173,7 +173,7 @@ GROUP BY status;
 
 -- Сколько строк в gsheet с полезными статусами
 SELECT status, count() AS gsheet_status_rows
-FROM raw_data.gsheet_priezdi_marcar
+FROM reference_data.gsheet_priezdi_marcar
 WHERE link LIKE '%crm.marcar.ru%'
   AND status IN ('Продажа', 'Дошел в КО', 'Одобрение', 'Приехал')
 GROUP BY status;

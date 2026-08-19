@@ -1,12 +1,12 @@
 # step4_campaign_status — Статусы кампаний Яндекс.Директ
 
 Шаг 4 пайплайна `big_analytics_v6_ch`. Пересоздаёт ClickHouse-VIEW `campaign_status`/`campaign_status_v`
-поверх `raw_data.direct_campaigns`, обогащая downstream-шаги (в первую очередь `step3`) колонками
+поверх `reference_data.direct_campaigns`, обогащая downstream-шаги (в первую очередь `step3`) колонками
 `campaign_status` и `payment_model`.
 
 ⚠️ **Это не v5.** В v5 (`work/big_analytics_v5/`) step4 сам ходил в неофициальный Grid API
 Яндекс.Директа через куки браузера, двухфазно, с фоновым потоком. В v6_ch этого больше нет:
-`raw_data.direct_campaigns` уже приходит готовой (её наполняет отдельный raw-загрузчик вне этого
+`reference_data.direct_campaigns` уже приходит готовой (её наполняет отдельный внешний загрузчик вне этого
 пайплайна), а `step4.py` — это просто `CREATE VIEW` поверх неё. Если ищете код получения статусов
 через Grid API/куки — его в этой папке нет.
 
@@ -17,7 +17,7 @@
 - **`ad_analytics.campaign_status`** / **`ad_analytics.campaign_status_v`** — VIEW со статусом
   кампании: 'Активна' / 'Остановлена' / 'Архив' (или исходный raw-статус, если не попал под
   маппинг)
-- **`payment_model`** — passthrough одноимённой колонки из `raw_data.direct_campaigns` (значение
+- **`payment_model`** — passthrough одноимённой колонки из `reference_data.direct_campaigns` (значение
   вычисляется не здесь)
 - Emoji-префикс статуса в названии кампании (🟢/🟡/⚪) в Power BI — **в v6_ch этой фичи нет в коде**:
   ни `step6_build_full/step6.py`, ни `star_refactor/*` её не формируют (grep по `step6.py` —
@@ -36,7 +36,7 @@ def run(conn=None, run_id=None, prefetch_thread=None) -> dict:
     client = get_client()
     client.command("DROP TABLE IF EXISTS ad_analytics.campaign_status_v SYNC")
     client.command("DROP TABLE IF EXISTS ad_analytics.campaign_status SYNC")
-    client.command("CREATE VIEW ad_analytics.campaign_status AS SELECT ... FROM raw_data.direct_campaigns")
+    client.command("CREATE VIEW ad_analytics.campaign_status AS SELECT ... FROM reference_data.direct_campaigns")
     client.command("CREATE VIEW ad_analytics.campaign_status_v AS SELECT ... FROM ad_analytics.campaign_status")
     return {"rows": rows, "details": f"campaign_status_v={rows:,}"}
 ```
@@ -49,7 +49,7 @@ def run(conn=None, run_id=None, prefetch_thread=None) -> dict:
 ## Архитектурная схема
 
 ```
-raw_data.direct_campaigns (наполняется вне этого пайплайна)
+reference_data.direct_campaigns (наполняется вне этого пайплайна)
         │
         ▼  step4.py: DROP + CREATE VIEW
 ad_analytics.campaign_status  (multiIf по status/state → 'Активна'/'Остановлена'/'Архив')
@@ -78,7 +78,7 @@ step3 → ... → Dim_Campaign (campaign_status, payment_model из ad_analytics
 ## Куки
 
 ⚠️ **`step4.py` v6_ch не импортирует `config/cookies.py` и не читает `cookies.json`** — статусы
-кампаний в этот шаг приходят уже готовыми через `raw_data.direct_campaigns`, куки при построении
+кампаний в этот шаг приходят уже готовыми через `reference_data.direct_campaigns`, куки при построении
 VIEW не участвуют.
 
 `config/cookies.py` в проекте по-прежнему существует и используется, но **другими** модулями:
@@ -98,10 +98,10 @@ VIEW не участвуют.
 
 ## Зависимости
 
-- `raw_data.direct_campaigns` (ClickHouse; наполняется вне этого пайплайна, `step0` только
+- `reference_data.direct_campaigns` (ClickHouse; наполняется вне этого пайплайна, `step0` только
   проверяет, что таблица не пуста)
 - Никакой зависимости от `step0`/`step3`/кук/Telegram-прокси внутри `step4.py` самого нет —
-  зависимость от `raw_data.direct_campaigns` целиком внешняя
+  зависимость от `reference_data.direct_campaigns` целиком внешняя
 
 ## Примеры запуска
 
@@ -124,7 +124,7 @@ SELECT `статус`, payment_model, count()
 FROM ad_analytics.campaign_status_v GROUP BY `статус`, payment_model;
 
 -- Сколько кампаний вообще видно в raw-источнике
-SELECT count() FROM raw_data.direct_campaigns;
+SELECT count() FROM reference_data.direct_campaigns;
 
 -- payment_model заполнен (если NULL массово — проблема в raw-загрузчике, не в step4)
 SELECT count() FROM ad_analytics.campaign_status_v WHERE payment_model IS NULL;
@@ -140,7 +140,7 @@ SELECT count() FROM ad_analytics.campaign_status_v WHERE payment_model IS NULL;
 
 Реальный ночной UTM-аудит в v6_ch — **другой файл, в другой папке**:
 `step_cron_night/metrika_raw_builders.py::build_check_utm()`, источник —
-`raw_data.metrika_yandex_utm_daily` + `raw_data.metrika_yandex_counters` + `raw_data.gsheet_sites`
+`raw_data.metrika_yandex_utm_daily` + `reference_data.metrika_yandex_counters` + `reference_data.gsheet_sites`
 (ClickHouse, без живых вызовов Direct/Metrika API на момент сборки). Пишет в shadow-таблицы
 (`ad_analytics.check_utm_new`/`check_utm_fuck_direct_new`), затем swap → итог:
 `ad_analytics.check_utm`, `ad_analytics.check_utm_fuck_direct`. Запускается через
@@ -158,7 +158,7 @@ SELECT count() FROM ad_analytics.campaign_status_v WHERE payment_model IS NULL;
 
 | Файл | Описание |
 |------|----------|
-| `step4.py` | Основной скрипт v6_ch: `CREATE VIEW campaign_status`/`campaign_status_v` из `raw_data.direct_campaigns` |
+| `step4.py` | Основной скрипт v6_ch: `CREATE VIEW campaign_status`/`campaign_status_v` из `reference_data.direct_campaigns` |
 | `check_utm/utm_direct_audit.py` | v5-код, в v6_ch не вызывается (мёртвый) — см. раздел выше |
 | `check_utm/__init__.py` | Пустой |
 | `CLAUDE.md` | Краткая инструкция для ИИ |

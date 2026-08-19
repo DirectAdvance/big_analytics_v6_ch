@@ -120,7 +120,7 @@ all_forms/crm_order_*`, **воронки нет вообще**). Причина 
 
 **`direct_history`** — 35 823 строки против 77 836 и 12 колонок против 19 (нет `ulogin`,
 `user_login`, `user_uid`, `category`, `ad_group_id`, `ad_group_name`, `raw_event`, `loaded_at`).
-v6 строит историю из `raw_data.direct_campaigns`, а не из внутреннего API Директа.
+v6 строит историю из `reference_data.direct_campaigns`, а не из внутреннего API Директа.
 
 **`yandex_direct_minus_snapshot` / `v_yandex_direct_minus_delta`** — 1 546 строк за **один день**
 (2026-07-31) против 32 831 за 2026-07-17…2026-08-15 в v5. Step14 в дневном `pipeline.py`

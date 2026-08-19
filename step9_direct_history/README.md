@@ -5,8 +5,8 @@ Step 9 строит совместимую таблицу для Power BI как
 
 ## Что делает
 
-`step9.py` читает `raw_data.direct_campaigns`, превращает текущий snapshot кампаний в события
-`campaign_snapshot` и добавляет `директолог`, `domain`, `salon` из `raw_data.gsheet_sites`.
+`step9.py` читает `reference_data.direct_campaigns`, превращает текущий snapshot кампаний в события
+`campaign_snapshot` и добавляет `директолог`, `domain`, `salon` из `reference_data.gsheet_sites`.
 Это не исторический GraphQL-журнал v5: в v6 нет постраничной загрузки direct.yandex.ru, куки,
 `DAYS_BACK`, `REQUEST_DELAY` и фонового API-prefetch. `prefetch_history()` оставлен no-op только для
 совместимости с корневым `pipeline.py`.
@@ -14,8 +14,8 @@ Step 9 строит совместимую таблицу для Power BI как
 ## IN / OUT
 
 **IN:**
-- `raw_data.direct_campaigns`
-- `raw_data.gsheet_sites`
+- `reference_data.direct_campaigns`
+- `reference_data.gsheet_sites`
 
 **OUT:**
 - `ad_analytics.yandex_direct_history` (view)

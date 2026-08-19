@@ -167,11 +167,12 @@ Power BI работает в import-режиме и на каждом refresh п
 | `raw_calls` | `leads_all WHERE deal_type='Звонок'` + join доменов. Не импорт звонков. |
 | `raw_perform_leads` | `local_perform_leads` + лиды crmf/mauto, которых нет в perform по телефону, с дедупом `ROW_NUMBER() OVER (PARTITION BY phone_norm)` |
 
-### 4.6 Справочник CRM-статусов — брать из PostgreSQL
+### 4.6 Справочник CRM-статусов — активный источник `reference_data`
 
-🛑 **`raw_data.crm_status_mapping` использовать ЗАПРЕЩЕНО.**
+✅ **В текущем v6 используется `reference_data.crm_status_mapping`.**
 
-Она приехала из `ad_analytics.crm_status_mapping` (база CRM, 774 строки) — денормализованного
+Старый запрет на `raw_data.crm_status_mapping` относился к прежнему снимку из
+`ad_analytics.crm_status_mapping` (база CRM, 774 строки) — денормализованного
 декартова произведения статусов на причины, а не из `local_crm_statuses`. Измеренный эффект
 на 460 518 лидах за май–июль:
 
@@ -516,7 +517,7 @@ spend-витрину (~12 млн строк / 9.1 ГБ в `fact_region_spend`). 
 
 - Не пере-исследовать то, что уже в таблице отчётов выше — там числа, а не пересказы.
 - Не заливать снимок `local_gsheet_naming` — решено ждать смежников.
-- Не брать `raw_data.crm_status_mapping` как справочник статусов (см. 4.6).
+- Не возвращать справочник статусов в `raw_data.crm_status_mapping`; текущий источник — `reference_data.crm_status_mapping` (см. 4.6).
 - Не применять `ReplacingMergeTree` к ARP (см. 5.2).
 
 ---

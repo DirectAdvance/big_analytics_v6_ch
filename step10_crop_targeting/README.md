@@ -13,7 +13,7 @@
 - `ad_analytics.telega_in_order_price_overrides` — CH-таблица ручных price overrides, сохраняется между прогонами.
 - `ad_analytics.gsheets_crop_targeting_account*` — ручные Google Sheets посевы, уже загруженные в CH.
 - `raw_data.vk_ads_stats_day` — VK Ads spend.
-- `raw_data.gsheet_sites`, `ad_analytics.raw_leads` — lookup и матчинг заявок.
+- `reference_data.gsheet_sites`, `ad_analytics.raw_leads` — lookup и матчинг заявок.
 
 ## Что строится
 

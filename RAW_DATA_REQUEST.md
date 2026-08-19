@@ -43,7 +43,7 @@ BA6 читает сырьё почти только из `raw_data` — это �
 Что **больше не наше** (было в BA5, в BA6 уже переведено на `raw_data`, сетевых вызовов нет):
 404-ошибки (`step_cron_night/metrika_raw_builders.py::build_404_errors` — считается из
 `metrika_yandex_counters` + `metrika_yandex_not_found_daily` + `gsheet_sites`), история изменений
-(шаг 9 берёт `raw_data.direct_campaigns`; данные при этом урезаны — 35 823 строки против 77 836 в
+(шаг 9 берёт `reference_data.direct_campaigns`; данные при этом урезаны — 35 823 строки против 77 836 в
 BA5), справочник Метрики (`ad_analytics.metrika_yandex` — вьюха над вашими таблицами).
 
 ---
@@ -139,8 +139,8 @@ tracking-параметрах групп Директа. До 2026-08-17 обе 
 | 🔑 `ads` → `Href` | `direct_ads`: `href`, `tracking_params`, `status`, `state`, `type` (381 496 строк) | ✅ полное |
 | 🔑 `adgroups` → `TrackingParams`, `Status` | `direct_adgroups`: `tracking_params`, `status`, `group_name` | ✅ полное |
 
-Итог 2026-08-17: ночной шаг 102 переписан на `raw_data.direct_adgroups`,
-`raw_data.direct_campaigns`, `raw_data.gsheet_sites` и `raw_data.yandex_direct_report_rows`.
+Итог 2026-08-17: ночной шаг 102 переписан на `reference_data.direct_adgroups`,
+`reference_data.direct_campaigns`, `reference_data.gsheet_sites` и `raw_data.yandex_direct_report_rows`.
 Одна строка `check_utm` теперь соответствует группе Директа с расходом за последние 30 дней, а не
 UTM-визиту Метрики. Живой прогон дал `check_utm` = 28 288 строк
 (`OK` 27 930, `ДРУГОЙ_UTM` 204, `НЕТ_UTM` 154) и `check_utm_fuck_direct` = 3 981 строка за

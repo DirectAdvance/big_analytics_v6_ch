@@ -5,8 +5,8 @@
 В v6 UTM-аудит не ходит в Direct/Metrika API. Он строит таблицы из ClickHouse raw snapshots:
 
 - source: `raw_data.metrika_yandex_utm_daily`
-- source: `raw_data.metrika_yandex_counters`
-- source: `raw_data.gsheet_sites`
+- source: `reference_data.metrika_yandex_counters`
+- source: `reference_data.gsheet_sites`
 - target: `ad_analytics.check_utm`
 - target: `ad_analytics.check_utm_fuck_direct`
 

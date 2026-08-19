@@ -18,7 +18,7 @@ Standalone-модуль для сверки расходов Яндекс.Дир
 4. Читает активные авто-аккаунты в ClickHouse:
    ```sql
    SELECT lowerUTF8(trim(login_key)) AS login, anyLast(domain) AS domain
-   FROM raw_data.gsheet_sites
+   FROM reference_data.gsheet_sites
    WHERE status = 'Контекст активно'
      AND direction = 'Авто'
      AND login_key != ''
@@ -34,11 +34,12 @@ Standalone-модуль для сверки расходов Яндекс.Дир
 
 | Откуда | Что |
 |--------|-----|
-| `raw_data.gsheet_sites` | список авто-аккаунтов (login_key + domain) |
+| `reference_data.gsheet_sites` | список авто-аккаунтов (login_key + domain) |
 | `raw_data.yandex_direct_report_rows` | помесячный `total_cost` с НДС и комиссией |
 | `config.tokens` | только Telegram-настройки для отправки отчёта |
 
-Никаких Direct API, `local_yandex`, `big_analytics_*` — источник только `raw_data`.
+Никаких Direct API, `local_yandex`, `big_analytics_*` — источники только ClickHouse
+`reference_data.gsheet_sites` и `raw_data.yandex_direct_report_rows`.
 
 ## Схема таблицы
 

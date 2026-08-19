@@ -250,7 +250,7 @@ CH поддерживает большинство оконных функций
 - [x] `step3_build_sources/`: переведён на CH-диалект и batch `INSERT SELECT`.
 - [x] `corrections.py`: транзакционные UPDATE/VACUUM заменены на CH-safe hook; тяжёлые правила
       свернуты в builders, где есть исходные данные.
-- [x] `step4_campaign_status/`: `campaign_status` строится из текущего `raw_data.direct_campaigns`,
+- [x] `step4_campaign_status/`: `campaign_status` строится из текущего `reference_data.direct_campaigns`,
       direct-витрина патчится помесячными batch INSERT.
 - [x] `step5_build_pixel/`: CH-проверка/OPTIMIZE существующей pixel-витрины.
 - [x] `step6_build_full/`: `big_analytics_calls` и `big_analytics_full` собираются batch `INSERT SELECT`.
@@ -353,9 +353,9 @@ CH поддерживает большинство оконных функций
 
    | Таблица | Доверять для Этапа 1-2? | Риск |
    |---|---|---|
-   | `raw_data.crm_status_mapping` | ✅ Да | — (побайтовое совпадение с источником) |
+   | `reference_data.crm_status_mapping` | ✅ Да | — (побайтовое совпадение с источником) |
    | `raw_data.yandex_direct_report_rows` | ✅ Да | Отставание свежести на 1 день — терпимо |
-   | `raw_data.direct_campaigns` | ✅ Да | ~13% строк без `state`/`status` — не готово для классификации активна/архив без доочистки |
+   | `reference_data.direct_campaigns` | ✅ Да | ~13% строк без `state`/`status` — не готово для классификации активна/архив без доочистки |
    | `raw_data.metrika_yandex_utm_daily` | ✅ Да (по внутренней санитарии) | Нет PG-аналога для контрольной сверки |
    | `raw_data.leads_all` | ⚠️ **Частично — НЕ доверять данным `crmf_excel` (64% объёма таблицы)** | См. ниже — реальный дефект, не «исторический снепшот» |
 

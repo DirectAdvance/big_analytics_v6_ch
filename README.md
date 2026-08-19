@@ -3,7 +3,7 @@
 `big_analytics_v6_ch` — ClickHouse-контур миграции `big_analytics_v5`.
 Локально его можно запускать из этого репозитория; рабочий дневной контур стоит в cron на Victory
 через `~/venv-v6/bin/python3 ~/big_analytics_v6_ch/cron_run.py` и пишет в Yandex Cloud ClickHouse:
-`raw_data` — сырьё, `ad_analytics` — рабочие таблицы и витрины. Victory
+`raw_data` — сырьё, `reference_data` — справочники, `ad_analytics` — рабочие таблицы и витрины. Victory
 `~/big_analytics_v5/` — это отдельный production-контур v5 на PostgreSQL; команды v5
 не являются командами запуска v6.
 
@@ -26,7 +26,7 @@
 
 **Шаг 0 — ClickHouse preflight** (`step0_sync_local`)
 Ничего не копирует из PostgreSQL/v5. Проверяет, что в ClickHouse уже есть обязательные
-`raw_data.*` источники и CH-managed manual inputs в `ad_analytics.*`. Если источник
+`raw_data.*` факты, `reference_data.*` справочники и CH-managed manual inputs в `ad_analytics.*`. Если источник
 отсутствует или критически пустой, пайплайн падает до тяжёлых downstream-шагов.
 
 ---
@@ -104,8 +104,8 @@ UNION ALL всех источников → `big_analytics_full`.
 
 **Шаг 9 — История изменений Директа** (`step9_direct_history`)
 В v6 это ClickHouse snapshot-view, а не старый GraphQL-журнал. `prefetch_history()` — no-op для
-совместимости; `run()` строит `ad_analytics.yandex_direct_history` из `raw_data.direct_campaigns`
-и обогащает `директолог` / `domain` / `salon` через `raw_data.gsheet_sites`.
+совместимости; `run()` строит `ad_analytics.yandex_direct_history` из `reference_data.direct_campaigns`
+и обогащает `директолог` / `domain` / `salon` через `reference_data.gsheet_sites`.
 
 ---
 
@@ -191,7 +191,7 @@ step 145). Актуальные инварианты и открытые рас�
 - Python 3.10+
 - `clickhouse-connect`, requests, urllib3; `psycopg2` — только для моста отзывов в step3
 - Доступ к ClickHouse Yandex Cloud `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`
-  (`raw_data` — чтение, `ad_analytics` — запись) через `load_db('victory_clickhouse')`
+  (`raw_data`/`reference_data` — чтение, `ad_analytics` — запись) через `load_db('victory_clickhouse')`
 - Read-only доступ к Victory PostgreSQL `ad_analytics_bi` — только для отзывов (step3)
 - Куки Яндекс.Директ на домашнем сервере: `http://192.168.0.202:8765/cookies`
 

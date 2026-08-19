@@ -23,7 +23,7 @@ id=17478 в CH) — 170 084 строки мусора молча текли в `
 замеры до/после и открытый вопрос по identity `1645` — `KNOWN_ISSUES.md` #33.
 
 Фильтр применяется в `step1_load_raw/step1.py::_raw_leads_select_sql` при сборке `raw_leads`
-(и `raw_perform_leads`, которая строится через ту же функцию): `LEFT JOIN raw_data.domains AS d`
+(и `raw_perform_leads`, которая строится через ту же функцию): `LEFT JOIN reference_data.domains AS d`
 + `lowerUTF8(trim(ifNull(d.domain, ''))) NOT IN (...)`. Пустой `EXCLUDED_DOMAIN_NAMES` не подставляет
 условие вовсе (guard в `_excluded_domain_names_sql`), а не превращается в синтаксически битый
 `NOT IN ()`.

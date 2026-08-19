@@ -23,7 +23,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `DB_AD_ANALYTICS.md` | 19 | DB_AD_ANALYTICS.md — регламент ведения ClickHouse `ad_analytics` |
 | `DB_TABLES.md` | 52 | DB_TABLES.md — legacy PostgreSQL table map |
 | `DOD.md` | 18 | DOD — Definition of Done, big_analytics_v5 |
-| `FUNNEL.md` | 12 | FUNNEL.md — воронка заявок (`raw_data.crm_status_mapping`) |
+| `FUNNEL.md` | 12 | FUNNEL.md — воронка заявок (`reference_data.crm_status_mapping`) |
 | `GOLDEN_BASELINE.md` | 33 | GOLDEN BASELINE — эталонные значения v6_ch |
 | `KNOWN_ISSUES.md` | 79 | KNOWN_ISSUES — big_analytics_v6_ch |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |

@@ -66,16 +66,16 @@ verify PASS/нет, golden Кудерко; при падении — номер 
 
 | Шаг | Модуль | Label в логе | Что делает |
 |---:|---|---|---|
-| 0 | `step0_sync_local.step0` | `step0` | ClickHouse preflight: проверяет обязательные `raw_data.*` и manual inputs в `ad_analytics.*`. |
+| 0 | `step0_sync_local.step0` | `step0` | ClickHouse preflight: проверяет обязательные `raw_data.*` факты, `reference_data.*` справочники и manual inputs в `ad_analytics.*`. |
 | 1 | `step1_load_raw.step1` | `step1` | Пересоздаёт `ad_analytics.raw_*` из `raw_data.*`. |
 | 2 | `step2_indexes.step2` | `step2` | Maintenance: `OPTIMIZE TABLE ... FINAL` для RAW-слоя. Только с `--include-maintenance`. |
-| 4 | `step4_campaign_status.step4` | `step4` | Строит `campaign_status` из `raw_data.direct_campaigns`. |
+| 4 | `step4_campaign_status.step4` | `step4` | Строит `campaign_status` из `reference_data.direct_campaigns`. |
 | 3 | `step3_build_sources.step3` | `step3` | Собирает source-слой direct/seo/pixel/calls и связанные промежуточные таблицы. |
 | 31 | `corrections` | `corrections` | Применяет портированные правила коррекций v5 к v6 ClickHouse-слою. |
 | 5 | `step5_build_pixel.build_pixel` | `step5` | Собирает pixel-воронку. |
 | 6 | `step6_build_full.step6` | `step6` | Собирает `big_analytics_full`. |
 | 7 | `step7_finalize.step7` | `step7` | Maintenance: `OPTIMIZE` для `big_analytics_sources/calls/full`. Только с `--include-maintenance`. |
-| 9 | `step9_direct_history.step9` | `step9` | История Директа из `raw_data.direct_campaigns`. |
+| 9 | `step9_direct_history.step9` | `step9` | История Директа из `reference_data.direct_campaigns`. |
 | 10 | `step10_crop_targeting.step10` | `step10` | Посевы Telega/VK/MAX и связанные локальные CH-таблицы. |
 | 11 | `step11_pixel_score.step11` | `step11` | Pixel score + прямая доливка пикселя. Канон: `_source_table='pixel'` / `источник='Пиксель'`; отдельная ветка `Пиксель_атрибуц` выведена из контракта. |
 | 115 | `spec_fallback` | `spec_fallback` | Каскад `специалист` по домену без окна дат после step10/step11. |

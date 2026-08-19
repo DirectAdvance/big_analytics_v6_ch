@@ -1,7 +1,7 @@
 # step1_load_raw — RAW слой ClickHouse
 
 Шаг 1 v6_ch пересоздаёт рабочий RAW-слой в ClickHouse `ad_analytics` из
-источников `raw_data.*`. Это не PostgreSQL `UNLOGGED`: WAL, `VACUUM`, `SET LOGGED`,
+`raw_data.*` фактов и `reference_data.domains`. Это не PostgreSQL `UNLOGGED`: WAL, `VACUUM`, `SET LOGGED`,
 FDW и `local_*`-копии относятся к v5/legacy.
 
 ## Назначение
@@ -10,14 +10,14 @@ FDW и `local_*`-копии относятся к v5/legacy.
 
 ```
 raw_data.yandex_direct_report_rows ──► ad_analytics.raw_yandex
-raw_data.leads_all + raw_data.domains ─┬► ad_analytics.raw_leads
+raw_data.leads_all + reference_data.domains ─┬► ad_analytics.raw_leads
                                        └► ad_analytics.raw_calls
-raw_data.domains ───────────────────────► ad_analytics.raw_domains
+reference_data.domains ───────────────────────► ad_analytics.raw_domains
 нет raw_data.perform_leads ─────────────► ad_analytics.raw_perform_leads (совместимая пустая таблица)
 ```
 
 `raw_yandex`, `raw_leads` и `raw_calls` пересоздаются как ClickHouse `MergeTree`
-таблицы. `raw_domains` — `VIEW` поверх `raw_data.domains`. `raw_perform_leads`
+таблицы. `raw_domains` — `VIEW` поверх `reference_data.domains`. `raw_perform_leads`
 остаётся совместимой пустой таблицей, пока нет живого источника `raw_data.perform_leads`.
 
 ## Архитектурная схема
@@ -31,7 +31,7 @@ raw_data.yandex_direct_report_rows ─────► raw_yandex
                               ├── week_start = DATE_TRUNC('week', Date)
                               └── key3 = Date|CampaignId|AdGroupId|Device|RlAdjustmentId
 
-raw_data.leads_all + raw_data.domains ─► raw_leads (deal_type != 'Звонок')
+raw_data.leads_all + reference_data.domains ─► raw_leads (deal_type != 'Звонок')
                               ├── id, created_date, arrival_date, domain_id, domain
                               ├── status, source_type, campaign_id, group_id, correction_id
                               ├── utm_source/medium/campaign/content/term, phone, yclid
@@ -39,10 +39,10 @@ raw_data.leads_all + raw_data.domains ─► raw_leads (deal_type != 'Звоно
                               ├── key3 = ключ по created_date
                               └── key3_arrival_date = ключ по arrival_date
 
-raw_data.leads_all + raw_data.domains ─► raw_calls (deal_type = 'Звонок')
+raw_data.leads_all + reference_data.domains ─► raw_calls (deal_type = 'Звонок')
                               └── базовые поля без UTM-ключей (звонки не нужно матчить)
 
-raw_data.domains ─► raw_domains (VIEW)
+reference_data.domains ─► raw_domains (VIEW)
 ```
 
 ## Ключевая логика — `key3`
@@ -75,11 +75,11 @@ REPLACE("CampaignName", chr(1089), 'c')
 | Параметр | Значение | Влияет на |
 |----------|----------|-----------|
 | `EXCLUDED_DOMAIN_NAMES` (`config/ch_settings.py`) | `("victory-crm.ru",)` | Фильтр `raw_leads`/`raw_perform_leads` по ИМЕНИ домена (но НЕ `raw_yandex`) |
-| `RAW_SOURCE_TABLES` | `raw_data.*` источники | `raw_yandex`, `raw_leads`, `raw_calls`, `raw_domains` |
+| `RAW_SOURCE_TABLES` | `raw_data.*` факты + `reference_data.domains` | `raw_yandex`, `raw_leads`, `raw_calls`, `raw_domains` |
 | `RAW_TARGET_TABLES` | `ad_analytics.raw_*` выходы | downstream steps |
 
 `EXCLUDED_DOMAIN_NAMES = ("victory-crm.ru",)` (`step1_load_raw/step1.py::_excluded_domain_names_sql`,
-матч по `lowerUTF8(trim(d.domain))` через `LEFT JOIN raw_data.domains`):
+матч по `lowerUTF8(trim(d.domain))` через `LEFT JOIN reference_data.domains`):
 - `victory-crm.ru` — тестовый домен, не клиент.
 - ⚠️ **Фильтр по ИМЕНИ, не по числовому `domain_id`** — id непереносим между PostgreSQL (v5) и
   ClickHouse (v6), своя нумерация в каждой системе. Раньше здесь буквально копировался v5-список
