@@ -77,6 +77,7 @@ PBI_SOURCE_OBJECTS = [
     "yandex_direct_minus_snapshot",
     "yandex_direct_ads_texts",
     "yandex_direct_type_placement_report_master",
+    "direct_autorules_posevy_placement_links",
     # PLACEMENT_LINKS_BI_2026-08-17. Модель PBI читала ручную копию БА5
     # `raw_new_tp_placement_links` (снимок от 16.08, сам не обновляется) — из-за этого фикс
     # двойной кодировки площадок в отчёт не доезжал. Отчёт переведён на этот bi-слой над живой
@@ -1463,6 +1464,49 @@ def _direct_type_placement_pbi_sql() -> str:
     """
 
 
+def _direct_autorules_posevy_placement_links_sql() -> str:
+    return """
+        SELECT
+            toDate(r.day) AS date,
+            r.client_login AS account_login,
+            any(coalesce(g.city, '')) AS city,
+            l.placement_link AS placement_link,
+            multiIf(
+                positionCaseInsensitive(l.placement_link, 't.me/') > 0
+                    OR positionCaseInsensitive(l.placement_link, 'telegram.me/') > 0,
+                'телеграм',
+                positionCaseInsensitive(l.placement_link, 'max.ru') > 0,
+                'макс',
+                'другое'
+            ) AS source,
+            r.campaign_id AS campaign_id,
+            anyLast(coalesce(r.campaign_name, '')) AS campaign_name,
+            round(sum(coalesce(r.total_cost, 0)), 2) AS cost,
+            toInt64(sum(coalesce(r.impressions, 0))) AS impressions,
+            toInt64(sum(coalesce(r.clicks, 0))) AS clicks,
+            round(sum(coalesce(r.all_forms, 0)), 2) AS all_forms,
+            round(sum(coalesce(r.crm_order_paid, 0)), 2) AS crm_order_paid,
+            if(impressions > 0, round(clicks / impressions * 100, 2), NULL) AS ctr,
+            if(all_forms > 0, round(cost / all_forms, 2), NULL) AS cpl_all_forms,
+            if(crm_order_paid > 0, round(cost / crm_order_paid, 2), NULL) AS cpl_crm_order_paid
+        FROM raw_data.yandex_direct_report_rows AS r
+        INNER JOIN ad_analytics.yandex_direct_tp_placement_links AS l
+            ON l.placement = r.placement
+        LEFT JOIN (
+            SELECT login_key, any(coalesce(city, '')) AS city
+            FROM raw_data.gsheet_sites
+            GROUP BY login_key
+        ) AS g ON g.login_key = r.client_login
+        WHERE coalesce(l.placement_link, '') != ''
+          AND (
+            positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp8') > 0
+            OR positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp9') > 0
+            OR positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp10') > 0
+          )
+        GROUP BY date, account_login, placement_link, source, campaign_id
+    """
+
+
 PBI_VIEW_SQL_BUILDERS = {
     "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
     "fact_direct_feed_funnel_star": _feed_funnel_star_pbi_sql,
@@ -1498,6 +1542,7 @@ PBI_VIEW_SQL_BUILDERS = {
     "yandex_direct_cookie_analytics_website_pages": _cookie_pages_pbi_sql,
     "yandex_direct_ads_texts": _direct_ads_texts_pbi_sql,
     "yandex_direct_type_placement_report_master": _direct_type_placement_pbi_sql,
+    "direct_autorules_posevy_placement_links": _direct_autorules_posevy_placement_links_sql,
 }
 
 
