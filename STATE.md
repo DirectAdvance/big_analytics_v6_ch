@@ -106,14 +106,19 @@ URL (`telegram.me` → `t.me`, голые домены получают `https:/
 расход 122 099 270.32 ₽; source-разбивка `телеграм`/`макс`/`другое`.
 2026-08-19: BA6 raw CRM-слой больше не учитывает `raw_data.leads_all.is_copy_for_removal=1`:
 фильтр добавлен в `raw_leads`, `raw_calls`, perform-ветки step1 и прямые `step13_arrival`
-lookup/orphan-запросы. Нужна пересборка минимум `pipeline.py --from-step=1` на Victory, чтобы
-живые витрины изменились.
+lookup/orphan-запросы. Коммит `513e729` доставлен на Victory, `pipeline.py --from-step=1`
+завершился PASS (`run_id=cfecd7759368`, лог `logs/manual_copyfilter_20260819_165410.log`):
+`raw_leads=959 181`, `raw_calls=70 943`, `fact_big_analytics=5 307 973`,
+copy-строк в `raw_leads/raw_calls/raw_perform_leads` = 0. Compare v5→v6 теперь доходит до
+чисел, но FAIL по всем 8 метрикам; отчёты сохранены в
+`logs/compare_v5_v6_copyfilter_20260819.{txt,json}`.
 
 ## Главное, что выяснилось 15.08
 
 **Сырьё v6 не беднее v5 — оно богаче.** Директ +354 258 строк и +10.54 млн ₽; 99 «пропавших»
-аккаунтов несут 0.00 ₽. CRM-лиды больше v5 в каждом месяце 2026. Витрина сошлась: заявочная ось
-Feb–Jul без пикселя — cost +0.36%, приезды −0.08%, продажи −0.03%.
+аккаунтов несут 0.00 ₽. CRM-лиды больше v5 в каждом месяце 2026. После фильтра
+`is_copy_for_removal` свежая витринная сверка Feb–Jul без пикселя:
+расход +0.36%, обращения −1.99%, заявки −0.81%, продажи +0.62%.
 
 **Отчёты Power BI на v6 ещё не финализированы.** После 18.08 `ads_texts` и
 `type_placement_report_master` технически закрыты через `bi_*` над `raw_data.direct_cookie_*`.
