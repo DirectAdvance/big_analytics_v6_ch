@@ -6,6 +6,7 @@ from step10_crop_targeting import step10
 from step10_crop_targeting.step10 import CROP_TYPES_SQL
 from step13_arrival.step13 import _calls_branch_columns, _calls_branch_sql, _leads_branch_sql
 from step3_build_sources.step3 import CROP_SOURCE_TYPES, _build_crop_sql_batched, _build_seo_sql
+from step3_build_sources.step3 import _leads_deduped_cte
 from step6_build_full.step6 import _calls_select
 
 
@@ -82,6 +83,14 @@ def test_crop_source_views_use_the_same_ba5_source_types():
     for source_type in CROP_SOURCE_TYPES:
         assert f"'{source_type}'" in CROP_TYPES_SQL
     assert SOURCE_VIEWS["big_analytics_crop_targeting"] == CROP_SOURCE_TYPES
+
+
+def test_step3_does_not_apply_lider_crmf_special_dedup():
+    sql = _leads_deduped_cte()
+
+    assert "lider_mauto_phones" not in sql
+    assert "source_type = 'crmf_excel'" not in sql
+    assert "salon = 'Лидер'" not in sql
 
 
 def test_step10a_rebuilds_crop_gate_without_full_overlay():

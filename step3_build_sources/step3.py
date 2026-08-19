@@ -653,38 +653,10 @@ crm_by_domain AS
 #    а не повторная выгрузка одного визита. Порт дословный (v5 step3.py:164-166),
 #    поведение v5 воспроизведено 1:1; менять форму ключа здесь без сверки с v5
 #    нельзя — это разъедет приезды между контурами.
-#
-# 3. Дедуп «Лидер» crmf → mauto (порт v5 corrections.py::run_dedup_crmf_lider).
-#    С 29.05.2026 салон «Лидер» переехал crmf → mauto; в период перехода один
-#    клиент попадал в обе CRM. У crmf-строк yclid пустой (замер: 138 из 200),
-#    поэтому штатный phone+yclid-дедуп их НЕ ловит — они уходят в ветку
-#    «phone или yclid пустой». v5 гасит их флагом `is_copy_for_removal` в
-#    raw_leads (в v6 флаг проставляет внешняя система, замер: 0 из 1 135 980),
-#    поэтому здесь тот же критерий выражен предикатом. Приоритет — mauto (новая
-#    CRM), исключается crmf-копия.
-#    ⚠️ Отличие от v5: v5 фильтрует флаг только в step13 (визитная ось), его
-#    step3 фильтра не имеет; в v6 обе оси читают ЭТОТ CTE, поэтому дубли уходят
-#    и с заявочной оси тоже. Замер: 200 строк, из них 0 продаж, 72 приезда.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Нормализованный телефон: только цифры, последние 10 (тот же паттерн, что v5).
 _PHONE_NORM_EXPR = "right(replaceRegexpAll(ifNull(phone, ''), '[^0-9]', ''), 10)"
-# Дата переезда салона «Лидер» с CRM crmf на mauto.
-_LIDER_DEDUP_DATE = "2026-05-29"
-_LIDER_SALON = "Лидер"
-
-
-def _lider_crmf_dup_filter() -> str:
-    """Предикат «строка НЕ является crmf-копией лида «Лидер», уехавшего в mauto»."""
-    return f"""
-    NOT (
-        source_type = 'crmf_excel'
-        AND salon = '{_LIDER_SALON}'
-        AND created_date >= toDate('{_LIDER_DEDUP_DATE}')
-        AND ifNull(phone, '') != ''
-        AND phone IN (SELECT phone FROM lider_mauto_phones)
-    )
-"""
 
 
 def _leads_deduped_cte() -> str:
@@ -713,21 +685,11 @@ sale_statuses AS
     FROM reference_data.crm_status_mapping
     WHERE category = 'sale'
       AND ifNull(status, '') != ''{_code_override_filter()}{_code_statuses_union_sql(("sale",))}),
-lider_mauto_phones AS
-(
-    SELECT DISTINCT phone
-    FROM ad_analytics.raw_leads
-    WHERE source_type = 'mauto_excel'
-      AND salon = '{_LIDER_SALON}'
-      AND created_date >= toDate('{_LIDER_DEDUP_DATE}')
-      AND ifNull(phone, '') != ''
-),
 all_leads AS
 (
     SELECT *
     FROM ad_analytics.raw_leads
     WHERE lowerUTF8(trim(ifNull(domain, ''))) NOT IN (SELECT domain FROM perform_domains)
-      AND {_lider_crmf_dup_filter().strip()}
     UNION ALL
     SELECT *
     FROM ad_analytics.raw_perform_leads
