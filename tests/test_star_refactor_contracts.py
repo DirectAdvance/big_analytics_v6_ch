@@ -219,6 +219,13 @@ def test_pbi_hash_keys_fit_powerbi_int64():
     )
 
 
+def test_bi_view_creation_does_not_count_heavy_views():
+    source = inspect.getsource(build_pbi_compat.create_bi_views)
+
+    assert "DESCRIBE TABLE" in source
+    assert "count_rows" not in source
+
+
 def test_feed_funnel_import_uses_global_pipeline_batches():
     source = inspect.getsource(build_pbi_compat.build_pbi_import_direct_feed_funnel)
 

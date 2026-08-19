@@ -1504,13 +1504,14 @@ def _pbi_view_select_sql(table: str) -> str:
     return f"SELECT * FROM ad_analytics.{q(table)}"
 
 
-def create_bi_views(client) -> dict[str, int]:
-    out: dict[str, int] = {}
+def create_bi_views(client) -> list[str]:
+    views: list[str] = []
     for table in PBI_SOURCE_OBJECTS:
         view_name = f"bi_{table}"
         _replace_view(client, view_name, _pbi_view_select_sql(table))
-        out[view_name] = count_rows(client, f"ad_analytics.{q(view_name)}")
-    return out
+        client.query(f"DESCRIBE TABLE ad_analytics.{q(view_name)}", settings=SAFE_QUERY_SETTINGS)
+        views.append(view_name)
+    return views
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
@@ -1528,8 +1529,9 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
         "Dim_Criterion": build_dim_criterion(client),
     }
     rows.update(create_light_aliases(client))
-    rows.update(create_bi_views(client))
+    bi_views = create_bi_views(client)
     details = ", ".join(f"{k}={v:,}" for k, v in rows.items())
+    details = f"{details}, bi_views_created={len(bi_views)}"
     log.info("build_pbi_compat v6_ch завершён за %.1f сек: %s", time.perf_counter() - t0, details)
     return {"rows": sum(rows.values()), "details": details}
 
