@@ -80,6 +80,23 @@ def test_build_fact_projects_new_dimension_keys_and_removes_duplicate_text_attrs
     assert "AS salon_key" in select_sql
 
 
+def test_build_fact_keeps_tp_for_pbi_domain_drilldown():
+    select_sql, target_cols = build_star.build_fact_projection(["Date", "tp", "тип_сайта"])
+
+    assert "tp" in target_cols
+    assert "`tp`" in select_sql
+    assert "тип_сайта" not in target_cols
+
+
+def test_pbi_full_exposes_tp_and_normalizes_claim_type():
+    sql = build_pbi_compat._pbi_full_sql()
+
+    assert "f.tp," in sql
+    assert "dcs.`тип_заявки` IS NULL" in sql
+    assert "dcs.`тип_заявки` IN ('Заявка', 'Из базы', 'Пиксель')" in sql
+    assert "'Заявки'" in sql
+
+
 def test_dim_build_can_target_one_dimension():
     assert "Dim_Site" in build_star.DIM_DDL
     assert "Dim_AdGroup" in build_star.DIM_DDL

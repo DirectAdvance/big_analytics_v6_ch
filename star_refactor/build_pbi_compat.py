@@ -138,12 +138,17 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             f.dobro,
             f.`атрибуция`,
             f.`AdGroupId` AS `AdGroupId`,
+            f.tp,
             multiIf(
                 f.source_key = 'пиксель', 'Пиксель',
                 f.source_key = 'pixel', 'Пиксель',
                 dsl.`направление`
             ) AS `направление`,
-            dcs.`тип_заявки`,
+            multiIf(
+                dcs.`тип_заявки` IS NULL OR dcs.`тип_заявки` = '' OR dcs.`тип_заявки` IN ('Заявка', 'Из базы', 'Пиксель'),
+                'Заявки',
+                dcs.`тип_заявки`
+            ) AS `тип_заявки`,
             dsl.`специалист`,
             dsl.`салон`,
             dsl.`город`,

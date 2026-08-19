@@ -42,7 +42,6 @@ FACT_BIG_DIMENSION_COLUMNS = {
     "AdGroupName",
     "RlAdjustmentId_total",
     "campaign_code",
-    "tp",
     "cpc_cpa",
     "site_quiz",
     "adgroup_code",
