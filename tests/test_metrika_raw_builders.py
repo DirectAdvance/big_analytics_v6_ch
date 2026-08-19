@@ -19,7 +19,7 @@ def test_direct_tracking_class_uses_v5_template_parts():
 def test_check_utm_builds_direct_group_audit_not_utm_visit_dump():
     source = inspect.getsource(metrika_raw_builders.build_check_utm)
 
-    assert "raw_data.direct_adgroups" in source
-    assert "raw_data.direct_campaigns" in source
+    assert "reference_data.direct_adgroups" in source
+    assert "reference_data.direct_campaigns" in source
     assert "raw_data.yandex_direct_report_rows" in source
     assert "raw_data.metrika_yandex_utm_daily" not in source

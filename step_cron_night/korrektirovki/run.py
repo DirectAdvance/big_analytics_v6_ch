@@ -21,7 +21,7 @@ WITH gs_login AS
     SELECT
         lower(ifNull(login_key, '')) AS login_key,
         anyLast(directologist) AS directologist
-    FROM raw_data.gsheet_sites
+    FROM reference_data.gsheet_sites
     WHERE ifNull(login_key, '') != ''
     GROUP BY login_key
 )

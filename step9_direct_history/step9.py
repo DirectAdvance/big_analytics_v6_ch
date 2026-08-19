@@ -16,12 +16,12 @@ logger = logging.getLogger("pipeline.step9")
 
 
 def prefetch_history(*args, **kwargs):  # noqa: ANN002, ANN003
-    logger.info("step9 v6_ch: prefetch_history skipped (raw_data.direct_campaigns is source)")
+    logger.info("step9 v6_ch: prefetch_history skipped (reference_data.direct_campaigns is source)")
     return None
 
 
 def run(conn=None, run_id: str | None = None, history_thread=None) -> dict:  # noqa: ARG001
-    logger.info("Шаг 9 v6_ch: yandex_direct_history из raw_data.direct_campaigns")
+    logger.info("Шаг 9 v6_ch: yandex_direct_history из reference_data.direct_campaigns")
     client = get_client()
     t0 = time.perf_counter()
     replace_view(
@@ -35,7 +35,7 @@ def run(conn=None, run_id: str | None = None, history_thread=None) -> dict:  # n
                 anyLast(directologist) AS directologist,
                 anyLast(domain) AS domain,
                 anyLast(salon) AS salon
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(login_key, '') != ''
             GROUP BY login_key
         )
@@ -52,7 +52,7 @@ def run(conn=None, run_id: str | None = None, history_thread=None) -> dict:  # n
             gs.domain AS domain,
             gs.salon AS salon,
             now() AS updated_at
-        FROM raw_data.direct_campaigns dc
+        FROM reference_data.direct_campaigns dc
         LEFT JOIN gs ON gs.login_key = lower(dc.account_login)
         """,
     )

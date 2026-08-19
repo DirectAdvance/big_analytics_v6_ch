@@ -587,7 +587,7 @@ def _stage3_adgroup_maps() -> str:
 
 
 def _naming_joins() -> str:
-    """7 LEFT JOIN к `raw_data.gsheet_naming` — по одному на ag_part1..7.
+    """7 LEFT JOIN к `reference_data.gsheet_naming` — по одному на ag_part1..7.
 
     ⚠️ Уникальность пары (type, code) в справочнике НЕ гарантирована ни ключом, ни
     проверкой: это гугл-таблица. Появится дубль — LEFT JOIN размножит строку витрины,
@@ -595,7 +595,7 @@ def _naming_joins() -> str:
     пересборки и уронит шаг (fail-closed). На 2026-08-06 дублей 0.
     """
     return "\n".join(
-        f"LEFT JOIN raw_data.gsheet_naming n{idx} "
+        f"LEFT JOIN reference_data.gsheet_naming n{idx} "
         f"ON n{idx}.type = 'ag_part{idx}' "
         f"AND lowerUTF8(splitByChar('_', ifNull(s.adgroup_code, ''))[{idx}]) = lowerUTF8(ifNull(n{idx}.code, ''))"
         for idx in range(1, 8)
@@ -672,7 +672,7 @@ salon_canon AS
     FROM
     (
         SELECT DISTINCT trim(salon) AS salon, {_word_sort_key('salon')} AS wkey
-        FROM raw_data.gsheet_sites
+        FROM reference_data.gsheet_sites
         WHERE ifNull(salon, '') != '' AND trim(salon) != ''
     )
     GROUP BY wkey
@@ -716,7 +716,7 @@ salon_city_region AS
         lowerUTF8(trim(ifNull(salon, ''))) AS salon_key,
         lowerUTF8(trim(ifNull(city, ''))) AS city_key,
         min(region) AS region_value
-    FROM raw_data.gsheet_sites
+    FROM reference_data.gsheet_sites
     WHERE ifNull(region, '') != '' AND ifNull(salon, '') != ''
     GROUP BY salon_key, city_key
 )"""
@@ -742,7 +742,7 @@ gs_specialist AS
                 ifNull(directologist, '') AS directologist,
                 ifNull(direction_main, '') AS direction_main,
                 if(trim(ifNull(directologist, '')) != '', 1, 0) AS has_dir
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(domain, '') != ''
         )
         GROUP BY domain_key

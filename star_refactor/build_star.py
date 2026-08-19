@@ -257,7 +257,7 @@ DIM_DDL = {
         # whenever a domain had >1 distinct fact-row `салон` (etc.) value, argMax
         # picked an ARBITRARY one (measured live: 414 domains with conflicting
         # `салон` values in fact rows). Replaced with two deterministic sources:
-        # domains covered by the master directory (raw_data.gsheet_sites) always
+        # domains covered by the master directory (reference_data.gsheet_sites) always
         # win via direct join/aggregation (no tie possible -- duplicates in
         # gsheet_sites are verified byte-identical, `any()` is safe); only domains
         # ABSENT from the master directory fall back to fact rows, tie-broken by
@@ -266,7 +266,7 @@ DIM_DDL = {
         # 2 below) -- instead of string length.
         #
         # DIM_SITE_COLUMN_AUTHORITY_FIX_2026-08-07 (director rework, patch 2 of
-        # the review): the directory (raw_data.gsheet_sites) is authoritative ONLY
+        # the review): the directory (reference_data.gsheet_sites) is authoritative ONLY
         # for the 9 attributes it uniquely owns -- салон/город/регион/тип_сайта/
         # шаблон/статус/проджект/менеджер/id_салона (CANON has no separate source
         # for these; the sheet IS the source). `направление`, `специалист` and
@@ -433,7 +433,7 @@ DIM_DDL = {
                             client_id AS salon_id,
                             sales_manager AS manager,
                             ifNull(crm, '') AS crm_name
-                        FROM raw_data.gsheet_sites
+                        FROM reference_data.gsheet_sites
                         WHERE ifNull(domain, '') != ''
                     )
                     GROUP BY site_key
@@ -489,7 +489,7 @@ DIM_DDL = {
                     WHERE ifNull(domain, '') != ''
                       AND lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, ''))) NOT IN (
                           SELECT DISTINCT lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))
-                          FROM raw_data.gsheet_sites
+                          FROM reference_data.gsheet_sites
                           WHERE ifNull(domain, '') != ''
                       )
                     GROUP BY site_key, domain, salon, city, region, site_type, template,
@@ -530,7 +530,7 @@ DIM_DDL = {
                     group_id AS AdGroupId,
                     argMax(group_name, synced_at) AS AdGroupName,
                     argMax(campaign_id, synced_at) AS parent_CampaignId
-                FROM raw_data.direct_adgroups
+                FROM reference_data.direct_adgroups
                 WHERE group_id != 0
                 GROUP BY AdGroupId
             ),
@@ -828,7 +828,7 @@ def build_dim_adgroup(client) -> int:
                     group_id AS AdGroupId,
                     argMax(group_name, synced_at) AS AdGroupName,
                     argMax(campaign_id, synced_at) AS parent_CampaignId
-                FROM raw_data.direct_adgroups
+                FROM reference_data.direct_adgroups
                 WHERE {raw_filter}
                 GROUP BY AdGroupId
             ),
@@ -1182,7 +1182,7 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
                 anyLast(region) AS `регион`,
                 anyLast(site_type) AS `тип_сайта`,
                 anyLast(directologist) AS `специалист`
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(salon, '') != ''
             GROUP BY salon_key
         )

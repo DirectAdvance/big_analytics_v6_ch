@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""02_status_mapping_ab_2026-08-05 — правки справочника `raw_data.crm_status_mapping`.
+"""02_status_mapping_ab_2026-08-05 — правки справочника `reference_data.crm_status_mapping`.
 
 Справочник статусов живёт ДАННЫМИ в ClickHouse, а не файлом в репозитории, поэтому
 обе правки оформлены здесь — воспроизводимо и обратимо одной операцией.
@@ -10,7 +10,7 @@
   ... --apply --only=A|B  /  --rollback --only=A|B                   # по одной правке
 
 ⛔ СТАТУС 2026-08-06 — обе ветки НЕ ПРИМЕНЕНЫ и применять их НЕ требуется.
-   У роли пайплайна только `SELECT ON raw_data.*`, `--apply` падает `ACCESS_DENIED`,
+   У роли пайплайна только `SELECT ON reference_data.*`, `--apply` падает `ACCESS_DENIED`,
    GRANT на запись выдавать не будут. Обе правки перенесены В КОД:
    `step3_build_sources/step3.py::CODE_STATUS_CATEGORY` (маркер
    CODE_STATUS_CATEGORY_2026-08-06) задаёт категории для пар (crm, status) поверх
@@ -29,7 +29,7 @@
 ПРАВКА A — маркер MARCAR_GSHEET_STATUS_2026-08-05
   Добавляет 3 строки `marcar`: «Продажа»→sale, «Дошел в КО»→visit, «Одобрение»→visit.
   Зачем: `step1_load_raw/step1.py` (тот же маркер) проставляет эти статусы лидам
-  Маркара по `raw_data.gsheet_priezdi_marcar` — порт v5 `_patch_marcar_statuses()`.
+  Маркара по `reference_data.gsheet_priezdi_marcar` — порт v5 `_patch_marcar_statuses()`.
   Без строк в справочнике патч статусов не даёт воронки: в CH-маппинге нет
   general-ветки (`crm_name='default'`), которая в v5 покрывала все CRM сразу.
   Откат: DELETE ровно этих 3 троек (строка `marcar`/«Приехал»/visit — не наша, не трогаем).
@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 
-TABLE = "raw_data.crm_status_mapping"
+TABLE = "reference_data.crm_status_mapping"
 
 MARCAR_ROWS = [
     ("marcar", "", "Продажа", "", "sale"),

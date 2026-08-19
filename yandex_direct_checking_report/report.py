@@ -6,7 +6,7 @@ yandex_direct_checking_report/report.py — независимый отчёт с
     `ad_analytics_bi` (Victory VPS). Расходы по аккаунтам, помесячно, с НДС.
 
 Источник аккаунтов:
-    raw_data.gsheet_sites
+    reference_data.gsheet_sites
       WHERE status='Контекст активно' AND direction='Авто'
       AND login_key IS NOT NULL AND login_key != ''
 
@@ -113,7 +113,7 @@ def _load_report_rows(date_from: str, date_to: str) -> tuple[list[tuple], int]:
         FROM
         (
             SELECT DISTINCT lowerUTF8(trim(login_key)) AS login
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE status = 'Контекст активно'
               AND direction = 'Авто'
               AND ifNull(login_key, '') != ''
@@ -127,7 +127,7 @@ def _load_report_rows(date_from: str, date_to: str) -> tuple[list[tuple], int]:
             SELECT
                 lowerUTF8(trim(login_key)) AS login,
                 anyLast(nullIf(ifNull(domain, ''), '')) AS domain
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE status = 'Контекст активно'
               AND direction = 'Авто'
               AND ifNull(login_key, '') != ''

@@ -28,7 +28,7 @@ LEADS_DEDUPED_STAGE = "_step3_leads_deduped"
 DIRECT_SOURCE_TYPES = ("direct", "tp8", "tp9", "tp10")
 CROP_SOURCE_TYPES = ("crop_targeting", "telegram", "social_посевы", "vk_ads", "vk_zero", "vk_perform")
 
-# source_type (raw_leads/raw_calls/raw_perform_leads) -> ключ `crm` в raw_data.crm_status_mapping.
+# source_type (raw_leads/raw_calls/raw_perform_leads) -> ключ `crm` в reference_data.crm_status_mapping.
 # Сверено с живой БД 2026-08-05: raw_leads / raw_data.leads_all / raw_calls дают базовые
 # source_type, crm_status_mapping — 8 значений crm. Маркер: CRM_MAP_RIVENDELL_2026-08-05.
 CRM_BY_SOURCE_TYPE = {
@@ -120,7 +120,7 @@ def _crm_key(source_type: str) -> str:
 
 
 def _crm_expr(source_type_expr: str) -> str:
-    """SQL-выражение source_type -> ключ `crm` в raw_data.crm_status_mapping.
+    """SQL-выражение source_type -> ключ `crm` в reference_data.crm_status_mapping.
 
     Фолбэк — снятие суффикса, НЕ self-map: `else source_type` возвращал ключ вида
     `rivendell_excel`, которого в crm_status_mapping нет, и вся воронка такой CRM
@@ -138,7 +138,7 @@ def check_crm_mapping_coverage(client) -> list[str]:
     """Громко сообщить про source_type, чей ключ отсутствует в crm_status_mapping.
 
     Не роняет шаг: неизвестная CRM не должна останавливать pipeline. Но и молчать
-    нельзя — ключ без строк в raw_data.crm_status_mapping обнуляет ВСЮ воронку
+    нельзя — ключ без строк в reference_data.crm_status_mapping обнуляет ВСЮ воронку
     (korr/kval/priezd/prodazhi) этих строк.
     """
     problems: list[str] = []
@@ -159,7 +159,7 @@ def check_crm_mapping_coverage(client) -> list[str]:
         ).result_rows
         mapped = {
             str(row[0])
-            for row in client.query("SELECT DISTINCT crm FROM raw_data.crm_status_mapping").result_rows
+            for row in client.query("SELECT DISTINCT crm FROM reference_data.crm_status_mapping").result_rows
         }
     except Exception as exc:  # проверка не обязана ронять шаг
         logger.warning("  CRM mapping coverage check пропущен: %s", exc)
@@ -179,7 +179,7 @@ def check_crm_mapping_coverage(client) -> list[str]:
         if crm not in mapped:
             problems.append(f"{source_type}->{crm}:{int(n)}")
             logger.error(
-                "  CRM mapping: source_type=%r -> crm=%r ОТСУТСТВУЕТ в raw_data.crm_status_mapping "
+                "  CRM mapping: source_type=%r -> crm=%r ОТСУТСТВУЕТ в reference_data.crm_status_mapping "
                 "— воронка (korr/kval/priezd/prodazhi) обнулится для %s строк",
                 source_type,
                 crm,
@@ -193,7 +193,7 @@ def check_crm_mapping_coverage(client) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 # CODE_STATUS_CATEGORY_2026-08-06 — категории статусов, заданные КОДОМ
 # ------------------------------------------------------------------------------
-# `raw_data.crm_status_mapping` — чужая таблица: у роли пайплайна только
+# `reference_data.crm_status_mapping` — чужая таблица: у роли пайплайна только
 # `SELECT ON raw_data.*`, GRANT на запись не выдаётся (миграция
 # `migrations/02_status_mapping_ab_2026-08-05.py` падала `ACCESS_DENIED`).
 # Поэтому категории, которые нельзя вписать строкой в справочник, объявляются
@@ -210,7 +210,7 @@ def check_crm_mapping_coverage(client) -> list[str]:
 #
 #   A. MARCAR_GSHEET_STATUS_2026-08-05 — парная половина патча статусов Маркара.
 #      `step1_load_raw/step1.py` проставляет лидам Маркара статусы из
-#      `MARCAR_STATUS_PRIORITY` по `raw_data.gsheet_priezdi_marcar`; в справочнике
+#      `MARCAR_STATUS_PRIORITY` по `reference_data.gsheet_priezdi_marcar`; в справочнике
 #      из этих четырёх есть только «Приехал», а общей ветки (v5 `crm_name='default'`)
 #      в CH-справочнике нет — без пары патч молча обнуляет воронку (priezd ≈ −646,
 #      prodazhi −6). Категории сверены с v5 `local_crm_statuses` (замер 2026-08-06):
@@ -247,7 +247,7 @@ CODE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
 }
 
 # PERFORM_STATUS_PARITY_2026-08-14: сайт/v5 считает perform_api по default-ветке
-# local_crm_statuses, а не по неполному raw_data.crm_status_mapping.crm='rivendell'.
+# local_crm_statuses, а не по неполному reference_data.crm_status_mapping.crm='rivendell'.
 # В ClickHouse default-CRM нет, поэтому задаём source_type-specific override только
 # для perform_api, не меняя реальные rivendell_excel строки.
 CODE_SOURCE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
@@ -323,7 +323,7 @@ def check_code_status_categories(client) -> None:
     """CODE_STATUS_CATEGORY_2026-08-06 — fail-fast на «статус проставляется, а категории нет».
 
     Раньше (MARCAR_STATUS_GUARD_2026-08-05) гард проверял наличие строк в
-    `raw_data.crm_status_mapping` и ронял шаг, пока не применена миграция A. Прав
+    `reference_data.crm_status_mapping` и ронял шаг, пока не применена миграция A. Прав
     на запись в справочник нет и не будет, источник истины для этих статусов —
     `CODE_STATUS_CATEGORY`, поэтому проверяется покрытие КОДОМ:
 
@@ -406,7 +406,7 @@ def check_code_status_categories(client) -> None:
         rows = client.query(
             f"""
             SELECT crm, status, arraySort(groupUniqArray(category)) AS categories
-            FROM raw_data.crm_status_mapping
+            FROM reference_data.crm_status_mapping
             WHERE (crm, status) IN ({_code_pairs_sql(pairs)})
             GROUP BY crm, status
             """
@@ -473,19 +473,19 @@ def _category_match_expr(
     return f"""
     (
         ({crm}, {status}) IN (
-            SELECT crm, status FROM raw_data.crm_status_mapping
+            SELECT crm, status FROM reference_data.crm_status_mapping
             WHERE category IN ({cats_sql}) AND reason = '' AND salon = ''{override}
         )
         OR ({crm}, {status}, {reason}) IN (
-            SELECT crm, status, lower(reason) FROM raw_data.crm_status_mapping
+            SELECT crm, status, lower(reason) FROM reference_data.crm_status_mapping
             WHERE category IN ({cats_sql}) AND reason != '' AND salon = ''{override}
         )
         OR ({crm}, {salon}, {status}) IN (
-            SELECT crm, lower(salon), status FROM raw_data.crm_status_mapping
+            SELECT crm, lower(salon), status FROM reference_data.crm_status_mapping
             WHERE category IN ({cats_sql}) AND reason = '' AND salon != ''{override}
         )
         OR ({crm}, {salon}, {status}, {reason}) IN (
-            SELECT crm, lower(salon), status, lower(reason) FROM raw_data.crm_status_mapping
+            SELECT crm, lower(salon), status, lower(reason) FROM reference_data.crm_status_mapping
             WHERE category IN ({cats_sql}) AND reason != '' AND salon != ''{override}
         )
         {code_branch}
@@ -536,11 +536,11 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     toDecimal64(if({status} = 'Недозвон', 1, 0), 6) AS nedozvon,
     toDecimal64(if({status} = 'Приедет', 1, 0), 6) AS priedet,
     toInt64(if(({crm}, {reason}) IN (
-        SELECT crm, lower(reason) FROM raw_data.crm_status_mapping
+        SELECT crm, lower(reason) FROM reference_data.crm_status_mapping
         WHERE category IN ('credit', 'approved') AND ifNull(reason, '') != ''
     ), 1, 0)) AS dohod_do_kredita,
     toInt64(if(({crm}, {reason}) IN (
-        SELECT crm, lower(reason) FROM raw_data.crm_status_mapping
+        SELECT crm, lower(reason) FROM reference_data.crm_status_mapping
         WHERE category = 'approved' AND ifNull(reason, '') != ''
     ), 1, 0)) AS dobro
 """
@@ -568,7 +568,7 @@ gs_account AS
     FROM
     (
         SELECT *, lower(ifNull(login_key, '')) AS login_key_norm
-        FROM raw_data.gsheet_sites
+        FROM reference_data.gsheet_sites
         WHERE ifNull(login_key, '') != ''
     )
     GROUP BY login_key_norm
@@ -594,7 +594,7 @@ gs_domain AS
     FROM
     (
         SELECT *, lower(trim(ifNull(domain, ''))) AS domain_key_norm
-        FROM raw_data.gsheet_sites
+        FROM reference_data.gsheet_sites
         WHERE ifNull(domain, '') != ''
     )
     GROUP BY domain_key_norm
@@ -693,7 +693,7 @@ def _leads_deduped_cte() -> str:
 perform_domains AS
 (
     SELECT lowerUTF8(trim(ifNull(domain, ''))) AS domain
-    FROM raw_data.gsheet_sites
+    FROM reference_data.gsheet_sites
     WHERE client_id = 'avto_0415'
       AND ifNull(domain, '') != ''
 ),
@@ -704,13 +704,13 @@ perform_domains AS
 priezd_statuses AS
 (
     SELECT DISTINCT status
-    FROM raw_data.crm_status_mapping
+    FROM reference_data.crm_status_mapping
     WHERE category IN ('visit', 'sale', 'credit', 'approved')
       AND ifNull(status, '') != ''{_code_override_filter()}{_code_statuses_union_sql(("visit", "sale", "credit", "approved"))}),
 sale_statuses AS
 (
     SELECT DISTINCT status
-    FROM raw_data.crm_status_mapping
+    FROM reference_data.crm_status_mapping
     WHERE category = 'sale'
       AND ifNull(status, '') != ''{_code_override_filter()}{_code_statuses_union_sql(("sale",))}),
 lider_mauto_phones AS
@@ -902,7 +902,7 @@ posev_active_domains AS
 posev_repaint_domains AS
 (
     SELECT DISTINCT lower(trim(ifNull(gs.domain, ''))) AS domain_key
-    FROM raw_data.gsheet_sites gs
+    FROM reference_data.gsheet_sites gs
     WHERE gs.direction_main = 'Посевы'
       AND ifNull(gs.domain, '') != ''
       AND lower(trim(ifNull(gs.domain, ''))) IN (SELECT domain_key FROM posev_active_domains)
@@ -1071,7 +1071,7 @@ gs_best AS
             SELECT DISTINCT account_login AS login_key, `Date` AS date_val
             FROM yd
         ) ud
-        LEFT JOIN raw_data.gsheet_sites gs
+        LEFT JOIN reference_data.gsheet_sites gs
           ON lower(trim(ifNull(gs.login_key, ''))) = ud.login_key
     )
     WHERE rn = 1
@@ -1363,7 +1363,7 @@ gs_domain_best AS
             FROM lead_scored
             WHERE domain_key != ''
         ) ld
-        LEFT JOIN raw_data.gsheet_sites gs
+        LEFT JOIN reference_data.gsheet_sites gs
           ON lower(trim(ifNull(gs.domain, ''))) = ld.domain_key
     )
     WHERE rn = 1
@@ -1457,7 +1457,7 @@ def _build_seo_sql(lead_date_filter: str = "") -> str:
 )
 AND lowerUTF8(trim(ifNull(domain, ''))) IN (
     SELECT lowerUTF8(trim(ifNull(gs2.domain, '')))
-    FROM raw_data.gsheet_sites gs2
+    FROM reference_data.gsheet_sites gs2
     WHERE ifNull(gs2.domain, '') != ''
 )
 """
@@ -2023,7 +2023,7 @@ perform_vk_site AS
     SELECT
         lowerUTF8(trim(ifNull(domain, ''))) AS domain,
         login_key
-    FROM raw_data.gsheet_sites
+    FROM reference_data.gsheet_sites
     WHERE client_id = 'avto_0415'
       AND niche = 'Авто'
       AND ifNull(domain, '') != ''

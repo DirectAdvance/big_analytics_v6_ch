@@ -92,8 +92,8 @@ OR prodazhi>0` и обнуляла только Impressions/Clicks/total_cost. `
 
 Зависимости (IN):  ad_analytics.raw_leads, ad_analytics.raw_calls,
                    ad_analytics.big_analytics_full, ad_analytics.local_pixel_config,
-                   ad_analytics.raw_yandex, raw_data.leads_all, raw_data.gsheet_sites,
-                   raw_data.gsheet_priezdi_marcar, raw_data.crm_status_mapping
+                   ad_analytics.raw_yandex, raw_data.leads_all, reference_data.gsheet_sites,
+                   reference_data.gsheet_priezdi_marcar, reference_data.crm_status_mapping
 Выход (OUT):       ad_analytics.big_analytics_full_arrival
 """
 
@@ -190,7 +190,7 @@ marcar_arrivals AS
             lower(trim(ifNull(source, ''))) AS sheet_domain,
             ifNull(status, '') AS status,
             {_MARCAR_PRIO} AS prio
-        FROM raw_data.gsheet_priezdi_marcar
+        FROM reference_data.gsheet_priezdi_marcar
         WHERE match(ifNull(link, ''), '^https?://.+/[0-9]+$')
           AND match(trim(ifNull(date, '')), '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$')
           AND toDate(parseDateTimeBestEffortOrNull(trim(ifNull(date, '')))) IS NOT NULL
@@ -269,7 +269,7 @@ def _auto_domains_filter(domain_expr: str) -> str:
     return f"""
 lower(trim(ifNull({domain_expr}, ''))) IN (
     SELECT lower(trim(ifNull(domain, '')))
-    FROM raw_data.gsheet_sites
+    FROM reference_data.gsheet_sites
     WHERE direction = 'Авто' AND ifNull(domain, '') != ''
 )
 """
@@ -798,7 +798,7 @@ marcar_sheet_rows AS
         lower(trim(ifNull(source, ''))) AS sheet_domain,
         ifNull(status, '') AS lead_status,
         {_MARCAR_PRIO} AS prio
-    FROM raw_data.gsheet_priezdi_marcar
+    FROM reference_data.gsheet_priezdi_marcar
     WHERE match(ifNull(link, ''), '^https?://.+/[0-9]+$')
       AND match(trim(ifNull(date, '')), '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$')
       AND toDate(parseDateTimeBestEffortOrNull(trim(ifNull(date, '')))) IS NOT NULL
@@ -985,7 +985,7 @@ pixel_pool AS
       AND ifNull(l.utm_source, '') != ''
       AND lower(trim(ifNull(l.utm_source, ''))) IN (
           SELECT lower(trim(ifNull(domain, '')))
-          FROM raw_data.gsheet_sites
+          FROM reference_data.gsheet_sites
           WHERE ifNull(domain, '') != ''
       )
 ),

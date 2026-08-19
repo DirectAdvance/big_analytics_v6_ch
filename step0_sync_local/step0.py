@@ -14,15 +14,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_settings import CH_RAW_DB, RAW_SOURCE_TABLES
+from config.ch_settings import RAW_SOURCE_TABLES
 from config.ch_utils import SAFE_QUERY_SETTINGS, table_exists
 
 logger = logging.getLogger("pipeline.step0")
 
 
 RAW_REQUIRED_EXTRA = {
-    "direct_campaigns": "raw_data.direct_campaigns",
-    "gsheet_sites": "raw_data.gsheet_sites",
+    "direct_campaigns": "reference_data.direct_campaigns",
+    "gsheet_sites": "reference_data.gsheet_sites",
     "telega_in_orders": "raw_data.telega_in_orders",
     "vk_ads_stats_day": "raw_data.vk_ads_stats_day",
     "yandex_direct_korrektirovki": "raw_data.yandex_direct_korrektirovki",

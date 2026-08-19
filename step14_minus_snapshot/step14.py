@@ -426,17 +426,17 @@ def load_specialist_map(client) -> dict[str, str]:
         SELECT
             login_key,
             min(directologist) AS specialist
-        FROM raw_data.gsheet_sites
+        FROM reference_data.gsheet_sites
         WHERE login_key IS NOT NULL
           AND length(trim(BOTH ' ' FROM login_key)) > 3
-          AND raw_data.gsheet_sites.directologist IS NOT NULL
-          AND raw_data.gsheet_sites.directologist != ''
+          AND reference_data.gsheet_sites.directologist IS NOT NULL
+          AND reference_data.gsheet_sites.directologist != ''
         GROUP BY login_key
         """,
         settings=SAFE_QUERY_SETTINGS,
     ).result_rows
     result = {str(login_key): str(specialist) for login_key, specialist in rows}
-    logger.info("Справочник специалистов: %d логинов из raw_data.gsheet_sites", len(result))
+    logger.info("Справочник специалистов: %d логинов из reference_data.gsheet_sites", len(result))
     return result
 
 
@@ -447,7 +447,7 @@ def load_candidate_logins(client, blocks: list[str]) -> set[str]:
     rows = client.query(
         """
         SELECT DISTINCT account_login
-        FROM raw_data.direct_campaigns
+        FROM reference_data.direct_campaigns
         WHERE account_login IS NOT NULL
           AND account_login != ''
           AND arrayExists(
@@ -459,7 +459,7 @@ def load_candidate_logins(client, blocks: list[str]) -> set[str]:
         settings=SAFE_QUERY_SETTINGS,
     ).result_rows
     result = {str(row[0]) for row in rows}
-    logger.info("Кандидатов step14 по raw_data.direct_campaigns blocks=%s: %d", filters, len(result))
+    logger.info("Кандидатов step14 по reference_data.direct_campaigns blocks=%s: %d", filters, len(result))
     return result
 
 

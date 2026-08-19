@@ -447,7 +447,7 @@ def _rebuild_telega_lead_fact(client) -> int:
                 anyLast(template) AS template,
                 anyLast(region) AS region,
                 anyLast(direction) AS direction
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
         )
@@ -534,7 +534,7 @@ def _rebuild_telega_errors(client) -> int:
                 anyLast(salon) AS salon,
                 anyLast(city) AS city,
                 anyLast(region) AS region
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
         ),
@@ -647,7 +647,7 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
                 anyLast(site_type) AS site_type,
                 anyLast(city) AS city,
                 anyLast(region) AS region
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(salon, '') != ''
             GROUP BY salon_key
         ),
@@ -659,7 +659,7 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
                 anyLast(city) AS city,
                 anyLast(region) AS region,
                 anyLast(login_key) AS login_key
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
         )
@@ -755,7 +755,7 @@ def _insert_crop_api_costs(client, target: str) -> None:
                 anyLast(project_manager) AS project_manager,
                 anyLast(sales_manager) AS sales_manager,
                 anyLast(client_id) AS client_id
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(salon, '') != ''
             GROUP BY salon_key
         )

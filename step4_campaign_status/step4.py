@@ -17,12 +17,12 @@ logger = logging.getLogger("pipeline.step4")
 
 def prefetch_statuses(*args, **kwargs):  # noqa: ANN002, ANN003
     """Compatibility hook for v5 orchestrators; v6 reads raw_data directly."""
-    logger.info("step4 v6_ch: prefetch_statuses skipped (raw_data.direct_campaigns is source)")
+    logger.info("step4 v6_ch: prefetch_statuses skipped (reference_data.direct_campaigns is source)")
     return None
 
 
 def run(conn=None, run_id: str | None = None, prefetch_thread=None) -> dict:  # noqa: ARG001
-    logger.info("Шаг 4 v6_ch: campaign_status VIEW из raw_data.direct_campaigns")
+    logger.info("Шаг 4 v6_ch: campaign_status VIEW из reference_data.direct_campaigns")
     client = get_client()
     t0 = time.perf_counter()
 
@@ -51,7 +51,7 @@ def run(conn=None, run_id: str | None = None, prefetch_thread=None) -> dict:  # 
             ) AS campaign_status,
             payment_model,
             now() AS _version
-        FROM raw_data.direct_campaigns
+        FROM reference_data.direct_campaigns
         """,
         settings=SAFE_QUERY_SETTINGS,
     )

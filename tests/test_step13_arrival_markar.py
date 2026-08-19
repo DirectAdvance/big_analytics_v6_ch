@@ -31,7 +31,7 @@ def test_marcar_orphans_branch_adds_unmatched_gsheet_rows_by_source_domain():
     sql = step13._marcar_orphan_branch_sql("2026-01-01")
 
     assert "MARCAR_GSHEET_ORPHANS_2026-08-13" in sql
-    assert "raw_data.gsheet_priezdi_marcar" in sql
+    assert "reference_data.gsheet_priezdi_marcar" in sql
     assert "raw_data.leads_all" in sql
     assert "source_type = 'marcar_crm_excel'" in sql
     assert "gs.domain_key = ms.sheet_domain" in sql

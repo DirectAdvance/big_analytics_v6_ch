@@ -22,7 +22,7 @@ step10/step11 и до step12/step13, чтобы `big_analytics_full_arrival` и 
 Там специалист берётся из gsheet ТОЛЬКО внутри окна `launch_date … block_date`
 сайта. У `probeg-cars.ru` окно 07.10.2025–20.10.2025, у `autocenter93.ru` —
 09.09.2025–25.09.2025; звонки от 2026-06-09 и 2026-07-22 в окна не попадают, и
-`специалист` остаётся пустым, хотя `directologist` в `raw_data.gsheet_sites` у
+`специалист` остаётся пустым, хотя `directologist` в `reference_data.gsheet_sites` у
 обоих доменов заполнен. Снимать окно в step3 вслепую нельзя: выражение общее для
 заявочной, визитной и пиксельной осей и работает ДО `corrections`, где правило 1
 перекладывает расход по специалисту. Этот проход идёт ПОСЛЕ всех правил, матчит
@@ -30,7 +30,7 @@ step10/step11 и до step12/step13, чтобы `big_analytics_full_arrival` и 
 
 Каскад (v5-паритет)
 -------------------
-1. `directologist` из `raw_data.gsheet_sites` по домену (реальный специалист);
+1. `directologist` из `reference_data.gsheet_sites` по домену (реальный специалист);
 2. `direction_main` оттуда же (канал: SEO / Контекст / Посевы / …);
 3. `'Звонки'` — для `campaign_code = 'звонки'` или фактических `_source_table='calls'`
    без связки в gsheet;

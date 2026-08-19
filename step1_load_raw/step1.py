@@ -81,7 +81,7 @@ def _excluded_domain_filter_sql(domain_expr: str) -> str:
 # Результат для всех последующих шагов идентичен v5 — status у лида Маркара уже
 # патченый ещё до step3 (`_step3_leads_deduped`), до дедупликации и до воронки.
 #
-# Механика: в `raw_data.gsheet_priezdi_marcar` лежит ссылка на карточку CRM
+# Механика: в `reference_data.gsheet_priezdi_marcar` лежит ссылка на карточку CRM
 # (`.../crm.marcar.ru/.../<id>`); хвост после последнего `/` == `leads_all.source_record_id`.
 # Патч НЕ перезаписывает статус «вниз» по воронке: применяется, только если
 # приоритет gsheet-статуса СТРОГО выше приоритета текущего CRM-статуса
@@ -160,7 +160,7 @@ FROM
         replaceRegexpOne(ifNull(link, ''), '^.+/', '') AS lead_record_id,
         ifNull(status, '') AS status,
         {_marcar_priority_expr("ifNull(status, '')")} AS prio
-    FROM raw_data.gsheet_priezdi_marcar
+    FROM reference_data.gsheet_priezdi_marcar
     WHERE ifNull(link, '') LIKE '%crm.marcar.ru%'
       AND match(ifNull(link, ''), '^https?://.+/[0-9]+$')
       AND ifNull(status, '') IN ({statuses_in})
@@ -458,7 +458,7 @@ SELECT
         toString(ifNull(l.correction_id, 0))
     ))) AS key3_arrival_date
 FROM {source} AS l
-LEFT JOIN raw_data.domains AS d ON d.id = l.domain_id
+LEFT JOIN reference_data.domains AS d ON d.id = l.domain_id
 {_marcar_join_sql("l")}
 WHERE l.deal_type != 'Звонок'
   -- EXCLUDED_DOMAIN_NAMES_2026-08-06: матч по ИМЕНИ домена (d.domain, уже заджойнен выше),
@@ -524,7 +524,7 @@ SELECT
     l.utm_medium,
     l.utm_campaign
 FROM {source} AS l
-LEFT JOIN raw_data.domains AS d ON d.id = l.domain_id
+LEFT JOIN reference_data.domains AS d ON d.id = l.domain_id
 {_marcar_join_sql("l")}
 WHERE l.deal_type = 'Звонок'
   AND l.domain_id IS NOT NULL
@@ -543,7 +543,7 @@ SELECT
     counter_name,
     metrika_synced_at,
     created_at
-FROM raw_data.domains
+FROM reference_data.domains
 """
 
 
@@ -571,7 +571,7 @@ crm_status_ranked AS
     SELECT
         status,
         argMin(category, multiIf(crm IN ('crmf', 'mauto'), 1, crm IN ('', 'default'), 2, 3)) AS category
-    FROM raw_data.crm_status_mapping
+    FROM reference_data.crm_status_mapping
     WHERE ifNull(status, '') != ''
       AND ifNull(salon, '') = ''
     GROUP BY status
@@ -579,7 +579,7 @@ crm_status_ranked AS
 sale_statuses AS
 (
     SELECT DISTINCT status
-    FROM raw_data.crm_status_mapping
+    FROM reference_data.crm_status_mapping
     WHERE category = 'sale'
       AND ifNull(status, '') != ''
       AND ifNull(salon, '') = ''
@@ -709,7 +709,7 @@ FROM
             {phone_norm_pl} AS _phone_norm,
             if({status_expr} IN (SELECT status FROM sale_statuses), 1, 0) AS _is_sale
         FROM raw_data.perform_leads AS pl
-        LEFT JOIN raw_data.domains AS d ON lowerUTF8(trim(d.domain)) = lowerUTF8(trim(pl.domain))
+        LEFT JOIN reference_data.domains AS d ON lowerUTF8(trim(d.domain)) = lowerUTF8(trim(pl.domain))
         LEFT JOIN matched AS m ON m.phone_norm = {phone_norm_pl}
         WHERE (pl.deal_type IS NULL OR pl.deal_type != 'Звонок')
           AND {phone_norm_pl} NOT IN (SELECT phone_norm FROM perform_vk_phones)
@@ -747,7 +747,7 @@ FROM raw_data.leads_all AS l
 CROSS JOIN
 (
     SELECT id, domain
-    FROM raw_data.domains
+    FROM reference_data.domains
     WHERE domain = 'cars-rus.ru'
     LIMIT 1
 ) AS d_perf

@@ -115,7 +115,7 @@ _POSEV_CALL_DOMAIN_SQL = f"""
 def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
     """Calls branch of `big_analytics_full` for the [lo, hi) day window.
 
-    `crop=False` (обычные звонки) — домен ОБЯЗАН матчиться в `raw_data.gsheet_sites` со
+    `crop=False` (обычные звонки) — домен ОБЯЗАН матчиться в `reference_data.gsheet_sites` со
     строгим `direction='Авто'` (BUG1_CALLS_DOMAIN_MATCH_2026-08-06: было `ifNull(gs.direction,
     'Авто')='Авто'` — звонок БЕЗ матча в справочнике проходил фильтр, мирроря-инвертируя v5
     step6.py:239-240 `gs."domain" IS NOT NULL AND gs."direction"='Авто'`) И домен НЕ входит в
@@ -182,7 +182,7 @@ gs_domain_best AS
               AND created_date < toDate('{hi}')
               AND lower(trim(ifNull(domain, ''))) != ''
         ) cd
-        LEFT JOIN raw_data.gsheet_sites gs
+        LEFT JOIN reference_data.gsheet_sites gs
           ON lower(trim(ifNull(gs.domain, ''))) = cd.domain_key
     )
     WHERE rn = 1

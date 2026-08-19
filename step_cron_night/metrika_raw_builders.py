@@ -46,7 +46,7 @@ def build_metrika_yandex(client=None) -> int:
                 anyLastIf(goal_id, name = 'CRM: Спам заказ') AS crm_spam_order,
                 anyLastIf(goal_id, name = 'CRM: Заказ отменен') AS crm_order_canceled,
                 max(synced_at) AS goals_synced_at
-            FROM raw_data.metrika_yandex_goals
+            FROM reference_data.metrika_yandex_goals
             GROUP BY counter_id
         ),
         counters AS
@@ -61,7 +61,7 @@ def build_metrika_yandex(client=None) -> int:
             FROM
             (
                 SELECT *, lowerUTF8(trim(ifNull(domain, ''))) AS domain_key
-                FROM raw_data.metrika_yandex_counters
+                FROM reference_data.metrika_yandex_counters
             )
             GROUP BY counter_id, domain_key
         ),
@@ -77,7 +77,7 @@ def build_metrika_yandex(client=None) -> int:
             FROM
             (
                 SELECT *, lowerUTF8(trim(ifNull(domain, ''))) AS domain_key
-                FROM raw_data.gsheet_sites
+                FROM reference_data.gsheet_sites
                 WHERE ifNull(domain, '') != ''
             )
             GROUP BY domain_key
@@ -141,7 +141,7 @@ def build_404_errors(client=None) -> int:
                 anyLast(name) AS counter_name,
                 anyLast(site) AS site,
                 anyLast(domain) AS domain
-            FROM raw_data.metrika_yandex_counters
+            FROM reference_data.metrika_yandex_counters
             GROUP BY counter_id
         ),
         sites AS
@@ -149,7 +149,7 @@ def build_404_errors(client=None) -> int:
             SELECT
                 lowerUTF8(trim(ifNull(domain, ''))) AS domain_key,
                 anyLast(directologist) AS directologist
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
         )
@@ -242,7 +242,7 @@ def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | N
             SELECT
                 lowerUTF8(trim(ifNull(login_key, ''))) AS login,
                 anyLast(directologist) AS directologist
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE status = 'Контекст активно'
               AND ifNull(login_key, '') != ''
             GROUP BY login
@@ -274,7 +274,7 @@ def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | N
                 anyLast(group_name) AS group_name,
                 anyLast(tracking_params) AS tracking_params,
                 anyLast(status) AS status
-            FROM raw_data.direct_adgroups
+            FROM reference_data.direct_adgroups
             GROUP BY login, campaign_id, group_id
         ),
         campaigns AS
@@ -285,7 +285,7 @@ def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | N
                 anyLast(campaign_name) AS campaign_name,
                 anyLast(status) AS campaign_status,
                 anyLast(state) AS campaign_state
-            FROM raw_data.direct_campaigns
+            FROM reference_data.direct_campaigns
             GROUP BY login, campaign_id
         )
         SELECT

@@ -72,7 +72,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
                     toUInt64(0)
                 ) AS site_key
             FROM {STAGING_TABLE} y
-            LEFT JOIN raw_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(y.account_login)
+            LEFT JOIN reference_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(y.account_login)
             WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
             GROUP BY date, campaign_id, ad_group_id, ad_network_type_key, ad_format, account_login
             """,

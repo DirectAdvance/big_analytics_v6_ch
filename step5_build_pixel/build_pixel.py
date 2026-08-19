@@ -46,7 +46,7 @@ def _apply_pixel_costs(client) -> tuple[int, float]:
         valid_domains AS
         (
             SELECT DISTINCT lowerUTF8(trim(ifNull(domain, ''))) AS domain_key
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             WHERE ifNull(domain, '') != ''
         ),
         lead_scored AS

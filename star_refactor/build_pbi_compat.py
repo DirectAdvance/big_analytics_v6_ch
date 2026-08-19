@@ -801,7 +801,7 @@ def create_light_aliases(client) -> dict[str, int]:
                 SELECT
                     lower(ifNull(login_key, '')) AS login_key,
                     anyLast(directologist) AS directologist
-                FROM raw_data.gsheet_sites
+                FROM reference_data.gsheet_sites
                 WHERE ifNull(login_key, '') != ''
                 GROUP BY login_key
             )
@@ -1494,7 +1494,7 @@ def _direct_autorules_posevy_placement_links_sql() -> str:
             ON l.placement = r.placement
         LEFT JOIN (
             SELECT login_key, any(coalesce(city, '')) AS city
-            FROM raw_data.gsheet_sites
+            FROM reference_data.gsheet_sites
             GROUP BY login_key
         ) AS g ON g.login_key = r.client_login
         WHERE coalesce(l.placement_link, '') != ''

@@ -118,9 +118,9 @@ def test_dim_date_year_month_is_russian_month_name():
 def test_dim_adgroup_uses_narrow_raw_source_before_fact_fallback():
     sql = build_star.DIM_DDL["Dim_AdGroup"]
 
-    assert "raw_data.direct_adgroups" in sql
+    assert "reference_data.direct_adgroups" in sql
     assert "ad_analytics.big_analytics_unified" in sql
-    assert sql.index("raw_data.direct_adgroups") < sql.index("ad_analytics.big_analytics_unified")
+    assert sql.index("reference_data.direct_adgroups") < sql.index("ad_analytics.big_analytics_unified")
 
 
 def test_dim_site_uses_ba5_empty_crm_label():
