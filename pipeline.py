@@ -145,6 +145,26 @@ def run_step_isolated(run_id: str, step_num: int, module_path: str, label: str, 
     return run_step(client, run_id, step_num, module_path, label, verify_no_star=verify_no_star)
 
 
+def run_step10a_before_step6(client, run_id: str) -> bool:
+    logger.info("━" * 60)
+    logger.info("Шаг 10a: step10_crop_targeting.step10.run_crop_phase до step6")
+    t0 = time.perf_counter()
+    try:
+        mod = importlib.import_module("step10_crop_targeting.step10")
+        result = mod.run_crop_phase(client=client)
+        elapsed = time.perf_counter() - t0
+        rows = result.get("rows") if isinstance(result, dict) else None
+        details = result.get("details") if isinstance(result, dict) else None
+        log_step(client, run_id, "step10a", "OK", rows, elapsed, details)
+        logger.info("Шаг 10a OK за %.1f сек: %s", elapsed, details)
+        return True
+    except Exception as exc:
+        elapsed = time.perf_counter() - t0
+        log_step(client, run_id, "step10a", "FAIL", None, elapsed, str(exc))
+        logger.exception("Шаг 10a FAIL за %.1f сек", elapsed)
+        return False
+
+
 def selected_steps(
     from_step: int | None,
     only_step: int | None,
@@ -269,6 +289,9 @@ def main(argv: list[str] | None = None) -> int:
                 break
         if parallel_safe and step_num in PARALLEL_BACKGROUND_STEPS:
             continue
+        if step_num == 6 and not run_step10a_before_step6(client, run_id):
+            failed = True
+            break
         verify_no_star = bool(args.skip_heavy_pbi and label == "verify")
         ok = run_step(client, run_id, step_num, module_path, label, verify_no_star=verify_no_star)
         if not ok:

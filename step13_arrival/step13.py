@@ -122,7 +122,6 @@ from step3_build_sources.step3 import (
     _metric_expr,
     _weekday_expr,
 )
-from step6_build_full.step6 import _POSEV_ACTIVITY_DOMAIN_SUBQUERY
 
 logger = logging.getLogger("pipeline.step13")
 
@@ -623,6 +622,15 @@ def _calls_branch_sql(date_from: str) -> str:
 WITH
 {_gs_account_cte()},
 {_marcar_arrivals_cte()},
+posevy_calls_source_map AS
+(
+    SELECT DISTINCT
+        lower(trim(ifNull(domain, ''))) AS dom,
+        `Date` AS d
+    FROM ad_analytics.big_analytics_calls
+    WHERE _source_table = 'calls'
+      AND startsWith(`источник`, 'Посевы_')
+),
 call_visits AS
 (
     SELECT
@@ -643,8 +651,7 @@ call_visits AS
         coalesce(nullIf(gs_ma.client_id, ''), gs.client_id) AS `id_салона`,
         coalesce(nullIf(gs_ma.sales_manager, ''), gs.sales_manager) AS `менеджер`,
         multiIf(
-            coalesce(nullIf(gs_ma.direction_main, ''), gs.direction_main) = 'Посевы'
-            AND lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY}),
+            pcm.dom IS NOT NULL,
             'Посевы_Звонки',
             coalesce(nullIf(gs_ma.status, ''), gs.status) = 'SEO Flow',
             'SEO Flow',
@@ -680,6 +687,9 @@ call_visits AS
     LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(c.domain, '')))
     LEFT JOIN crm_by_domain crm
         ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), '')))
+    LEFT JOIN posevy_calls_source_map pcm
+        ON pcm.dom = lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), '')))
+       AND pcm.d = c.created_date
     WHERE c.created_date IS NOT NULL
       AND c.created_date >= toDate('{date_from}')
       AND ifNull(c.status, '') != ''

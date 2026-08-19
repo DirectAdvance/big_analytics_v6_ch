@@ -83,11 +83,33 @@ _CROP_DOMAIN_SUBQUERY = """
 
 _POSEV_ACTIVITY_DOMAIN_SUBQUERY = """
     SELECT DISTINCT lower(trim(ifNull(domain, '')))
+    FROM ad_analytics.{source_store}
+    WHERE ifNull(domain, '') != ''
+      AND _source_table IN ('crop_targeting', 'tp8', 'tp9', 'tp10')
+      AND ifNull(kol_vo_zayavok, 0) > 0
+    UNION DISTINCT
+    SELECT DISTINCT lower(trim(ifNull(domain, '')))
     FROM ad_analytics.big_analytics_crop_targeting
     WHERE ifNull(domain, '') != ''
       AND _source_table IN ('crop_targeting', 'tp8', 'tp9', 'tp10')
       AND ifNull(kol_vo_zayavok, 0) > 0
-"""
+""".format(source_store=SOURCE_STORE)
+
+_POSEV_MIXED_CALL_DOMAIN_SQL = f"""
+(
+    ifNull(gs.direction_main, '') = 'Посевы'
+    AND lower(trim(ifNull(c.domain, ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY})
+    AND NOT (
+        nullIf(trim(ifNull(gs.vk_client_id, '')), '') IS NOT NULL
+        AND ifNull(gs.direction, '') = 'Авто'
+    )
+)"""
+
+_POSEV_CALL_DOMAIN_SQL = f"""
+(
+    lower(trim(ifNull(c.domain, ''))) IN ({_CROP_DOMAIN_SUBQUERY})
+    OR {_POSEV_MIXED_CALL_DOMAIN_SQL}
+)"""
 
 
 def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
@@ -104,20 +126,11 @@ def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
     metrics = _metric_expr("c.status", "c.reason", "c.source_type", "gs.salon")
     specialist_expr = specialist_correction_expr("c.created_date", "gs.login_key", _domain_specialist_expr("gs"))
     if crop:
-        domain_filter = (
-            "ifNull(gs.direction_main, '') = 'Посевы'\n"
-            f"  AND lower(trim(ifNull(c.domain, ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY})"
-        )
+        domain_filter = _POSEV_CALL_DOMAIN_SQL
         istochnik_sql = "'Посевы_Звонки'"
         napravlenie_sql = "'Комплекс'"
     else:
-        domain_filter = (
-            "gs.direction = 'Авто'\n"
-            "  AND NOT (\n"
-            "      ifNull(gs.direction_main, '') = 'Посевы'\n"
-            f"      AND lower(trim(ifNull(c.domain, ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY})\n"
-            "  )"
-        )
+        domain_filter = f"gs.direction = 'Авто'\n  AND NOT {_POSEV_CALL_DOMAIN_SQL}"
         istochnik_sql = "multiIf(gs.status = 'SEO Flow', 'SEO Flow', gs.status = 'SEO', 'SEO', 'Контекст')"
         napravlenie_sql = "'Комплекс'"
     return f"""
@@ -145,6 +158,7 @@ gs_domain_best AS
             gs.client_id,
             gs.sales_manager,
             gs.login_key,
+            gs.vk_client_id,
             multiIf(
                 ifNull(gs.domain, '') = '', 99,
                 ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2,

@@ -1,4 +1,8 @@
+import inspect
+
+import pipeline
 from star_refactor.cleanup_wide_intermediates import SOURCE_VIEWS
+from step10_crop_targeting import step10
 from step10_crop_targeting.step10 import CROP_TYPES_SQL
 from step13_arrival.step13 import _calls_branch_columns, _calls_branch_sql, _leads_branch_sql
 from step3_build_sources.step3 import CROP_SOURCE_TYPES, _build_crop_sql_batched, _build_seo_sql
@@ -10,9 +14,20 @@ def test_regular_calls_use_ba5_context_or_seo_source():
 
     assert "gs.status = 'SEO Flow', 'SEO Flow'" in sql
     assert "gs.status = 'SEO', 'SEO'" in sql
+    assert "FROM ad_analytics.gsheets_crop_targeting_account" in sql
+    assert "FROM ad_analytics.big_analytics_sources" in sql
     assert "FROM ad_analytics.big_analytics_crop_targeting" in sql
     assert "ifNull(gs.direction_main, '') = 'Посевы'" in sql
     assert "CAST('звонки', 'Nullable(String)') AS campaign_code" in sql
+
+
+def test_crop_calls_include_ba5_crop_account_domains():
+    sql = _calls_select("2026-01-01", "2026-01-02", crop=True)
+
+    assert "'Посевы_Звонки'" in sql
+    assert "FROM ad_analytics.gsheets_crop_targeting_account" in sql
+    assert "OR" in sql
+    assert "gs.vk_client_id" in sql
 
 
 def test_arrival_calls_reuse_ba5_call_source_labels():
@@ -24,7 +39,8 @@ def test_arrival_calls_reuse_ba5_call_source_labels():
     assert "'SEO Flow'" in sql
     assert "'SEO'" in sql
     assert "'Контекст'" in sql
-    assert "FROM ad_analytics.big_analytics_crop_targeting" in sql
+    assert "FROM ad_analytics.big_analytics_calls" in sql
+    assert "pcm.dom IS NOT NULL" in sql
     assert '"источник": "\'Звонки\'"' not in repr(columns)
 
 
@@ -66,3 +82,17 @@ def test_crop_source_views_use_the_same_ba5_source_types():
     for source_type in CROP_SOURCE_TYPES:
         assert f"'{source_type}'" in CROP_TYPES_SQL
     assert SOURCE_VIEWS["big_analytics_crop_targeting"] == CROP_SOURCE_TYPES
+
+
+def test_step10a_rebuilds_crop_gate_without_full_overlay():
+    source = inspect.getsource(step10.run_crop_phase)
+
+    assert "_rebuild_cost_overlays" in source
+    assert "_overlay_full" not in source
+
+
+def test_pipeline_runs_step10a_before_step6():
+    source = inspect.getsource(pipeline.main)
+
+    assert "step_num == 6" in source
+    assert "run_step10a_before_step6" in source

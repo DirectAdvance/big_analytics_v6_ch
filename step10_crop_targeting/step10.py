@@ -979,6 +979,14 @@ def _rebuild_cost_overlays(client) -> tuple[int, float]:
     return int(row[0]), float(row[1] or 0)
 
 
+def run_crop_phase(client=None) -> dict:
+    client = client or get_client()
+    overlay_rows, overlay_cost = _rebuild_cost_overlays(client)
+    details = f"overlay={overlay_rows:,}, overlay_cost={overlay_cost:,.2f}"
+    logger.info("step10a v6_ch завершён: %s", details)
+    return {"rows": overlay_rows, "details": details}
+
+
 def _telega_covered_raw_keys(lo: str, hi: str) -> str:
     effective_date = _effective_date_expr("o")
     raw_domain = _raw_domain_expr("o")
