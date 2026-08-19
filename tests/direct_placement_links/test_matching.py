@@ -6,6 +6,7 @@ from direct_placement_links.build import (
     collapse_placement_links,
     filter_unknown_placements,
     match_raw_placements,
+    normalize_placement_link,
     normalized_tokens,
 )
 
@@ -37,6 +38,13 @@ def test_normalized_tokens_ignore_word_order_and_punctuation():
     assert normalized_tokens("Бензин | Регион 52 | Нижний Новгород") == normalized_tokens(
         "Регион 52 | Нижний Новгород | Бензин"
     )
+
+
+def test_normalize_placement_link_keeps_only_real_urls():
+    assert normalize_placement_link("5play.org") == "https://5play.org"
+    assert normalize_placement_link("http://telegram.me/test_channel/") == "https://t.me/test_channel"
+    assert normalize_placement_link("@test_channel") == "https://t.me/test_channel"
+    assert normalize_placement_link("24/7 БАЛАШИХА | НОВОСТИ") is None
 
 
 def test_exact_placement_and_campaign_match_uses_home_page_link():

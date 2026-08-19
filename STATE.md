@@ -92,6 +92,18 @@ Live-вьюхи пересозданы точечно; overflow=0, уникал�
 `dim_criterion.criterion_key=3943490909` повторяется на стороне связи Power BI. Локальный код
 переведён на bijective `reinterpretAsInt64(UInt64)`; до деплоя и пересоздания live `bi_*` это
 исправление не действует на Victory.
+2026-08-19: `direct_placement_links` теперь нормализует `placement_link` в валидный `https://...`
+URL (`telegram.me` → `t.me`, голые домены получают `https://`) и не пишет строки без ссылки в
+финальный `yandex_direct_tp_placement_links`; такие кандидаты остаются только в
+`yandex_direct_tp_placement_link_matches`. Live CH пересобран: 5 399 строк, `empty_links=0`,
+`bad_format=0`; Postgres-копия `yandex_direct_raw.yandex_direct_tp_placement_links`
+синхронизирована 1:1, перед правкой сохранён backup
+`yandex_direct_raw.yandex_direct_tp_placement_links_bak_20260819_urlfix`.
+2026-08-19: для вкладки автоправил `/work/direct-autorules/placements` добавлена ClickHouse view
+`ad_analytics.bi_direct_autorules_posevy_placement_links`: зерно день/логин/placement_link/
+источник/campaign_id, фильтр кампаний `tp8`/`tp9`/`tp10` по `campaign_name`, пустые
+`placement_link` исключены. Live view создана: 121 892 строки, 250 логинов, 5 311 ссылок,
+расход 122 099 270.32 ₽; source-разбивка `телеграм`/`макс`/`другое`.
 
 ## Главное, что выяснилось 15.08
 

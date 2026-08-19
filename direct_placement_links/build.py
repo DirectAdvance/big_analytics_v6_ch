@@ -16,6 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import urllib3
@@ -62,6 +63,8 @@ GRAPHQL_QUERY = (
 PAGE_DIMS = ["Targettype", "PageGroup", "Campaign"]
 PAGE_ATTRS = ["Targettype", "PageGroup", "PageGroupHomePage", "Campaign", "CampName"]
 PAGE_MEASURES = ["Sum"]
+DOMAIN_LINK_RE = re.compile(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(/[^ \t\r\n]*)?$")
+TELEGRAM_HANDLE_RE = re.compile(r"^@[A-Za-z0-9_]{5,}$")
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,29 @@ class PlacementMatch:
 def normalized_tokens(text: str) -> tuple[str, ...]:
     words = re.findall(r"[\w]+", text.lower(), flags=re.UNICODE)
     return tuple(sorted(word for word in words if word))
+
+
+def normalize_placement_link(link: str | None) -> str | None:
+    if not link:
+        return None
+    value = link.strip()
+    if not value or any(char.isspace() for char in value):
+        return None
+    if TELEGRAM_HANDLE_RE.fullmatch(value):
+        value = f"t.me/{value[1:]}"
+    if not re.match(r"^https?://", value, flags=re.IGNORECASE):
+        if not DOMAIN_LINK_RE.fullmatch(value):
+            return None
+        value = f"https://{value}"
+
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+    host = parsed.netloc.lower()
+    if host == "telegram.me":
+        host = "t.me"
+    path = parsed.path.rstrip("/") if parsed.path != "/" else ""
+    return urlunsplit(("https", host, path, parsed.query, ""))
 
 
 def filter_unknown_placements(
@@ -442,7 +468,7 @@ def _parse_cube_rows(data: dict, login: str) -> list[CubePlacement]:
         if len(inner) < len(PAGE_ATTRS) + len(PAGE_MEASURES):
             continue
         page_group = str(inner[1] or "").strip()
-        link = str(inner[2] or "").strip() or None
+        link = normalize_placement_link(str(inner[2] or ""))
         campaign_id_raw = str(inner[3] or "").strip()
         spend = Decimal(str(inner[5] or "0"))
         if not page_group or not campaign_id_raw:
@@ -546,17 +572,20 @@ def _load_existing_links(client, trust_cache: bool) -> dict[str, str | None]:
     # битого и целого близнеца в одну ссылку детерминированно (NULL игнорируется).
     rows = client.query(
         f"""
-        SELECT placement, max(placement_link)
-        FROM (
-            SELECT {fix_mojibake_sql("ifNull(placement, '')")} AS placement, placement_link
-            FROM {TARGET_TABLE}
-            WHERE ifNull(placement, '') != ''
-        )
-        GROUP BY placement
+        SELECT {fix_mojibake_sql("ifNull(placement, '')")} AS placement, placement_link
+        FROM {TARGET_TABLE}
+        WHERE ifNull(placement, '') != ''
         """,
         settings=SAFE_QUERY_SETTINGS,
     ).result_rows
-    return {row[0]: row[1] for row in rows}
+    known_links: dict[str, str | None] = {}
+    for placement, link in rows:
+        normalized_link = normalize_placement_link(link)
+        if normalized_link:
+            known_links[placement] = max(normalized_link, known_links.get(placement) or "")
+        else:
+            known_links.setdefault(placement, None)
+    return known_links
 
 
 def _match_existing(raw_rows: list[RawPlacement], known_links: dict[str, str | None]) -> list[PlacementMatch]:
@@ -713,15 +742,13 @@ def _as_date(value: str | date) -> date:
 
 
 def _write_final_links(client, raw_rows: list[RawPlacement], existing_links: dict[str, str | None], matches: list[PlacementMatch]) -> int:
-    final_links = dict(existing_links)
+    final_links = {row.placement: existing_links.get(row.placement) for row in raw_rows}
     for placement, link in collapse_placement_links(matches):
-        final_links[placement] = link
-    for row in raw_rows:
-        final_links.setdefault(row.placement, None)
+        final_links[placement] = normalize_placement_link(link)
 
     shadow = f"{TARGET_TABLE}_new"
     _create_final_table(client, shadow)
-    rows = [[placement, link] for placement, link in sorted(final_links.items(), key=lambda item: item[0].lower())]
+    rows = [[placement, link] for placement, link in sorted(final_links.items(), key=lambda item: item[0].lower()) if link]
     if rows:
         client.insert(shadow, rows, column_names=["placement", "placement_link"])
     swap_shadow(client, TARGET_TABLE, shadow)
