@@ -519,7 +519,7 @@ ad_analytics_bi/
     │   │     • Date DATE PK
     │   │     • week_start DATE, "День недели" TEXT
     │   │     • year SMALLINT, month SMALLINT
-    │   │     • year_month TEXT, day SMALLINT
+    │   │     • year_month TEXT (русское название месяца), day SMALLINT
     │   │
     │   ├── Dim_Distance                              ← измерение: расстояния (для ARP)
     │   │     • distance_km_agreg INTEGER
@@ -615,12 +615,12 @@ ad_analytics_bi/
     │   │     • Impressions BIGINT, Clicks BIGINT, Cost NUMERIC
     │   │     • RlAdjustmentId BIGINT
     │   │
-    │   ├── yandex_direct_return_commission_logins    ← логины для возврата комиссии
+    │   ├── yandex_direct_return_commission_logins    ← legacy PG: логины для возврата комиссии
     │   │     • id SERIAL PK
     │   │     • manager_login TEXT NOT NULL, account_login TEXT NOT NULL
     │   │     • user_login TEXT
     │   │
-    │   └── yandex_direct_return_commission_report    ← отчёт возврата комиссии
+    │   └── yandex_direct_return_commission_report    ← legacy PG: отчёт возврата комиссии
     │         • id SERIAL PK
     │         • client_login TEXT, date DATE, ad_network_type TEXT, slot TEXT
     │         • campaign_type TEXT, ad_type TEXT

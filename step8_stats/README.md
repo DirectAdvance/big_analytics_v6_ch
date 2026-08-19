@@ -92,7 +92,7 @@ SELECT %s AS run_id,
        ...
 FROM public.big_analytics_unified           -- SNAPSHOT_ON_UNIFIED_2026-06-20
 WHERE direction = 'Авто'
-  AND (направление IS NULL OR направление <> 'Пиксель_атрибуц')
+  AND (_source_table IS NULL OR _source_table <> 'pixel')
   AND атрибуция = 'По дате заявки'           -- DELTA_AXIS_FIX_2026-07-10: только заявочная ось
 GROUP BY date_trunc('month', "Date")
 ON CONFLICT (run_id, month) DO NOTHING

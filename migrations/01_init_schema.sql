@@ -304,7 +304,8 @@ ORDER BY (date, row_hash);
 -- проекция с переименованными колонками под PBI-партицию; лёгкая
 -- проекция под PBI строится отдельно на Этапе 4/5, не здесь).
 CREATE VIEW IF NOT EXISTS ad_analytics.analytics_report_placement_v AS
-SELECT *
+-- AM04 снято по месту: обёртка обязана повторять таблицу 1:1, в этом её смысл.
+SELECT *  -- noqa: AM04
 FROM ad_analytics.analytics_report_placement
 FINAL;
 

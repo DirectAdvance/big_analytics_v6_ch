@@ -77,7 +77,7 @@ verify PASS/нет, golden Кудерко; при падении — номер 
 | 7 | `step7_finalize.step7` | `step7` | Maintenance: `OPTIMIZE` для `big_analytics_sources/calls/full`. Только с `--include-maintenance`. |
 | 9 | `step9_direct_history.step9` | `step9` | История Директа из `raw_data.direct_campaigns`. |
 | 10 | `step10_crop_targeting.step10` | `step10` | Посевы Telega/VK/MAX и связанные локальные CH-таблицы. |
-| 11 | `step11_pixel_score.step11` | `step11` | Pixel score. С 2026-08-15 пиксель разведён по осям: заявочная — `_source_table='pixel'` / `источник='Пиксель'` (31 151 строка), визитная — `_source_table='пиксель_атрибуц'` / `источник='Пиксель_атрибуц'` (84 566). Дубль на заявочной оси убран (127 554 695.53 ₽). |
+| 11 | `step11_pixel_score.step11` | `step11` | Pixel score + прямая доливка пикселя. Канон: `_source_table='pixel'` / `источник='Пиксель'`; отдельная ветка `Пиксель_атрибуц` выведена из контракта. |
 | 115 | `spec_fallback` | `spec_fallback` | Каскад `специалист` по домену без окна дат после step10/step11. |
 | 12 | `step12_proverka_big_analytics.step12` | `step12` | Проверка CRM-маппингов. |
 | 13 | `step13_arrival.step13` | `step13` | Воронка по дате визита → `big_analytics_full_arrival`. |

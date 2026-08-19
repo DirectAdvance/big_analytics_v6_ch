@@ -71,40 +71,13 @@ PBI_SOURCE_OBJECTS = [
     "yandex_direct_cookie_analytics_website_pages",
     "yandex_direct_korrektirovki",
     "yandex_direct_minus_snapshot",
-    "yandex_direct_return_commission_report",
 ]
 
-# PBI_EMPTY_WHITELIST_AUDIT_2026-08-16 — список разрешает пустоту 12 объектам, но по факту
-# пусты только два (`check_utm_fuck_direct` и `yandex_direct_return_commission_report` — это
-# view-заглушки `SELECT CAST(NULL, ...)`, источника в ClickHouse нет). Остальные десять живые:
-# `bi_fact_criterion_zayavki`=137 890, `bi_fact_region_zayavki`=188 691, `bi_Dim_Location`=16 317,
-# `bi_fact_ml_korrektirovki`=15 396, `bi_yandex_direct_404_errors`=13 548, `bi_fact_vk_ads`=783,
-# `bi_yandex_direct_cookie_analytics_website_pages`=965 764, `bi_yandex_direct_korrektirovki`=190 286,
-# `bi_yandex_direct_minus_snapshot`/`bi_v_yandex_direct_minus_delta`=1 546.
-# Пока whitelist их покрывает, регрессия «витрина обнулилась» пройдёт гейт молча. Сузить его до
-# двух заглушек — правка на одну строку, но она превращает пустоту в FAIL для прод-прогона,
-# поэтому ждёт решения Семёна (правило CLAUDE.md про новые инварианты в этом файле).
-# Компромисс до решения: пустой whitelisted-объект логируется WARNING, а не молчит.
-PBI_EMPTY_ALLOWED = {
-    "bi_Dim_Location",
-    "bi_check_utm_fuck_direct",
-    "bi_fact_criterion_zayavki",
-    "bi_fact_ml_korrektirovki",
-    "bi_fact_region_zayavki",
-    "bi_fact_vk_ads",
-    "bi_v_yandex_direct_minus_delta",
-    "bi_yandex_direct_404_errors",
-    "bi_yandex_direct_cookie_analytics_website_pages",
-    "bi_yandex_direct_korrektirovki",
-    "bi_yandex_direct_minus_snapshot",
-    "bi_yandex_direct_return_commission_report",
-}
+# Пустых `bi_*` больше нет by-design: любой ноль в активном PBI-контракте — FAIL.
+PBI_EMPTY_ALLOWED = set()
 
-# Заглушки без источника в ClickHouse: пустота ожидаема, WARNING по ним не нужен.
-PBI_EMPTY_BY_DESIGN = {
-    "bi_check_utm_fuck_direct",
-    "bi_yandex_direct_return_commission_report",
-}
+# Заглушки без источника в ClickHouse больше не разрешены.
+PBI_EMPTY_BY_DESIGN = set()
 
 PBI_COMPAT_OBJECTS = [
     "pbi_import_big_analytics_full",

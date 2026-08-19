@@ -91,7 +91,7 @@ for attr in ('По дате заявки', 'По дате визита'):
     cur.execute(f"""SELECT COALESCE(SUM(priezd),0), COALESCE(SUM(prodazhi),0),
                     ROUND(COALESCE(SUM(total_cost),0)::numeric,2)
                     FROM {NEW} WHERE "атрибуция"=%s
-                    AND (_source_table NOT IN ('пиксель','пиксель_атрибуц') OR _source_table IS NULL)""", (attr,))
+                    AND (_source_table != 'pixel' OR _source_table IS NULL)""", (attr,))
     print(f"  [{attr}] priezd/prodazhi/cost (без пикселя):", cur.fetchone())
 
 # ── ARP ──────────────────────────────────────────────────────────────────────

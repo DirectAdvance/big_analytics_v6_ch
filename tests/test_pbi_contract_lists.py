@@ -45,3 +45,12 @@ def test_stale_analytics_report_objects_are_not_in_pbi_contract_lists():
     assert {"arp_fact", "arc_fact", "arf_fact"}.isdisjoint(verify_required_tables)
     assert stale_compat_objects.isdisjoint(verify_pbi_source_objects)
     assert {"arp_fact", "arc_fact", "arf_fact"}.isdisjoint(verify_pbi_compat_objects)
+
+
+def test_pbi_empty_whitelist_is_empty():
+    verify_path = ROOT / "data_check" / "verify_big_analytics.py"
+    allowed = _literal_list_from_file(verify_path, "PBI_EMPTY_ALLOWED")
+    by_design = _literal_list_from_file(verify_path, "PBI_EMPTY_BY_DESIGN")
+
+    assert allowed == set()
+    assert by_design == allowed

@@ -1,19 +1,19 @@
 # step11_pixel_score — Атрибуция pixel-воронки
 
-<!-- pixel-dedup-2026-08-15 -->
-> ⚠️ **PIXEL_DEDUP_2026-08-15 — описание ниже устарело в одном месте.**
-> Атрибутированные пиксельные строки **больше не льются в `big_analytics_full`**: они дублировали
-> те же лиды и расход, что несёт сырая копия `_source_table='pixel'` (дубль был 127 554 695.53 ₽).
+<!-- pixel-dedup-2026-08-17 -->
+> **PIXEL_DEDUP_2026-08-17.**
+> Старый `Пиксель_атрибуц` выведен из BA6-контракта; live-канон пикселя —
+> `_source_table='pixel'`, `источник='Пиксель'`, `направление='Пиксель'`.
 > Как стало:
 >
 > | объект / ось | `_source_table` | строк |
 > |---|---|---:|
-> | `big_analytics_pixel_score` (физическая таблица) | `пиксель_атрибуц` | 241 313 |
-> | `big_analytics_full` — ось «По дате заявки» | `pixel` | 31 151 |
-> | `big_analytics_unified` — ось «По дате визита» | `пиксель_атрибуц` | 84 566 |
+> | `big_analytics_pixel_score` (физическая таблица) | `pixel` | 243 278 |
+> | `big_analytics_full` — ось «По дате заявки» | `pixel` | 31 464 |
+> | `big_analytics_full_arrival` — ось «По дате визита» | `pixel` | 85 160 |
 >
-> Визитную ось step13 читает из `big_analytics_pixel_score` напрямую, поэтому она не пострадала.
-> Код: `step11_pixel_score/step11.py:383`. Замер 2026-08-15.
+> Визитную ось step13 читает из `big_analytics_pixel_score` напрямую и пишет
+> `направление='Пиксель'`. Замер live ClickHouse: 2026-08-17.
 
 Шаг 11 пайплайна. Распределяет pixel-воронку (`big_analytics_pixel`) по конкретным кампаниям через **CPL-скор** (`cpl_score`). Кампания с лучшим CPL-скором получает больше pixel. `cr_composite` (воронка / Clicks) используется только как фильтр отсечения: кампании с `cr_composite=0` исключаются из атрибуции (step11.py:242).
 
@@ -27,8 +27,7 @@
 |---------|-----------|---------|
 | `pixel_score` | Атрибуционные веса (1 строка = кампания × месяц × домен) | `NUMERIC` |
 | `big_analytics_pixel_score` | Атрибутированные строки (схема = `big_analytics_full`) | `NUMERIC` |
-| `big_analytics_full` (`_source_table='пиксель_атрибуц'`) | Атрибутированные строки | `NUMERIC` |
-| `big_analytics_full` (`_source_table='пиксель'`) | Прямой перенос `big_analytics_pixel` без атрибуции | `NUMERIC` |
+| `big_analytics_full` (`_source_table='pixel'`) | Канонические пиксельные строки | `NUMERIC` |
 
 ## Архитектурная схема
 
@@ -57,7 +56,7 @@ big_analytics_pixel ─► pixel_daily JOIN pixel_score (на день, доме
               (INSERT NUMERIC, без округления)
                               │
                               ▼
-                       big_analytics_full (_source_table='пиксель_атрибуц')
+                       big_analytics_full (_source_table='pixel')
 ```
 
 ## Формула CR composite и weight
@@ -82,11 +81,11 @@ weight       = cpl_score / SUM(cpl_score по домену+месяцу) × 100 
 
 | Поле | Значение |
 |------|----------|
-| `_source_table` | `'пиксель_атрибуц'` |
-| `источник` | `'Пиксель_атрибуц'` |
-| `тип_заявки` | `'Пиксель_атрибуц'` |
+| `_source_table` | `'pixel'` |
+| `источник` | `'Пиксель'` |
+| `тип_заявки` | `'Пиксель'` |
 | `direction` | `'Авто'` |
-| `key_pixel_score` | `Date|domain|пиксель_атрибуц|CampaignId` |
+| `key_pixel_score` | `Date|domain|pixel|CampaignId` |
 
 ## Источники в weight (по `_source_table`)
 
@@ -135,8 +134,8 @@ SUM(big_analytics_pixel.total_cost)     ≈ SUM(big_analytics_pixel_score.total_
 ## Примеры запуска
 
 ```bash
-# Только step11:
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 pipeline.py --only-step=11"
+# Только step11 в BA6:
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 pipeline.py --only-step=11"
 
 # Просмотр результата:
 psql -c "
@@ -156,9 +155,9 @@ FROM pixel_score GROUP BY 1,2 HAVING ABS(SUM(weight) - 100) > 0.5 LIMIT 10;
 SELECT SUM(kol_vo_zayavok) AS pixel_obr FROM big_analytics_pixel
 UNION ALL SELECT SUM(kol_vo_zayavok) FROM big_analytics_pixel_score;
 
--- big_analytics_full содержит пиксель_атрибуц
+-- big_analytics_full содержит pixel
 SELECT COUNT(*), SUM(total_cost) FROM big_analytics_full
-WHERE _source_table = 'пиксель_атрибуц';
+WHERE _source_table = 'pixel';
 ```
 
 ## Старые таблицы (удалены автоматически)

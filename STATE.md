@@ -77,6 +77,16 @@ step11 150.4с, step140 150.5с, build_star 177.5с, build_pbi_compat 167.0с. �
 BA6 PBIP `powerbi_ba6` запушен коммитом `2569252`: `yandex_direct_ads_texts` и
 `yandex_direct_type_placement_report_master` читают `bi_*`, `return_commission` и его визуалы
 удалены. Desktop/Service refresh после этого не запускался.
+2026-08-18: star-разнос `yandex_direct_ads_texts` подготовлен и задеплоен на Victory:
+факт теперь `loaded_at/client/campaign/ad_group/banner_id + metrics`, тексты вынесены в
+`bi_Dim_AdText`. `pipeline.py --only-step=146` завершился OK за 166.9с; live rows:
+`bi_yandex_direct_ads_texts` 16 081 658, `bi_Dim_AdText` 1 025 253. PBIP локально обновлён,
+но Desktop/Service refresh и публикация датасета ещё не запускались.
+2026-08-19: исправлен Power BI overflow на BA6 hidden keys: `bi_fact_criterion_spend_star`,
+`bi_Dim_Criterion`/`bi_dim_criterion`, `bi_Dim_Site`, `bi_fact_region_spend_star` и
+`bi_fact_direct_feed_funnel_star` отдают `criterion_key`/`site_key` как signed-safe `Int64`.
+Live-вьюхи пересозданы точечно; overflow=0, уникальность `Dim_Criterion`/`Dim_Site` сохранена.
+`pytest` 168 passed, `verify_big_analytics.py` PASS. Desktop refresh ещё не запускался.
 
 ## Главное, что выяснилось 15.08
 

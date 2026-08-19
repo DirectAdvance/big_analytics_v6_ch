@@ -3,9 +3,9 @@
 <!-- v6-scope-banner -->
 > 🧭 **Область в v6_ch (2026-08-15).** Канон значений действует, но объект другой:
 > вместо `public.big_analytics_full` (v5, таблица) — `ad_analytics.big_analytics_full`
-> (v6, **View** над звездой, 73 колонки). С 2026-08-15 пиксель разведён по осям: заявочная —
-> `_source_table='pixel'` / `источник='Пиксель'`, визитная — `_source_table='пиксель_атрибуц'` /
-> `источник='Пиксель_атрибуц'`; раньше оба тега стояли на заявочной. Значений `telegram`,
+> (v6, **View** над звездой, 73 колонки). С 2026-08-17 live-канон пикселя:
+> `_source_table='pixel'`, `источник='Пиксель'`, `направление='Пиксель'`; отдельная ветка
+> `Пиксель_атрибуц` выведена из контракта. Значений `telegram`,
 > `social_посевы`, `vk_zero` в v6 нет: строки схлопнуты в `crop_targeting`.
 
 > Эталонный справочник допустимых значений и инварианты витрины `public.big_analytics_full`.
@@ -43,17 +43,16 @@ REGEXP_REPLACE("CampaignName", '__+', '_', 'g')   -- __+ → _
 | направление | Где задаётся |
 |-------------|--------------|
 | `Контекст` | step3 `_build_direct_sql` из `gs.status` (`Контекст активно`) + Block G2 (звонки с директологом) |
-| `пиксель` | step5/step11 (пиксель-кампании); corrections Правило 8 для unmatched пиксель-лидов |
-| `пиксель_атрибуц` | step11_pixel_score (атрибуция `big_analytics_pixel` → full) |
+| `Пиксель` | step5/step11/step13 (пиксель-кампании); старое lowercase `пиксель` относится к v5/истории |
 | `посевы` | step3 `_build_crop_sql` + step10 (Google Sheets посевы / Telega.in API) + step3 `_move_tp8_to_crop` (tp8/tp9/tp10 → направление='посевы', маркер TP9_TP10_POSEV_MOVE_2026-06-22) |
 | `SEO` | step3 `_build_seo_sql` |
 | `SEO Flow` | step3 из `gs.status` |
 | `отзывы` | step3 `_build_reviews_sql` + load_reviews |
 
 **ЗАПРЕЩЕНО:** техническое имя `utm_source` в колонке «направление» (например `victory_pxl`,
-`victory_vdl` и т.п.). Все пиксель-источники → `'пиксель'`. Закреплено в
-`corrections.py` Правило 8 `_rule8_utm_classify` (Вариант B, июнь 2026): блок `new_direction`
-маппит весь кортеж `_UTM_PIXEL_SOURCES` в единое `'пиксель'`.
+`victory_vdl` и т.п.). Все пиксель-источники → `'Пиксель'` в BA6 live-витринах. Историческое
+правило `corrections.py` маппило `_UTM_PIXEL_SOURCES` в lowercase `'пиксель'`; активный BA6
+контракт после step11/step13 нормализует итоговую витрину в `'Пиксель'`.
 
 **NULL допустим** только для звонков без директолога (`_source_table='calls'`,
 домен без `directologist` в `local_gsheet_sites` — см. Block G2 в `BLOCKS.md`). Для остальных строк NULL — баг.
@@ -65,8 +64,7 @@ REGEXP_REPLACE("CampaignName", '__+', '_', 'g')   -- __+ → _
 | источник | Где задаётся |
 |----------|--------------|
 | `Контекст` | step3 (direct) |
-| `пиксель` | step5 / corrections Правило 8 |
-| `пиксель_атрибуц` | step11_pixel_score |
+| `Пиксель` | step5 / step11 / step13 |
 | `звонки` | step6 inline (call-строки) |
 | `telegram` | step10 (`"Источник"='Telegram'`) + step3 `_move_tp8_to_crop` (tp8, _source_table='tp8') |
 | `Max` | step10 (посевы Max) + step3 `_move_tp8_to_crop` (tp9=Max/VK-ОК через Директ, _source_table='tp9') |
@@ -89,7 +87,7 @@ API-ветка посевов (≥ май 2026) источник выводит 
 
 **Проверка инварианта:**
 ```sql
-SELECT count(*) FROM public.big_analytics_full WHERE источник IS NULL;  -- ожидается 0
+SELECT count(*) FROM ad_analytics.big_analytics_full WHERE `источник` IS NULL;  -- ожидается 0
 ```
 
 ---

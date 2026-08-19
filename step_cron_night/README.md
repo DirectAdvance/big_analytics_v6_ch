@@ -23,6 +23,17 @@ python3 step_cron_night/pipeline_night.py --list-steps
 python3 step_cron_night/pipeline_night.py --only-step 114
 ```
 
+## Cron
+
+На Victory включён с 2026-08-17:
+
+```cron
+10 18 * * * cd ~/big_analytics_v6_ch && /usr/bin/flock -n /tmp/ba6_night.lock ~/venv-v6/bin/python3 step_cron_night/pipeline_night.py >> /tmp/ba6_night.log 2>&1
+```
+
+Это 23:10 Екб: после дневных прогонов и до БА5 night в 21:00 UTC. Проверенный ручной прогон перед
+постановкой в cron: PASS за 14м15с.
+
 `CHECK_UTM_BATCH_DAYS=7` по умолчанию. Уменьшать можно для отладки, увеличивать только после проверки
 памяти ClickHouse.
 

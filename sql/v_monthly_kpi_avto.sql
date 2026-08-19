@@ -1,3 +1,4 @@
+-- sqlfluff:dialect:postgres
 -- VIEW: помесячная KPI-воронка по big_analytics_full
 -- Фильтр: direction = 'Авто' (соответствует PBI; equivalent: направление != 'пиксель_атрибуц')
 -- Используется dashboard endpoint /api/monthly-kpi

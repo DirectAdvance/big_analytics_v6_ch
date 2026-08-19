@@ -1,14 +1,13 @@
 # yandex_direct_checking_report
 
 Standalone-модуль для сверки расходов Яндекс.Директа.
-Тянет данные напрямую из Reports API v5, без посредников типа `yandex_direct_manager_reports`.
+С 2026-08-17 тянет данные из ClickHouse `raw_data.yandex_direct_report_rows`, без Reports API v5.
 
 ## Зачем
 
-Чтобы независимо проверить «сколько на самом деле потратил каждый авто-аккаунт по месяцам»
-и сравнить с тем что пишет `big_analytics_full` / `local_yandex`. Расхождения
-в нашем пайплайне обычно из-за кэшей менеджерских отчётов, фильтров `direction='Авто'`,
-исключений по логинам и т.п. — этот модуль даёт «правду от Яндекса» как точку отсчёта.
+Чтобы проверить «сколько потратил каждый авто-аккаунт по месяцам» по сырью БА6 и сравнить с тем,
+что пишет `yandex_direct_manager_reports`. Расхождения обычно из-за разных загрузчиков, фильтров
+`direction='Авто'`, исключений по логинам и т.п.
 
 ## Что делает
 
@@ -16,36 +15,30 @@ Standalone-модуль для сверки расходов Яндекс.Дир
 2. Создаёт таблицу `public.yandex_direct_checking_report` (если её нет) +
    индексы по `account_login` и `month`
 3. **TRUNCATE** этой таблицы
-4. Читает активные авто-аккаунты:
+4. Читает активные авто-аккаунты в ClickHouse:
    ```sql
-   SELECT DISTINCT ON (login_key) login_key, domain
-   FROM public.local_gsheet_sites
+   SELECT lowerUTF8(trim(login_key)) AS login, anyLast(domain) AS domain
+   FROM raw_data.gsheet_sites
    WHERE status = 'Контекст активно'
      AND direction = 'Авто'
-     AND login_key IS NOT NULL AND TRIM(login_key) <> ''
-   ORDER BY login_key, domain
+     AND login_key != ''
+   GROUP BY login
    ```
-5. Для каждого `login_key` запрашивает Reports API v5:
-   - `ReportType = CAMPAIGN_PERFORMANCE_REPORT`
-   - `FieldNames = ['Month', 'Cost']`
-   - `DateRangeType = CUSTOM_DATE`
-   - `DateFrom = 2026-01-01`, `DateTo = вчера`
-   - Заголовки: `IncludeVAT: YES`, `returnMoneyInMicros: false`
-   (аккаунты обрабатываются параллельно, `ThreadPoolExecutor(MAX_WORKERS=4)`)
-6. Перебирает 5 агентских OAuth-токенов. Первый давший `HTTP 200` →
-   `manager_login` = логин этого агентского аккаунта.
-7. Парсит TSV, считает суммы по месяцам, пишет в таблицу, сверяет с
+5. Агрегирует `raw_data.yandex_direct_report_rows.total_cost` по
+   `account_login × manager_login × month` за период `2026-01-01 … вчера`.
+   `total_cost` — расход с НДС и комиссией, именно он нужен для отчёта.
+6. Пишет строки в таблицу, сверяет с
    `yandex_direct_manager_reports` и шлёт отчёт в Telegram (см. «Сверка и Telegram» ниже).
 
 ## Источники данных
 
 | Откуда | Что |
 |--------|-----|
-| `public.local_gsheet_sites` | список авто-аккаунтов (login_key + domain) |
-| Reports API v5 (`api.direct.yandex.com/json/v5/reports`) | помесячный Cost с НДС |
-| `.secret/.env` через `config.tokens` | 5 OAuth-токенов |
+| `raw_data.gsheet_sites` | список авто-аккаунтов (login_key + domain) |
+| `raw_data.yandex_direct_report_rows` | помесячный `total_cost` с НДС и комиссией |
+| `config.tokens` | только Telegram-настройки для отправки отчёта |
 
-Никаких `raw_*`, `local_yandex`, `big_analytics_*` — независимо.
+Никаких Direct API, `local_yandex`, `big_analytics_*` — источник только `raw_data`.
 
 ## Схема таблицы
 
@@ -76,8 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_yandex_direct_checking_report_month ON yandex_dir
 
 ### Логическая гранулярность
 
-Одна строка = `(account_login, month)`. Несколько кампаний внутри аккаунта
-суммируются на стороне Direct API (мы запрашиваем только `Month` + `Cost`).
+Одна строка = `(account_login, month)`. Кампании внутри аккаунта суммируются в ClickHouse.
 
 ## Запуск
 
@@ -107,11 +99,9 @@ cd ~/big_analytics_v6_ch
 Пишутся в stdout:
 ```
 2026-05-22 14:00:01 [INFO] Период: 2026-01-01 … 2026-05-21
-2026-05-22 14:00:01 [INFO] Активных аккаунтов (Контекст активно, Авто): 234
-2026-05-22 14:00:02 [INFO] [1/234] avtomir-msk (avtomir.ru) ...
-2026-05-22 14:00:05 [INFO]   → 5 месяцев, итого 145820.34 ₽ (mgr=victorylotsofads1)
-…
-2026-05-22 14:42:11 [INFO] Готово: rows=1041, accounts ok=212, no_data=15, failed=7
+2026-08-17 15:10:01 [INFO] Период: 2026-01-01 … 2026-08-16
+2026-08-17 15:10:08 [INFO] ClickHouse raw_data: active_accounts=267, accounts_with_cost=261, rows=865
+2026-08-17 15:10:09 [INFO] Готово: rows=865, accounts_with_cost=261, no_data=6
 ```
 
 ## Параметры
@@ -122,10 +112,6 @@ cd ~/big_analytics_v6_ch
 |-----------|----------|-------|
 | `TABLE_NAME` | `'yandex_direct_checking_report'` | имя таблицы |
 | `DATE_FROM` | `'2026-01-01'` | начало периода |
-| `TOKENS` | 5 пар `(token, manager_login)` | приоритет перебора |
-| `MAX_RETRY_HTTP5XX` | `5` | повторы при 500/502/503 |
-| `MAX_WORKERS` | `4` | параллельных воркеров (`ThreadPoolExecutor`) |
-| `PAUSE_PER_WORKER` | `0.5` | пауза между запросами внутри воркера, сек (~2 rps на токен) |
 
 ## Проверки качества
 
@@ -164,19 +150,13 @@ LIMIT 50;
 
 ## Ограничения и нюансы
 
-1. **Лимиты Direct API**. Каждый аккаунт = 1 запрос, выполняются параллельно
-   (`MAX_WORKERS=4` воркера, `PAUSE_PER_WORKER=0.5` сек → ~2 rps на токен) с
-   retry на 201/202/429/5xx.
-2. **Аккаунт без активных кампаний**. API вернёт пустой TSV — `monthly={}`,
-   запись в БД не пишется (counter `no_data_accounts`).
-3. **400/401/403**. Считаются как «этим токеном нет доступа» → перебор.
-   Если все 5 дают 4xx → `failed_accounts++`, строка не пишется.
-4. **Не входит в pipeline.py**. Это отдельный отчёт, запускается руками или
+1. **`total_cost` обязателен.** Семён подтвердил: это расход с НДС и комиссией, то есть нужная
+   сумма для отчёта. Не заменять на `cost`.
+2. **Аккаунт без расхода** не получает строку в БД, учитывается в `no_data`.
+3. **Не входит в pipeline.py**. Это отдельный отчёт, запускается руками или
    по отдельному крону (если потребуется регулярно).
-5. **`returnMoneyInMicros=false`** — Cost приходит в рублях float, делить
-   на 1_000_000 НЕ нужно.
-6. **`IncludeVAT=YES`** — расход с НДС, совпадает с
-   `yandex_direct_manager_reports.Cost` — нужно для сверки в `run_comparison()`.
+4. **Telegram-сверка** всё ещё сравнивает с `yandex_direct_manager_reports`; это старый FDW-источник,
+   поэтому в нём сохранён `statement_timeout=300000`.
 
 ## Файлы модуля
 

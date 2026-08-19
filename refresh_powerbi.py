@@ -334,7 +334,6 @@ _ALL_TABLES = [
     'fact_vk_ads',                  # VK Ads датамарт (star build_vk_ads_fact, VK_ADS_FACT_2026-07-10) — parity с PBI_TABLES
     'direct_history', 'check_utm_fuck_direct',
     'yandex_direct_korrektirovki', 'yandex_direct_404_errors',
-    'yandex_direct_return_commission_report',
     'pixel_score', 'yandex_direct_cookie_analytics_website_pages',
     # DATAMARTS_LIVE_TABS_2026-07-14: датамарты живых вкладок Формат/Ключи/расстояние/Фиды.
     # Без них облачные копии *_spend оставались ПУСТЫМИ (вкладки «Формат»/«Ключевые слова» пустые),

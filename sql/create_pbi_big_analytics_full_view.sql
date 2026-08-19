@@ -1,3 +1,4 @@
+-- sqlfluff:dialect:postgres
 -- Compatibility view for the Power BI model table big_analytics_full.
 -- Moves the former Power Query join chain into PostgreSQL.
 

@@ -1,19 +1,19 @@
 # step11_pixel_score — алгоритм атрибуции (детали)
 
-<!-- pixel-dedup-2026-08-15 -->
-> ⚠️ **PIXEL_DEDUP_2026-08-15 — описание ниже устарело в одном месте.**
-> Атрибутированные пиксельные строки **больше не льются в `big_analytics_full`**: они дублировали
-> те же лиды и расход, что несёт сырая копия `_source_table='pixel'` (дубль был 127 554 695.53 ₽).
+<!-- pixel-dedup-2026-08-17 -->
+> **PIXEL_DEDUP_2026-08-17.**
+> Старый `Пиксель_атрибуц` выведен из BA6-контракта; live-канон пикселя —
+> `_source_table='pixel'`, `источник='Пиксель'`, `направление='Пиксель'`.
 > Как стало:
 >
 > | объект / ось | `_source_table` | строк |
 > |---|---|---:|
-> | `big_analytics_pixel_score` (физическая таблица) | `пиксель_атрибуц` | 241 313 |
-> | `big_analytics_full` — ось «По дате заявки» | `pixel` | 31 151 |
-> | `big_analytics_unified` — ось «По дате визита» | `пиксель_атрибуц` | 84 566 |
+> | `big_analytics_pixel_score` (физическая таблица) | `pixel` | 243 278 |
+> | `big_analytics_full` — ось «По дате заявки» | `pixel` | 31 464 |
+> | `big_analytics_full_arrival` — ось «По дате визита» | `pixel` | 85 160 |
 >
-> Визитную ось step13 читает из `big_analytics_pixel_score` напрямую, поэтому она не пострадала.
-> Код: `step11_pixel_score/step11.py:383`. Замер 2026-08-15.
+> Визитную ось step13 читает из `big_analytics_pixel_score` напрямую и пишет
+> `направление='Пиксель'`. Замер live ClickHouse: 2026-08-17.
 
 > Вынесено из `CLAUDE.md` (2026-06-11) для соблюдения лимита ≤200 строк.
 > Краткое назначение, вход/выход и схема — в [`CLAUDE.md`](CLAUDE.md). Здесь — формулы.
@@ -151,11 +151,12 @@ prodazhi        = pixel.prodazhi        × weight / 100
 
 ### Маркеры строки в big_analytics_full
 
-- `_source_table = 'пиксель_атрибуц'`
-- `источник = 'пиксель_атрибуц'`
-- `тип_заявки = 'пиксель_атрибуц'`
+- `_source_table = 'pixel'`
+- `источник = 'Пиксель'`
+- `тип_заявки = 'Пиксель'`
+- `направление = 'Пиксель'`
 - `direction = 'Авто'`
-- `key_pixel_score = "Date|domain|пиксель_атрибуц|CampaignId"`
+- `key_pixel_score = "Date|domain|pixel|CampaignId"`
 
 ---
 
@@ -179,4 +180,6 @@ SUM(big_analytics_pixel.total_cost)     ≈ SUM(big_analytics_pixel_score.total_
 
 ## Перенос в big_analytics_full
 
-Сначала `DELETE FROM big_analytics_full WHERE _source_table='пиксель_атрибуц'` (идемпотентно), затем INSERT всех строк `big_analytics_pixel_score` с округлением метрик.
+Сначала keep-пересборка удаляет старые пиксельные строки
+(`_source_table IN ('pixel','пиксель_атрибуц')`), затем INSERT канонического `pixel` из
+`big_analytics_pixel_score` без построчного округления метрик.

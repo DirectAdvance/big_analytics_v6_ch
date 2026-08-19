@@ -187,21 +187,36 @@ def test_region_and_criterion_star_views_keep_only_keys_and_metrics():
 
     assert "FROM ad_analytics.fact_region_spend f" in region_sql
     assert "FROM ad_analytics.fact_criterion_spend f" in criterion_sql
-    assert "f.site_key" in region_sql
-    assert "f.site_key" in criterion_sql
+    assert "toInt64(f.site_key % 9223372036854775807) AS site_key" in region_sql
+    assert "toInt64(f.site_key % 9223372036854775807) AS site_key" in criterion_sql
     assert "f.id_location" in region_sql
-    assert "f.criterion_key" in criterion_sql
+    assert "toInt64(f.criterion_key % 9223372036854775807) AS criterion_key" in criterion_sql
     for sql in [region_sql, criterion_sql]:
         assert "JOIN" not in sql
         assert "domain" not in sql
         assert "updated_at" not in sql
         assert "toInt64(0)" not in sql
     assert "Dim_Criterion" not in criterion_sql
-    assert " AS criterion" not in criterion_sql
+    assert " AS criterion," not in criterion_sql
     assert "ifNull(dcr.criterion" not in criterion_sql
     for name in ["fact_region_spend_star", "fact_criterion_spend_star"]:
         assert name in build_pbi_compat.PBI_SOURCE_OBJECTS
         assert name in build_pbi_compat.PBI_VIEW_SQL_BUILDERS
+
+
+def test_pbi_hash_keys_fit_powerbi_int64():
+    assert "toInt64(criterion_key % 9223372036854775807) AS criterion_key" in (
+        build_pbi_compat._dim_criterion_pbi_sql()
+    )
+    assert "toInt64(site_key % 9223372036854775807) AS site_key" in (
+        build_pbi_compat._dim_site_pbi_sql()
+    )
+    assert "toInt64(f.site_key % 9223372036854775807) AS site_key" in (
+        build_pbi_compat._feed_funnel_star_sql()
+    )
+    assert "toInt64(site_key % 9223372036854775807) AS site_key" in (
+        build_pbi_compat._pbi_view_select_sql("fact_direct_feed_funnel_star")
+    )
 
 
 def test_feed_funnel_import_uses_global_pipeline_batches():
@@ -239,6 +254,7 @@ def test_vk_ads_filters_use_raw_date_sort_key():
 
 def test_direct_cookie_sources_have_pbi_views():
     expected = {
+        "Dim_AdText",
         "yandex_direct_ads_texts",
         "yandex_direct_type_placement_report_master",
     }
@@ -249,9 +265,15 @@ def test_direct_cookie_sources_have_pbi_views():
     assert "raw_data.direct_cookie_type_placement_master" in build_pbi_compat._pbi_view_select_sql(
         "yandex_direct_type_placement_report_master"
     )
-    assert "GROUP BY loaded_at, client_login, campaign_id, ad_group_id, ad_type, status, title, text" in (
-        build_pbi_compat._pbi_view_select_sql("yandex_direct_ads_texts")
-    )
+    ads_sql = build_pbi_compat._pbi_view_select_sql("yandex_direct_ads_texts")
+    dim_ad_text_sql = build_pbi_compat._pbi_view_select_sql("Dim_AdText")
+    assert "banner_id" in ads_sql
+    assert "GROUP BY loaded_at, client_login, campaign_id, ad_group_id, banner_id" in ads_sql
+    assert "banner_title AS title" not in ads_sql
+    assert "banner_body AS text" not in ads_sql
+    assert "GROUP BY banner_id" in dim_ad_text_sql
+    assert "argMax(banner_title, loaded_at) AS title" in dim_ad_text_sql
+    assert "argMax(banner_body, loaded_at) AS text" in dim_ad_text_sql
     placement_sql = build_pbi_compat._pbi_view_select_sql("yandex_direct_type_placement_report_master")
     assert "toStartOfMonth(scope_from) AS date" in placement_sql
     assert "position_type = 'PRIME_POSITION_TYPE', 'Спецразмещение'" in placement_sql

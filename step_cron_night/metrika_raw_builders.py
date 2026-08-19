@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, range_batches, swap_shadow, table_exists
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, swap_shadow, table_exists
 
 log = logging.getLogger("pipeline.metrika_raw_builders")
 
@@ -187,195 +187,149 @@ def build_404_errors(client=None) -> int:
     return count_rows(client, "ad_analytics.yandex_direct_404_errors")
 
 
-def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | None = None) -> tuple[int, int]:
+def _direct_tracking_class_sql(col: str) -> str:
+    return f"""
+        multiIf(
+            ifNull({col}, '') = '' OR position({col}, 'utm_source') = 0,
+                'НЕТ_UTM',
+            position({col}, 'utm_source=s:{{source}}') > 0
+            AND position({col}, 'utm_campaign={{campaign_id}}|{{campaign_name}}') > 0
+            AND position({col}, 'utm_content=g:{{gbid}}') > 0
+            AND position({col}, 'geoname:{{region_name}}') > 0
+            AND position({col}, 'geoid:{{region_id}}') > 0
+            AND position({col}, 'dev:{{device_type}}') > 0
+            AND position({col}, 'r:{{retargeting_id}}') > 0
+            AND position({col}, 'cor:{{coef_goal_context_id}}') > 0
+            AND (
+                position({col}, 'utm_term={{keyword}}') > 0
+                OR position({col}, 'utm_term={{phrase}}') > 0
+            )
+            AND (
+                position({col}, 'utm_medium=cpc') > 0
+                OR position({col}, 'utm_medium=cpa') > 0
+            ),
+                'OK',
+            'ДРУГОЙ_UTM'
+        )
+    """
+
+
+def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | None = None) -> tuple[int, int]:  # noqa: ARG001
     client = client or get_client()
-    _require(client, "raw_data", "metrika_yandex_utm_daily")
-    _require(client, "raw_data", "metrika_yandex_counters")
+    _require(client, "raw_data", "direct_adgroups")
+    _require(client, "raw_data", "direct_campaigns")
     _require(client, "raw_data", "gsheet_sites")
+    _require(client, "raw_data", "yandex_direct_report_rows")
 
     check_shadow = "ad_analytics.check_utm_new"
     fuck_shadow = "ad_analytics.check_utm_fuck_direct_new"
-    dim_shadow = "ad_analytics.check_utm_counter_dim_new"
     client.command(f"DROP TABLE IF EXISTS {check_shadow} SYNC")
     client.command(f"DROP TABLE IF EXISTS {fuck_shadow} SYNC")
-    client.command(f"DROP TABLE IF EXISTS {dim_shadow} SYNC")
 
+    lookback_days = int(os.getenv("CHECK_UTM_LOOKBACK_DAYS", "30"))
+    history_days = int(os.getenv("CHECK_UTM_HISTORY_DAYS", "90"))
+    class_sql = _direct_tracking_class_sql("ifNull(ag.tracking_params, '')")
     client.command(
-        """
-        CREATE TABLE ad_analytics.check_utm_counter_dim_new
+        f"""
+        CREATE TABLE ad_analytics.check_utm_new
         ENGINE = MergeTree
-        ORDER BY counter_id
+        PARTITION BY toYYYYMM(ifNull(date, toDate('2026-01-01')))
+        ORDER BY (ifNull(date, toDate('2026-01-01')), ifNull(login, ''), ifNull(CampaignId, 0), ifNull(group_id, 0), cls)
         AS
         WITH
-        counters AS
+        active_logins AS
         (
             SELECT
-                counter_id,
-                anyLast(domain) AS domain,
-                anyLast(campaign_id) AS campaign_id,
-                anyLast(ad_group_id) AS ad_group_id
-            FROM raw_data.metrika_yandex_counters
-            GROUP BY counter_id
-        ),
-        sites AS
-        (
-            SELECT
-                lowerUTF8(trim(ifNull(domain, ''))) AS domain_key,
-                anyLast(login_key) AS login_key,
+                lowerUTF8(trim(ifNull(login_key, ''))) AS login,
                 anyLast(directologist) AS directologist
             FROM raw_data.gsheet_sites
-            WHERE ifNull(domain, '') != ''
-            GROUP BY domain_key
+            WHERE status = 'Контекст активно'
+              AND ifNull(login_key, '') != ''
+            GROUP BY login
+        ),
+        recent_costs AS
+        (
+            SELECT
+                lowerUTF8(trim(rr.client_login)) AS login,
+                rr.campaign_id,
+                ifNull(rr.ad_group_id, 0) AS group_id,
+                anyLast(rr.campaign_name) AS campaign_name,
+                anyLast(rr.ad_group_name) AS group_name,
+                anyLast(rr.domain) AS domain,
+                sum(ifNull(rr.total_cost, rr.cost)) AS cost_30d,
+                max(toDate(rr.day)) AS last_date
+            FROM raw_data.yandex_direct_report_rows AS rr
+            WHERE toDate(rr.day) >= today() - {lookback_days}
+              AND ifNull(rr.total_cost, rr.cost) > 0
+              AND rr.campaign_id != 0
+              AND ifNull(rr.ad_group_id, 0) != 0
+            GROUP BY login, campaign_id, group_id
+        ),
+        adgroups AS
+        (
+            SELECT
+                lowerUTF8(trim(account_login)) AS login,
+                campaign_id,
+                group_id,
+                anyLast(group_name) AS group_name,
+                anyLast(tracking_params) AS tracking_params,
+                anyLast(status) AS status
+            FROM raw_data.direct_adgroups
+            GROUP BY login, campaign_id, group_id
+        ),
+        campaigns AS
+        (
+            SELECT
+                lowerUTF8(trim(account_login)) AS login,
+                campaign_id,
+                anyLast(campaign_name) AS campaign_name,
+                anyLast(status) AS campaign_status,
+                anyLast(state) AS campaign_state
+            FROM raw_data.direct_campaigns
+            GROUP BY login, campaign_id
         )
         SELECT
-            c.counter_id,
-            c.domain,
-            c.campaign_id,
-            c.ad_group_id,
-            s.login_key,
-            s.directologist
-        FROM counters c
-        LEFT JOIN sites s ON s.domain_key = lowerUTF8(trim(ifNull(c.domain, '')))
+            CAST(
+                bitAnd(cityHash64(toString(tuple(rc.login, rc.campaign_id, rc.group_id, today()))), 9223372036854775807),
+                'Nullable(Int64)'
+            ) AS id,
+            CAST(rc.login, 'Nullable(String)') AS login,
+            CAST(rc.campaign_id, 'Nullable(Int64)') AS CampaignId,
+            CAST(coalesce(c.campaign_name, rc.campaign_name), 'Nullable(String)') AS CampaignName,
+            CAST(rc.group_id, 'Nullable(Int64)') AS group_id,
+            CAST(coalesce(ag.group_name, rc.group_name), 'Nullable(String)') AS group_name,
+            CAST(ag.status, 'Nullable(String)') AS status,
+            {class_sql} AS cls,
+            CAST(ifNull(ag.tracking_params, ''), 'Nullable(String)') AS tracking_params,
+            CAST('direct', 'Nullable(String)') AS utm_source_type,
+            CAST(rc.domain, 'Nullable(String)') AS domain,
+            CAST(NULL, 'Nullable(Int64)') AS counter_id,
+            CAST(al.directologist, 'Nullable(String)') AS `специалист`,
+            CAST(rc.domain, 'Nullable(String)') AS `домен`,
+            CAST(rc.cost_30d, 'Nullable(Decimal(18, 6))') AS cost,
+            CAST(rc.last_date, 'Nullable(Date)') AS date,
+            CAST(NULL, 'Nullable(Int64)') AS visits
+        FROM recent_costs rc
+        INNER JOIN active_logins al ON al.login = rc.login
+        LEFT JOIN adgroups ag
+            ON ag.login = rc.login AND ag.campaign_id = rc.campaign_id AND ag.group_id = rc.group_id
+        LEFT JOIN campaigns c
+            ON c.login = rc.login AND c.campaign_id = rc.campaign_id
+        WHERE ifNull(c.campaign_state, '') NOT IN ('ARCHIVED')
+          AND ifNull(c.campaign_status, '') NOT IN ('DRAFT')
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
     client.command(
-        """
-        CREATE TABLE ad_analytics.check_utm_new
-        (
-            id Nullable(Int64),
-            login Nullable(String),
-            CampaignId Nullable(Int64),
-            CampaignName Nullable(String),
-            group_id Nullable(Int64),
-            group_name Nullable(String),
-            tracking_params Nullable(String),
-            `домен` Nullable(String),
-            cost Nullable(Decimal(18, 6)),
-            `специалист` Nullable(String),
-            date Nullable(Date),
-            utm_source_type Nullable(String),
-            visits Nullable(Int64),
-            cls String
-        )
-        ENGINE = MergeTree
-        PARTITION BY toYYYYMM(ifNull(date, toDate('2026-01-01')))
-        ORDER BY (ifNull(date, toDate('2026-01-01')), ifNull(login, ''), ifNull(CampaignId, 0), ifNull(group_id, 0), cls)
-        """
-    )
-    client.command(
-        """
+        f"""
         CREATE TABLE ad_analytics.check_utm_fuck_direct_new
-        (
-            id Nullable(Int64),
-            login Nullable(String),
-            CampaignId Nullable(Int64),
-            CampaignName Nullable(String),
-            group_id Nullable(Int64),
-            group_name Nullable(String),
-            tracking_params Nullable(String),
-            `домен` Nullable(String),
-            cost Nullable(Decimal(18, 6)),
-            `специалист` Nullable(String),
-            date Nullable(Date),
-            utm_source_type Nullable(String)
-        )
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(ifNull(date, toDate('2026-01-01')))
         ORDER BY (ifNull(date, toDate('2026-01-01')), ifNull(login, ''), ifNull(CampaignId, 0), ifNull(group_id, 0))
-        """
-    )
-
-    batch_days = int(os.getenv("CHECK_UTM_BATCH_DAYS", "7"))
-    chunks = range_batches(date_from=date_from, date_to=date_to, days=batch_days)
-    if not chunks:
-        raise ValueError(f"empty check_utm date range: date_from={date_from!r}, date_to={date_to!r}")
-    log.info(
-        "check_utm chunked build: %d chunks × %d days, range=[%s, %s)",
-        len(chunks),
-        batch_days,
-        chunks[0][0],
-        chunks[-1][1],
-    )
-    for start, end in chunks:
-        log.info("check_utm chunk %s -> %s", start, end)
-        client.command(
-            f"""
-            INSERT INTO ad_analytics.check_utm_new
-            WITH u AS
-            (
-                SELECT
-                    m.day AS date,
-                    m.counter_id,
-                    ifNull(m.utm_source, '') AS utm_source,
-                    ifNull(m.utm_medium, '') AS utm_medium,
-                    ifNull(m.utm_campaign, '') AS utm_campaign,
-                    ifNull(m.utm_content, '') AS utm_content,
-                    ifNull(m.utm_term, '') AS utm_term,
-                    sum(ifNull(m.visits, 0)) AS visits,
-                    coalesce(
-                        toInt64OrNull(extract(ifNull(m.utm_campaign, ''), '^(\\\\d+)')),
-                        toInt64OrNull(extract(ifNull(m.utm_content, ''), 'cid[_:=](\\\\d+)'))
-                    ) AS parsed_campaign_id,
-                    coalesce(
-                        toInt64OrNull(extract(ifNull(m.utm_content, ''), 'g:(\\\\d+)')),
-                        toInt64OrNull(extract(ifNull(m.utm_content, ''), 'gbid[_-](\\\\d+)')),
-                        toInt64OrNull(extract(ifNull(m.utm_content, ''), 'gid[_:=](\\\\d+)'))
-                    ) AS parsed_group_id
-                FROM raw_data.metrika_yandex_utm_daily m
-                WHERE m.day >= toDate('{start}')
-                  AND m.day < toDate('{end}')
-                  AND (
-                      lowerUTF8(ifNull(m.utm_source, '')) IN ('yandex', 'direct', 'yandex_direct')
-                      OR lowerUTF8(ifNull(m.utm_medium, '')) IN ('cpc', 'context')
-                      OR positionCaseInsensitive(ifNull(m.utm_content, ''), 'gbid') > 0
-                      OR positionCaseInsensitive(ifNull(m.utm_content, ''), 'g:') > 0
-                  )
-                GROUP BY
-                    date,
-                    counter_id,
-                    utm_source,
-                    utm_medium,
-                    utm_campaign,
-                    utm_content,
-                    utm_term,
-                    parsed_campaign_id,
-                    parsed_group_id
-            )
-            SELECT
-                CAST(
-                    bitAnd(cityHash64(toString(tuple(u.date, u.counter_id, u.utm_source, u.utm_medium, u.utm_campaign, u.utm_content, u.utm_term))), 9223372036854775807),
-                    'Nullable(Int64)'
-                ) AS id,
-                CAST(cd.login_key, 'Nullable(String)') AS login,
-                CAST(coalesce(u.parsed_campaign_id, cd.campaign_id), 'Nullable(Int64)') AS CampaignId,
-                CAST(NULL, 'Nullable(String)') AS CampaignName,
-                CAST(coalesce(u.parsed_group_id, cd.ad_group_id), 'Nullable(Int64)') AS group_id,
-                CAST(NULL, 'Nullable(String)') AS group_name,
-                CAST(concat('utm_source=', u.utm_source, '|utm_medium=', u.utm_medium, '|utm_campaign=', u.utm_campaign, '|utm_content=', u.utm_content), 'Nullable(String)') AS tracking_params,
-                CAST(cd.domain, 'Nullable(String)') AS `домен`,
-                CAST(toDecimal64(0, 6), 'Nullable(Decimal(18, 6))') AS cost,
-                CAST(cd.directologist, 'Nullable(String)') AS `специалист`,
-                CAST(u.date, 'Nullable(Date)') AS date,
-                CAST('metrika', 'Nullable(String)') AS utm_source_type,
-                CAST(u.visits, 'Nullable(Int64)') AS visits,
-                multiIf(
-                    u.parsed_campaign_id IS NULL AND u.parsed_group_id IS NULL, 'НЕТ_UTM',
-                    cd.campaign_id != 0 AND u.parsed_campaign_id IS NOT NULL AND cd.campaign_id != u.parsed_campaign_id, 'ДРУГОЙ_UTM',
-                    cd.ad_group_id != 0 AND u.parsed_group_id IS NOT NULL AND cd.ad_group_id != u.parsed_group_id, 'ДРУГОЙ_UTM',
-                    'OK'
-                ) AS cls
-            FROM u
-            LEFT JOIN ad_analytics.check_utm_counter_dim_new cd ON cd.counter_id = u.counter_id
-            """,
-            settings=SAFE_QUERY_SETTINGS,
-        )
-
-        client.command(
-            f"""
-            INSERT INTO ad_analytics.check_utm_fuck_direct_new
-            SELECT
-                id,
+        AS
+        WITH bad AS
+        (
+            SELECT DISTINCT
                 login,
                 CampaignId,
                 CampaignName,
@@ -383,21 +337,56 @@ def build_check_utm(client=None, date_from: str = "2026-01-01", date_to: str | N
                 group_name,
                 tracking_params,
                 `домен`,
-                cost,
                 `специалист`,
-                date,
                 utm_source_type
             FROM ad_analytics.check_utm_new
-            WHERE date >= toDate('{start}')
-              AND date < toDate('{end}')
-              AND cls IN ('НЕТ_UTM', 'ДРУГОЙ_UTM')
-            """,
-            settings=SAFE_QUERY_SETTINGS,
+            WHERE cls IN ('НЕТ_UTM', 'ДРУГОЙ_UTM')
+              AND login IS NOT NULL
+              AND CampaignId IS NOT NULL
+              AND group_id IS NOT NULL
+        ),
+        daily_cost AS
+        (
+            SELECT
+                lowerUTF8(trim(rr.client_login)) AS login,
+                rr.campaign_id,
+                ifNull(rr.ad_group_id, 0) AS group_id,
+                toDate(rr.day) AS date,
+                sum(ifNull(rr.total_cost, rr.cost)) AS cost
+            FROM raw_data.yandex_direct_report_rows AS rr
+            WHERE toDate(rr.day) >= today() - {history_days}
+              AND ifNull(rr.total_cost, rr.cost) > 0
+            GROUP BY login, campaign_id, group_id, date
         )
+        SELECT
+            CAST(
+                bitAnd(cityHash64(toString(tuple(dc.date, b.login, b.CampaignId, b.group_id))), 9223372036854775807),
+                'Nullable(Int64)'
+            ) AS id,
+            b.login AS login,
+            b.CampaignId AS CampaignId,
+            b.CampaignName AS CampaignName,
+            b.group_id AS group_id,
+            b.group_name AS group_name,
+            b.tracking_params AS tracking_params,
+            b.`домен` AS `домен`,
+            CAST(dc.cost, 'Nullable(Decimal(18, 6))') AS cost,
+            b.`специалист` AS `специалист`,
+            CAST(dc.date, 'Nullable(Date)') AS date,
+            b.utm_source_type AS utm_source_type
+        FROM daily_cost dc
+        INNER JOIN bad b
+            ON b.login = dc.login AND b.CampaignId = dc.campaign_id AND b.group_id = dc.group_id
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
     swap_shadow(client, "ad_analytics.check_utm", check_shadow)
     swap_shadow(client, "ad_analytics.check_utm_fuck_direct", fuck_shadow)
-    client.command(f"DROP TABLE IF EXISTS {check_shadow} SYNC")
-    client.command(f"DROP TABLE IF EXISTS {dim_shadow} SYNC")
+    log.info(
+        "check_utm built from Direct raw snapshots: lookback_days=%d history_days=%d",
+        lookback_days,
+        history_days,
+    )
     return count_rows(client, "ad_analytics.check_utm"), count_rows(client, "ad_analytics.check_utm_fuck_direct")
 
 

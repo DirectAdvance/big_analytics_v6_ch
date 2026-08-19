@@ -26,15 +26,22 @@ from spend.build_direct_spend_staging import STAGING_TABLE
 
 log = logging.getLogger("build_pbi_compat")
 
+PBI_INT64_MAX = 9223372036854775807
+
 
 def _site_key_expr(alias: str = "f") -> str:
     return f"cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull({alias}.domain, ''))))"
+
+
+def _pbi_int64_key(expr: str) -> str:
+    return f"toInt64({expr} % {PBI_INT64_MAX})"
 
 
 PBI_SOURCE_OBJECTS = [
     "Dim_Account",
     "Dim_AdGroup",
     "Dim_AdFormat",
+    "Dim_AdText",
     "Dim_AdNetworkType",
     "Dim_Adjustment",
     "Dim_Campaign",
@@ -390,7 +397,7 @@ def _feed_funnel_star_sql(where_sql: str = "") -> str:
             f.campaign_id,
             f.ad_group_id AS adgroup_id,
             p.placement_feed_id,
-            f.site_key,
+            {_pbi_int64_key("f.site_key")} AS site_key,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -400,6 +407,24 @@ def _feed_funnel_star_sql(where_sql: str = "") -> str:
         FROM ad_analytics.fact_direct_feed_funnel_light f
         LEFT JOIN placement_feed_ids p ON p.placement_feed_key_hash = f.placement_feed_key_hash
         {where_sql}
+    """
+
+
+def _feed_funnel_star_pbi_sql() -> str:
+    return f"""
+        SELECT
+            date,
+            campaign_id,
+            adgroup_id,
+            placement_feed_id,
+            {_pbi_int64_key("site_key")} AS site_key,
+            cost,
+            clicks,
+            impressions,
+            all_forms,
+            crm_order_created,
+            crm_order_paid
+        FROM ad_analytics.pbi_import_fact_direct_feed_funnel_star
     """
 
 
@@ -499,7 +524,7 @@ def _region_spend_star_pbi_sql(where_sql: str = "") -> str:
             f.ad_group_id,
             f.ad_network_type_key,
             f.id_location,
-            f.site_key,
+            {_pbi_int64_key("f.site_key")} AS site_key,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -576,8 +601,8 @@ def _criterion_spend_star_pbi_sql(where_sql: str = "") -> str:
             f.campaign_id,
             f.ad_group_id,
             f.ad_network_type_key,
-            f.criterion_key,
-            f.site_key,
+            {_pbi_int64_key("f.criterion_key")} AS criterion_key,
+            {_pbi_int64_key("f.site_key")} AS site_key,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions
@@ -959,6 +984,20 @@ def _dim_ad_format_pbi_sql() -> str:
     """
 
 
+def _dim_ad_text_pbi_sql() -> str:
+    return """
+        SELECT
+            banner_id,
+            argMax(banner_type, loaded_at) AS ad_type,
+            argMax(banner_status, loaded_at) AS status,
+            argMax(banner_title, loaded_at) AS title,
+            argMax(banner_body, loaded_at) AS text,
+            argMax(banner_href, loaded_at) AS banner_href
+        FROM raw_data.direct_cookie_ads_texts_master
+        GROUP BY banner_id
+    """
+
+
 def _dim_adjustment_pbi_sql() -> str:
     return """
         SELECT
@@ -1167,9 +1206,10 @@ def _dim_adgroup_pbi_sql() -> str:
 
 
 def _dim_site_pbi_sql() -> str:
-    return """
+    return f"""
         SELECT
-            site_key, domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`,
+            {_pbi_int64_key("site_key")} AS site_key,
+            domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`,
             `направление`, `статус`, status, `специалист`, `проджект`, project_manager,
             `id_салона`, `менеджер`, `Название crm`
         FROM ad_analytics.Dim_Site
@@ -1203,8 +1243,8 @@ def _vk_ads_pbi_sql() -> str:
 
 
 def _dim_criterion_pbi_sql() -> str:
-    return """
-        SELECT criterion_key, criterion, criterion_type, criterion_raw
+    return f"""
+        SELECT {_pbi_int64_key("criterion_key")} AS criterion_key, criterion, criterion_type, criterion_raw
         FROM ad_analytics.Dim_Criterion
     """
 
@@ -1368,17 +1408,14 @@ def _direct_ads_texts_pbi_sql() -> str:
             client_login,
             campaign_id,
             adgroup_id AS ad_group_id,
-            banner_type AS ad_type,
-            banner_status AS status,
-            banner_title AS title,
-            banner_body AS text,
+            banner_id,
             toInt64(sum(shows)) AS impressions,
             toInt64(sum(clicks)) AS clicks,
             sum(cost) AS cost,
             toInt64(round(sum(goals))) AS goal_all_forms,
             toInt64(0) AS goal_crm_order_paid
         FROM raw_data.direct_cookie_ads_texts_master
-        GROUP BY loaded_at, client_login, campaign_id, ad_group_id, ad_type, status, title, text
+        GROUP BY loaded_at, client_login, campaign_id, ad_group_id, banner_id
     """
 
 
@@ -1426,10 +1463,11 @@ def _direct_type_placement_pbi_sql() -> str:
 
 PBI_VIEW_SQL_BUILDERS = {
     "fact_direct_feed_funnel": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel",
-    "fact_direct_feed_funnel_star": lambda: "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel_star",
+    "fact_direct_feed_funnel_star": _feed_funnel_star_pbi_sql,
     "Dim_Account": _dim_account_pbi_sql,
     "Dim_Date": _dim_date_pbi_sql,
     "Dim_AdFormat": _dim_ad_format_pbi_sql,
+    "Dim_AdText": _dim_ad_text_pbi_sql,
     "Dim_AdNetworkType": _dim_ad_network_type_pbi_sql,
     "Dim_Adjustment": _dim_adjustment_pbi_sql,
     "Dim_Device": _dim_device_pbi_sql,

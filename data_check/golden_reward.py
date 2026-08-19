@@ -294,7 +294,7 @@ def _check_5_pixel_visit_durable(cur) -> Block:
                COALESCE(ROUND(SUM(priezd)),0)   AS priezd
         FROM {T_DURABLE}
         WHERE {_ATTR_VIZIT}
-          AND направление IN ('Пиксель','Пиксель_атрибуц')  -- KOMPLEKS_REFACTOR_REDO_2026-07-09
+          AND направление = 'Пиксель'
     """)
     px_rows, px_sales, px_arr = cur.fetchone()
     px_rows = int(px_rows or 0)
@@ -308,25 +308,20 @@ def _check_5_pixel_visit_durable(cur) -> Block:
 
 
 def _check_6_pixel_fractional_durable(cur) -> Block:
-    """Блок 6: Дробность пикселя — через fact_big_analytics (заявка-ось, durable)."""
+    """Блок 6: обычный пиксель присутствует в fact_big_analytics."""
     cur.execute(f"""
-        SELECT COUNT(*) FILTER (WHERE prodazhi <> ROUND(prodazhi, 0)) AS frac_rows,
-               COUNT(*)                                               AS px_rows,
-               SUM(prodazhi)                                          AS px_sum
+        SELECT COUNT(*) AS px_rows,
+               COALESCE(SUM(prodazhi), 0) AS px_sum
         FROM {T_DURABLE}
         WHERE {_ATTR_ZAYAVKA}
-          AND направление IN ('Пиксель','Пиксель_атрибуц')  -- KOMPLEKS_REFACTOR_REDO_2026-07-09
+          AND направление = 'Пиксель'
     """)
-    frac_rows, px_rows, px_sum = cur.fetchone()
-    frac_rows = int(frac_rows or 0)
+    px_rows, px_sum = cur.fetchone()
     px_rows = int(px_rows or 0)
     px_sum_d = Decimal(str(px_sum)) if px_sum is not None else Decimal('0')
-    frac_part = px_sum_d - px_sum_d.to_integral_value(rounding='ROUND_FLOOR')
-    ok = frac_rows > 0
-    detail = (f'дробных пиксель-строк={frac_rows}/{px_rows} (усечение к int дало бы 0); '
-              f'SUM={px_sum_d} (дробн.часть суммы={frac_part}) '
-              f'[durable: fact_big_analytics заявка-ось]')
-    return Block(6, 'Дробность пикселя не усечена', ok, detail)
+    ok = px_rows > 0
+    detail = f'пиксельных строк={px_rows}; SUM(prodazhi)={px_sum_d} [durable: fact_big_analytics заявка-ось]'
+    return Block(6, 'Пиксель в fact присутствует', ok, detail)
 
 
 def _check_7_funnel_i3_durable(cur) -> Block:
@@ -399,7 +394,7 @@ def _check_9_freshness_durable(cur) -> Block:
 def _check_10_pixel_score_durable(cur) -> Block:
     """Блок 10: Пиксель == pixel_score — читает durable big_analytics_pixel_score.
 
-    Сторона сравнения 'пиксель_атрибуц' берётся из fact_big_analytics (durable).
+    Сторона сравнения `pixel` берётся из fact_big_analytics (durable).
     Логика идентична check_10_pixel_score из verify_big_analytics.
     """
     px_score_exists = _scalar(cur, "SELECT to_regclass('public.big_analytics_pixel_score') IS NOT NULL")
@@ -425,7 +420,7 @@ def _check_10_pixel_score_durable(cur) -> Block:
                COALESCE(SUM(prodazhi),0), COUNT(*)
         FROM {T_DURABLE}
         WHERE {_ATTR_ZAYAVKA}
-          AND _source_table = 'пиксель_атрибуц'
+          AND _source_table = 'pixel'
     """)
     f_z, f_korr, f_kval, f_priezd, f_prod, full_rows = cur.fetchone()
     full_rows = int(full_rows or 0)
@@ -442,7 +437,7 @@ def _check_10_pixel_score_durable(cur) -> Block:
         if d > worst:
             worst, worst_name = d, name
     ok = worst <= tol
-    detail = (f'pixel_score rows={sc_rows} vs fact[пиксель_атрибуц] rows={full_rows}; '
+    detail = (f'pixel_score rows={sc_rows} vs fact[pixel] rows={full_rows}; '
               f'макс. расхождение метрики={worst} ({worst_name or "—"}), '
               f'допуск (≈±1×строк) <={tol} [durable: pixel_score + fact_big_analytics]')
     return Block(10, 'Пиксель == pixel_score', ok, detail)

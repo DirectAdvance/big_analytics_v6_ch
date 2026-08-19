@@ -601,9 +601,9 @@ Regex из исправленного `AdGroupName` для аккаунтов г
 
 **v2** (`_rule_fill_specialist_fallback` в `corrections.apply()`): покрывает строки в `COMPONENT_TABLES` на момент выполнения corrections (между step3 и step4).
 
-**v3** (`apply_spec_fallback_v3(conn, tables)` в `corrections.py`): покрывает источники, создаваемые ПОСЛЕ corrections — pixel/calls/пиксель_атрибуц/crop_targeting/arrival.
+**v3** (`apply_spec_fallback_v3(conn, tables)` в `corrections.py`): покрывает источники, создаваемые ПОСЛЕ corrections — pixel/calls/crop_targeting/arrival.
 Две точки вызова (маркер `SPEC_FALLBACK_V3_2026-07-03`):
-1. `pipeline.py` / `fast_pipeline.py` — после step11, ДО step13_rebuild: закрывает `big_analytics_full` (calls, пиксель, пиксель_атрибуц, crop_targeting)
+1. `pipeline.py` / `fast_pipeline.py` — после step11, ДО step13_rebuild: закрывает `big_analytics_full` (calls, pixel, crop_targeting)
 2. `pipeline.py` / `fast_pipeline.py` — после step13_rebuild: закрывает arrival (direct по дате визита, crop, pixel)
 
 Результат: NULL специалист в `fact_big_analytics` = 0 (по 7 820 строкам в прогоне SPEC_FALLBACK_V3_ПРОГОН run_id=82211aeb).

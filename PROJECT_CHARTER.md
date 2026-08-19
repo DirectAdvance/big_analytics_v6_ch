@@ -90,8 +90,7 @@ Authoritative-список — `_ALL_TABLES` в [`refresh_powerbi.py`](refresh_p
 Кратко: `big_analytics_full` (главная, 9.4 GB), `analytics_report_placement` (12 GB),
 `big_analytics_full_arrival`, `yandex_direct_history` (в PBI = `direct_history`),
 `check_utm_fuck_direct`, `yandex_direct_korrektirovki`, `yandex_direct_404_errors`,
-`yandex_direct_return_commission_report`, `pixel_score`,
-`yandex_direct_cookie_analytics_website_pages`.
+`pixel_score`, `yandex_direct_cookie_analytics_website_pages`.
 
 ### Защищённые источники (не в PBI, удалять нельзя)
 `yandex_direct_report_placement` (→ ARP), `local_yandex` (→ raw_yandex),
@@ -159,8 +158,7 @@ dohod_do_kredita(доход) ⊇ dobro(одобрено)
 | `pipeline_powerbi.py` | вручную | Сверка расходов (стоп при \|Σ\| > 200 000 ₽) → `pipeline.main()` → **триггер refresh Power BI** | ~40–50 мин |
 | `refresh_powerbi.py` | вручную / из pipeline_powerbi | Только refresh датасета PBI Service (`_ALL_TABLES`), polling до 60 мин | до 60 мин |
 
-Вне `pipeline.py` строятся: `analytics_report_placement` (ночной report_placement),
-`yandex_direct_return_commission_report` (calculation_agency_commission),
+Вне `pipeline.py` строятся: `analytics_report_placement` (ночной report_placement) и
 `yandex_direct_cookie_analytics_website_pages` (отдельный сервис).
 
 Запуск (детали — `CLAUDE.md`):
@@ -209,7 +207,7 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 pipeline_powerbi.py"
 | **404-ошибки** | Метрика API (OAuth) | `404_errors/404_errors.py` | — | `yandex_direct_404_errors` (PBI) |
 | **Placement-отчёт** | Direct Reports API + `raw_leads` | `report_placement` (суббота) | — | `analytics_report_placement` (PBI) |
 | **Cookie-аналитика** | Grid API BannerHref (куки) | отдельный сервис | — | `yandex_direct_cookie_analytics_website_pages` (PBI) |
-| **Пиксель** | лиды `utm_source LIKE 'victory_%'` + Google Sheets | step5 → step11 | `big_analytics_pixel` → `pixel_score` | `full` (`пиксель_атрибуц`) + `pixel_score` (PBI) |
+| **Пиксель** | лиды `utm_source LIKE 'victory_%'` + Google Sheets | step5 → step11 | `big_analytics_pixel` → `pixel_score` | `full` (`pixel`) + `pixel_score` |
 | **Посевы** | Google Sheets (<май) + Telega.in API (≥май) + VK/MAX | step10 | `crop_targeting_api_telegain_lead`, `gsheets_crop_targeting_account*` | `big_analytics_crop_targeting` → `full` |
 | **Отзывы** | Direct Reports API (OAuth, еженедельно) | `direct_account_reviews` | `yandex_direct_reports_reviews` | `full` (`_source_table='reviews'`) |
 | **История Директа** | GraphQL API (куки) | step9 | — | `yandex_direct_history` (PBI = `direct_history`) |
@@ -374,7 +372,7 @@ step11 распределяет pixel-воронку салона по цепо�
 взвешенному CR (`cr_composite = (1·kol_vo + 3·korr + 10·kval + 30·priezd + 100·prodazhi)/Clicks`),
 benchmarks по домену из `big_analytics_direct` за тот же месяц. Результат:
 `pixel_score` (PBI-таблица весов/скоров CPL) + строки в `big_analytics_full` с
-`_source_table='пиксель_атрибуц'`.
+`_source_table='pixel'`.
 
 ---
 

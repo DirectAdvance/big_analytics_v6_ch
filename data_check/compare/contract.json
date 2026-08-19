@@ -53,7 +53,7 @@
       "v5": "f.\"источник\"",
       "v6": "ds.`источник`",
       "v6_joins": ["LEFT JOIN ad_analytics.Dim_Source ds ON ds.source_key = f.source_key"],
-      "values_comparable": ["Контекст", "SEO", "Пиксель", "Пиксель_атрибуц", "VK Ads", "Посевы_Max", "Посевы_Telegram", "Посевы_VK"]
+      "values_comparable": ["Контекст", "SEO", "Пиксель", "VK Ads", "Посевы_Max", "Посевы_Telegram", "Посевы_VK"]
     }
   },
   "columns_required": {

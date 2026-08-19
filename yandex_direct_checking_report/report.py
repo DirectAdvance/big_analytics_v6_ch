@@ -6,74 +6,47 @@ yandex_direct_checking_report/report.py — независимый отчёт с
     `ad_analytics_bi` (Victory VPS). Расходы по аккаунтам, помесячно, с НДС.
 
 Источник аккаунтов:
-    public.local_gsheet_sites
+    raw_data.gsheet_sites
       WHERE status='Контекст активно' AND direction='Авто'
       AND login_key IS NOT NULL AND login_key != ''
 
-API:
-    Яндекс.Директ Reports API v5
-    POST https://api.direct.yandex.com/json/v5/reports
-    ReportType=CAMPAIGN_PERFORMANCE_REPORT, FieldNames=['Month','Cost']
-    Группировка по месяцу — на стороне API; локально только агрегируем по аккаунту.
-    Заголовки: IncludeVAT=YES (с НДС), returnMoneyInMicros=false (рубли, не микрорубли).
-
-Токены:
-    Агентские (4 шт.), берутся из .secret/.env через loader.load_yandex_direct().
-    Для каждого account_login — перебираем токены, первый давший 200 OK на
-    Reports → этот используется. manager_login = логин агентки чей токен прошёл.
+Источник расходов:
+    raw_data.yandex_direct_report_rows.total_cost — расход с НДС и комиссией.
+    Группировка по месяцу делается в ClickHouse.
 
 Поведение:
     TRUNCATE → загрузить целиком за период [2026-01-01 … вчера].
     Запускается как standalone скрипт, в pipeline.py НЕ включается.
 
 Запуск:
-    cd work/big_analytics_v5
+    cd work/big_analytics_v6_ch
     python -m yandex_direct_checking_report.report
 """
 from __future__ import annotations
 
-import csv
 import datetime as dt
-import io
 import logging
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
 
 import psycopg2
 import psycopg2.extras
-import requests
 
-# ── sys.path: модуль внутри big_analytics_v5 ──────────────────────────────────
+# ── sys.path: модуль внутри big_analytics_v6_ch ───────────────────────────────
 _PKG_ROOT = Path(__file__).resolve().parents[1]
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
+from config.ch_db import get_client  # noqa: E402
 from config.settings import DB_DST  # noqa: E402
 from config.tokens import (  # noqa: E402
-    OAUTH_TOKEN_1, OAUTH_TOKEN_2, OAUTH_TOKEN_3, OAUTH_TOKEN_4, OAUTH_TOKEN_5,
-    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY, TELEGRAM_PROXY_VARIANTS,
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS,
 )
 
 # ── Имена/константы ───────────────────────────────────────────────────────────
 TABLE_NAME = 'yandex_direct_checking_report'
-REPORTS_URL = 'https://api.direct.yandex.com/json/v5/reports'
 DATE_FROM = '2026-01-01'
-
-# (oauth_token, manager_login) — порядок = приоритет перебора
-TOKENS: list[tuple[str, str]] = [
-    (OAUTH_TOKEN_1, 'victorylotsofads1'),
-    (OAUTH_TOKEN_2, 'victoryagency-direct1618440'),
-    (OAUTH_TOKEN_3, 'y-direct-victory'),
-    (OAUTH_TOKEN_4, 'victoryagency14'),
-    (OAUTH_TOKEN_5, 'useful-call-agency'),
-]
-
-MAX_RETRY_HTTP5XX = 5
-MAX_WORKERS = 4
-PAUSE_PER_WORKER = 0.5  # сек между запросами — 2 rps на токен, 60% запас от лимита 5 rps
 
 # ── Логгер ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -131,192 +104,57 @@ ORDER BY ABS(c.cost - COALESCE(m.cost, 0)) DESC
 
 TG_MAX_ROWS = 40
 
-SELECT_ACCOUNTS_SQL = """
-SELECT DISTINCT ON (login_key) login_key, domain
-FROM public.local_gsheet_sites
-WHERE status = 'Контекст активно'
-  AND direction = 'Авто'
-  AND login_key IS NOT NULL AND TRIM(login_key) <> ''
-  AND login_key ~ '[a-zA-Z0-9]'
-ORDER BY login_key, domain
-"""
 
-
-# ── Дата ──────────────────────────────────────────────────────────────────────
-def _process_account(
-    account_login: str,
-    domain: str,
-    date_from: str,
-    date_to: str,
-    idx: int,
-    total: int,
-    worker_id: int = 0,
-) -> tuple[str, str, Optional[str], Optional[dict]]:
-    """Fetch one account via API. Thread-safe — no shared mutable state."""
-    logger.info('[%d/%d] %s (%s) ...', idx, total, account_login, domain or '-')
-    tsv, manager_login = fetch_report_with_token_rotation(
-        account_login, date_from, date_to, worker_id=worker_id
-    )
-    if tsv is None:
-        logger.warning('  [%s] → ни один токен не дал доступ', account_login)
-        return account_login, domain, None, None
-    monthly = parse_tsv_monthly(tsv)
-    if monthly:
-        logger.info('  [%s] → %d мес., итого %.2f ₽ (mgr=%s)',
-                    account_login, len(monthly), sum(monthly.values()), manager_login)
-    else:
-        logger.info('  [%s] → нет расходов (mgr=%s)', account_login, manager_login)
-    time.sleep(PAUSE_PER_WORKER)
-    return account_login, domain, manager_login, monthly
+def _load_report_rows(date_from: str, date_to: str) -> tuple[list[tuple], int]:
+    """Rows for PostgreSQL insert, built from ClickHouse raw_data."""
+    client = get_client()
+    active_accounts_sql = """
+        SELECT count()
+        FROM
+        (
+            SELECT DISTINCT lowerUTF8(trim(login_key)) AS login
+            FROM raw_data.gsheet_sites
+            WHERE status = 'Контекст активно'
+              AND direction = 'Авто'
+              AND ifNull(login_key, '') != ''
+              AND match(ifNull(login_key, ''), '[a-zA-Z0-9]')
+        )
+    """
+    active_accounts = client.query(active_accounts_sql).result_rows[0][0]
+    rows_sql = f"""
+        WITH active_accounts AS
+        (
+            SELECT
+                lowerUTF8(trim(login_key)) AS login,
+                anyLast(nullIf(ifNull(domain, ''), '')) AS domain
+            FROM raw_data.gsheet_sites
+            WHERE status = 'Контекст активно'
+              AND direction = 'Авто'
+              AND ifNull(login_key, '') != ''
+              AND match(ifNull(login_key, ''), '[a-zA-Z0-9]')
+            GROUP BY login
+        )
+        SELECT
+            aa.domain AS domain,
+            lowerUTF8(trim(rr.client_login)) AS account_login,
+            anyLast(nullIf(rr.manager_login, '')) AS manager_login,
+            toStartOfMonth(toDate(rr.day)) AS month,
+            round(sum(rr.total_cost), 2) AS cost
+        FROM raw_data.yandex_direct_report_rows AS rr
+        INNER JOIN active_accounts AS aa ON aa.login = lowerUTF8(trim(rr.client_login))
+        WHERE toDate(rr.day) >= toDate('{date_from}')
+          AND toDate(rr.day) <= toDate('{date_to}')
+          AND rr.total_cost > 0
+        GROUP BY account_login, month, domain
+        ORDER BY account_login, month
+    """
+    return client.query(rows_sql).result_rows, int(active_accounts)
 
 
 def get_date_range() -> tuple[str, str]:
     """[DATE_FROM, вчера]."""
     yesterday = dt.date.today() - dt.timedelta(days=1)
     return DATE_FROM, yesterday.isoformat()
-
-
-# ── Direct API ────────────────────────────────────────────────────────────────
-def _make_headers(token: str, client_login: str) -> dict:
-    return {
-        'Authorization':       f'Bearer {token}',
-        'Client-Login':        client_login,
-        'Content-Type':        'application/json; charset=utf-8',
-        'Accept-Language':     'ru',
-        'returnMoneyInMicros': 'false',
-        'skipReportHeader':    'true',
-        'skipColumnHeader':    'false',
-        'skipReportSummary':   'true',
-    }
-
-
-def _request_report(
-    token: str,
-    client_login: str,
-    date_from: str,
-    date_to: str,
-) -> Optional[str]:
-    """
-    POST /reports. Возвращает TSV-текст при HTTP 200, иначе None.
-    При 401/403/400 → None (этим токеном нет доступа — перебираем дальше).
-    При 201/202/429 → ждём и повторяем.
-    При 5xx — до MAX_RETRY_HTTP5XX попыток.
-    """
-    body = {
-        'params': {
-            'SelectionCriteria': {'DateFrom': date_from, 'DateTo': date_to},
-            'FieldNames':        ['Month', 'Cost'],
-            'ReportName':        f'chk_vat_{client_login}_{date_from}_{date_to}',
-            'ReportType':        'CAMPAIGN_PERFORMANCE_REPORT',
-            'DateRangeType':     'CUSTOM_DATE',
-            'Format':            'TSV',
-            'IncludeVAT':        'YES',
-            'IncludeDiscount':   'NO',
-        }
-    }
-    headers = _make_headers(token, client_login)
-
-    conn_errors = 0
-    attempt_5xx = 0
-    while True:
-        try:
-            r = requests.post(REPORTS_URL, headers=headers, json=body, timeout=120)
-        except requests.exceptions.ConnectionError as e:
-            conn_errors += 1
-            logger.warning('ConnectionError (%d/%d): %s', conn_errors, MAX_RETRY_HTTP5XX, e)
-            if conn_errors >= MAX_RETRY_HTTP5XX:
-                return None
-            time.sleep(20)
-            continue
-        except Exception as e:
-            logger.warning('Request exception: %s', e)
-            return None
-
-        if r.status_code == 200:
-            return r.text
-        if r.status_code in (201, 202):
-            wait = min(int(r.headers.get('retryIn', 10)), 60)
-            time.sleep(wait)
-            continue
-        if r.status_code == 429:
-            wait = min(int(r.headers.get('Retry-After', 30)), 60)
-            time.sleep(wait)
-            continue
-        if r.status_code in (500, 502, 503):
-            attempt_5xx += 1
-            if attempt_5xx >= MAX_RETRY_HTTP5XX:
-                return None
-            time.sleep(30 * attempt_5xx)
-            continue
-        # 400 / 401 / 403 — нет доступа этой паре (token, client_login)
-        return None
-
-
-def _rotated_tokens(worker_id: int) -> list[tuple[str, str]]:
-    """Токены для воркера: primary = TOKENS[worker_id % N], остальные — fallback.
-    Гарантирует что параллельные воркеры используют разные primary-токены."""
-    n = len(TOKENS)
-    return [TOKENS[(worker_id + i) % n] for i in range(n)]
-
-
-def fetch_report_with_token_rotation(
-    client_login: str,
-    date_from: str,
-    date_to: str,
-    worker_id: int = 0,
-) -> tuple[Optional[str], Optional[str]]:
-    """
-    Перебираем агентские токены до первого 200 OK.
-    worker_id задаёт порядок токенов — каждый воркер стартует со своего.
-    Возвращает (tsv_text, manager_login).  Если ни один не сработал → (None, None).
-    """
-    for token, manager_login in _rotated_tokens(worker_id):
-        tsv = _request_report(token, client_login, date_from, date_to)
-        if tsv is not None:
-            return tsv, manager_login
-    return None, None
-
-
-# ── Парсинг ───────────────────────────────────────────────────────────────────
-def parse_tsv_monthly(tsv_text: str) -> dict[dt.date, float]:
-    """
-    TSV (формат API):
-        Month       Cost
-        2026-01-01  12345.67
-        2026-02-01  890.12
-    Возвращает {month_date: total_cost_rub_no_vat}.
-    """
-    monthly: dict[dt.date, float] = {}
-    reader = csv.DictReader(io.StringIO(tsv_text), delimiter='\t')
-    for row in reader:
-        month_raw = (row.get('Month') or '').strip()
-        if not month_raw or month_raw == '--':
-            continue
-        cost_raw = (row.get('Cost') or '0').strip().replace(',', '.')
-        if cost_raw in ('--', ''):
-            continue
-        try:
-            month = dt.date.fromisoformat(month_raw)
-            cost = float(cost_raw)
-        except (ValueError, TypeError):
-            continue
-        monthly[month] = monthly.get(month, 0.0) + cost
-    return monthly
-
-
-# ── БД ────────────────────────────────────────────────────────────────────────
-def get_active_accounts(conn) -> list[tuple[str, str]]:
-    """[(login_key, domain), ...] — активные авто-аккаунты."""
-    with conn.cursor() as cur:
-        cur.execute(SELECT_ACCOUNTS_SQL)
-        rows = cur.fetchall()
-    result = []
-    for login, domain in rows:
-        if not login.isascii():
-            logger.warning('Пропускаем не-ASCII login_key=%r', login)
-            continue
-        result.append((login, domain or ''))
-    return result
 
 
 def _make_conn() -> psycopg2.extensions.connection:
@@ -391,9 +229,9 @@ def run_comparison(conn, failed_list: list[tuple[str, str]] | None = None) -> fl
         f'Σ разница: {sign_total}{_n(float(total_delta))} ₽\n\n'
     )
 
-    # Таблица: account(14) month(7) api(9) mgr(9) delta(9) = ~51 символ
+    # Таблица: account(14) month(7) raw(9) mgr(9) delta(9) = ~51 символ
     lines = ['<code>']
-    lines.append(f'{"Аккаунт":<14} {"Мес":<7} {"НашAPI":>9} {"MgrRep":>9} {"Δ":>9}')
+    lines.append(f'{"Аккаунт":<14} {"Мес":<7} {"RawData":>9} {"MgrRep":>9} {"Δ":>9}')
     lines.append('─' * 51)
     for account_login, month, cost_checking, cost_manager, delta in rows[:TG_MAX_ROWS]:
         sign = '+' if delta > 0 else ''
@@ -431,46 +269,18 @@ def run() -> tuple[float, int, int]:
         conn.commit()
         logger.info('Таблица %s готова, TRUNCATE выполнен', TABLE_NAME)
 
-        accounts = get_active_accounts(conn)
-        logger.info('Активных аккаунтов (Контекст активно, Авто): %d', len(accounts))
-        if not accounts:
+        all_insert_rows, active_accounts = _load_report_rows(date_from, date_to)
+        ok_accounts = len({row[1] for row in all_insert_rows})
+        no_data_accounts = active_accounts - ok_accounts
+        total_rows = len(all_insert_rows)
+        logger.info(
+            'ClickHouse raw_data: active_accounts=%d, accounts_with_cost=%d, rows=%d',
+            active_accounts, ok_accounts, total_rows,
+        )
+        if not active_accounts:
             logger.warning('Нет аккаунтов для обработки — выход')
-            return
+            return 0.0, 0, 0
 
-        total_rows = 0
-        ok_accounts = 0
-        failed_accounts = 0
-        no_data_accounts = 0
-        failed_accounts_list: list[tuple[str, str]] = []
-        all_insert_rows: list[tuple] = []
-
-        logger.info('Параллельный fetch: %d воркеров, %d аккаунтов', MAX_WORKERS, len(accounts))
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            future_map = {
-                executor.submit(
-                    _process_account,
-                    login, domain, date_from, date_to, i, len(accounts),
-                    worker_id=(i - 1) % MAX_WORKERS,
-                ): (login, domain)
-                for i, (login, domain) in enumerate(accounts, 1)
-            }
-            for future in as_completed(future_map):
-                account_login, domain, manager_login, monthly = future.result()
-                if manager_login is None and monthly is None:
-                    failed_accounts += 1
-                    failed_accounts_list.append((account_login, domain))
-                elif not monthly:
-                    no_data_accounts += 1
-                else:
-                    rows = [
-                        (domain or None, account_login, manager_login, month, round(cost, 2))
-                        for month, cost in sorted(monthly.items())
-                    ]
-                    all_insert_rows.extend(rows)
-                    total_rows += len(rows)
-                    ok_accounts += 1
-
-        # Единый batch-insert после завершения всех API-запросов
         if all_insert_rows:
             try:
                 insert_rows(conn, all_insert_rows)
@@ -492,11 +302,11 @@ def run() -> tuple[float, int, int]:
                 insert_rows(conn, all_insert_rows)
 
         logger.info(
-            'Готово: rows=%d, accounts ok=%d, no_data=%d, failed=%d',
-            total_rows, ok_accounts, no_data_accounts, failed_accounts,
+            'Готово: rows=%d, accounts_with_cost=%d, no_data=%d',
+            total_rows, ok_accounts, no_data_accounts,
         )
 
-        return run_comparison(conn, failed_list=failed_accounts_list or None), total_rows, ok_accounts
+        return run_comparison(conn), total_rows, ok_accounts
     finally:
         conn.close()
     return 0.0, 0, 0
