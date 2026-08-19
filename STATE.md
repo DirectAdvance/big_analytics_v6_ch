@@ -104,6 +104,10 @@ URL (`telegram.me` → `t.me`, голые домены получают `https:/
 источник/campaign_id, фильтр кампаний `tp8`/`tp9`/`tp10` по `campaign_name`, пустые
 `placement_link` исключены. Live view создана: 121 892 строки, 250 логинов, 5 311 ссылок,
 расход 122 099 270.32 ₽; source-разбивка `телеграм`/`макс`/`другое`.
+2026-08-19: BA6 raw CRM-слой больше не учитывает `raw_data.leads_all.is_copy_for_removal=1`:
+фильтр добавлен в `raw_leads`, `raw_calls`, perform-ветки step1 и прямые `step13_arrival`
+lookup/orphan-запросы. Нужна пересборка минимум `pipeline.py --from-step=1` на Victory, чтобы
+живые витрины изменились.
 
 ## Главное, что выяснилось 15.08
 

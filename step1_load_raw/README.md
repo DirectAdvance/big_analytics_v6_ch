@@ -19,6 +19,7 @@ reference_data.domains ───────────────────
 `raw_yandex`, `raw_leads` и `raw_calls` пересоздаются как ClickHouse `MergeTree`
 таблицы. `raw_domains` — `VIEW` поверх `reference_data.domains`. `raw_perform_leads`
 остаётся совместимой пустой таблицей, пока нет живого источника `raw_data.perform_leads`.
+Строки `raw_data.leads_all` с `is_copy_for_removal=1` не попадают в CRM RAW-выходы.
 
 ## Архитектурная схема
 
@@ -31,7 +32,7 @@ raw_data.yandex_direct_report_rows ─────► raw_yandex
                               ├── week_start = DATE_TRUNC('week', Date)
                               └── key3 = Date|CampaignId|AdGroupId|Device|RlAdjustmentId
 
-raw_data.leads_all + reference_data.domains ─► raw_leads (deal_type != 'Звонок')
+raw_data.leads_all + reference_data.domains ─► raw_leads (deal_type != 'Звонок', is_copy_for_removal=0)
                               ├── id, created_date, arrival_date, domain_id, domain
                               ├── status, source_type, campaign_id, group_id, correction_id
                               ├── utm_source/medium/campaign/content/term, phone, yclid
@@ -39,7 +40,7 @@ raw_data.leads_all + reference_data.domains ─► raw_leads (deal_type != 'Зв
                               ├── key3 = ключ по created_date
                               └── key3_arrival_date = ключ по arrival_date
 
-raw_data.leads_all + reference_data.domains ─► raw_calls (deal_type = 'Звонок')
+raw_data.leads_all + reference_data.domains ─► raw_calls (deal_type = 'Звонок', is_copy_for_removal=0)
                               └── базовые поля без UTM-ключей (звонки не нужно матчить)
 
 reference_data.domains ─► raw_domains (VIEW)

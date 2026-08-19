@@ -461,6 +461,7 @@ FROM {source} AS l
 LEFT JOIN reference_data.domains AS d ON d.id = l.domain_id
 {_marcar_join_sql("l")}
 WHERE l.deal_type != 'Звонок'
+  AND ifNull(l.is_copy_for_removal, 0) = 0
   -- EXCLUDED_DOMAIN_NAMES_2026-08-06: матч по ИМЕНИ домена (d.domain, уже заджойнен выше),
   -- не по числовому id (id непереносим между PG v5 и CH v6 — см. config/ch_settings.py).
   -- ifNull(d.domain, '') естественно пропускает лиды с NULL domain_id (легитимные лиды без
@@ -527,6 +528,7 @@ FROM {source} AS l
 LEFT JOIN reference_data.domains AS d ON d.id = l.domain_id
 {_marcar_join_sql("l")}
 WHERE l.deal_type = 'Звонок'
+  AND ifNull(l.is_copy_for_removal, 0) = 0
   AND l.domain_id IS NOT NULL
   {source_filter}
 """
@@ -606,6 +608,7 @@ matched AS
     FROM raw_data.leads_all AS la
     LEFT JOIN crm_status_ranked AS cs ON cs.status = ifNull(la.status, '')
     WHERE {phone_norm_la} != ''
+      AND ifNull(la.is_copy_for_removal, 0) = 0
       AND {_perform_cohort_condition("la", include_extra=True)}
     GROUP BY phone_norm
 ),
@@ -620,6 +623,7 @@ branch_b_conflict_phones AS
     SELECT {phone_norm_l} AS phone_norm
     FROM raw_data.leads_all AS l
     WHERE {phone_norm_l} != ''
+      AND ifNull(l.is_copy_for_removal, 0) = 0
       AND {_perform_cohort_condition("l", include_extra=False)}
     GROUP BY phone_norm
     HAVING countIf(ifNull(l.status, '') IN (SELECT status FROM sale_statuses)) > 0
@@ -631,6 +635,7 @@ perform_vk_phones AS
     SELECT DISTINCT {phone_norm_l} AS phone_norm
     FROM raw_data.leads_all AS l
     WHERE {phone_norm_l} != ''
+      AND ifNull(l.is_copy_for_removal, 0) = 0
       AND l.source_type = 'crmf_excel'
       AND ifNull(l.utm_source, '') = 'vkads'
       AND ifNull(l.utm_campaign, '') = 'victory'
@@ -752,6 +757,7 @@ CROSS JOIN
     LIMIT 1
 ) AS d_perf
 WHERE (l.deal_type IS NULL OR l.deal_type != 'Звонок')
+  AND ifNull(l.is_copy_for_removal, 0) = 0
   AND ifNull(l.phone, '') != ''
   AND {_perform_cohort_condition("l", include_extra=False)}
   AND {phone_norm_l} NOT IN (SELECT phone_norm FROM perform_phones)

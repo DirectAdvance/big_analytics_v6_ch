@@ -202,6 +202,7 @@ marcar_record_ids AS
     SELECT id, ifNull(source_record_id, '') AS source_record_id
     FROM raw_data.leads_all
     WHERE source_type = 'marcar_crm_excel'
+      AND ifNull(is_copy_for_removal, 0) = 0
       AND ifNull(source_record_id, '') != ''
 )
 """
@@ -677,6 +678,7 @@ call_visits AS
             SELECT id, arrival_date, source_record_id
             FROM raw_data.leads_all
             WHERE deal_type = 'Звонок'
+              AND ifNull(is_copy_for_removal, 0) = 0
         ) la ON la.id = rc.id
     ) c
     LEFT JOIN marcar_arrivals ma ON ma.lead_record_id = c.source_record_id
@@ -842,6 +844,7 @@ orphan_visits AS
         SELECT DISTINCT ifNull(source_record_id, '') AS source_record_id
         FROM raw_data.leads_all
         WHERE source_type = 'marcar_crm_excel'
+          AND ifNull(is_copy_for_removal, 0) = 0
           AND ifNull(source_record_id, '') != ''
     ) la ON la.source_record_id = ms.lead_record_id
     WHERE ms.eff_arrival_date >= toDate('{date_from}')
