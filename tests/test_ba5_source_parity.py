@@ -7,6 +7,7 @@ from step10_crop_targeting.step10 import CROP_TYPES_SQL
 from step13_arrival.step13 import _calls_branch_columns, _calls_branch_sql, _leads_branch_sql
 from step3_build_sources.step3 import CROP_SOURCE_TYPES, _build_crop_sql_batched, _build_seo_sql
 from step3_build_sources.step3 import _leads_deduped_cte
+from step5_build_pixel.build_pixel import _build_pixel_insert_sql
 from step6_build_full.step6 import _calls_select
 
 
@@ -95,6 +96,18 @@ def test_crop_cost_overlays_fill_crm_from_domain_source_type():
     assert "def _crm_by_domain_cte" in source
     assert "ifNull(nullIf(crm.crm_name, ''), 'Не указана') AS `Название crm`" in source
     assert "'' AS `Название crm`" not in source
+
+
+def test_pixel_uses_victory_answers_as_canonical_source():
+    sql = _build_pixel_insert_sql("ad_analytics.big_analytics_sources_new")
+
+    assert "FROM (SELECT * FROM reference_data.victory_pixel_answers FINAL) AS v" in sql
+    assert "v.product = 'пиксель'" in sql
+    assert "toDecimal64(v.cost, 6) AS total_cost" in sql
+    assert "toDecimal64(1, 6) AS kol_vo_zayavok" in sql
+    assert "toDecimal64(1, 6) AS korr" in sql
+    assert "ad_analytics.local_pixel_config" not in sql
+    assert "raw_data.leads_all" not in sql
 
 
 def test_crop_source_views_use_the_same_ba5_source_types():
