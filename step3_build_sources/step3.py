@@ -48,10 +48,10 @@ CRM_NAME_BY_SOURCE_TYPE = {
     "marcar_crm_excel": "Маркар",
     "mauto_excel": "МаАвто",
     "mega_crm_excel": "Мега",
-    "perform_api": "rivendell_excel",
+    "perform_api": "Ривендел",
     "plex_excel": "Плекс",
     "redauto_excel": "Ред Авто",
-    "rivendell_excel": "rivendell_excel",
+    "rivendell_excel": "Ривендел",
 }
 # Фолбэк для source_type, которого нет в словаре: снять суффикс `_excel` / `_crm_excel`.
 _CRM_FALLBACK_RE = "(_crm)?_excel$"

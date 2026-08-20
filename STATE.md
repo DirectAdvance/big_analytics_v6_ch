@@ -122,6 +122,9 @@ copy-строк в `raw_leads/raw_calls/raw_perform_leads` = 0. Compare v5→v6 
 из `raw_data.leads_all`. Сверки сохранены в
 `logs/compare_v5_v6_crmfill_20260820.json` и
 `logs/crm_funnel_monthly_ba5_ba6_20260820.tsv`.
+2026-08-20: отображаемое имя CRM для `rivendell_excel`/`perform_api` заменено на `Ривендел`.
+Код доставлен на Victory; текущий `Dim_CRMStatus` обновлён live-мутацией:
+`rivendell_excel=0`, `Ривиндел=0`, `Ривендел=19`.
 
 ## Главное, что выяснилось 15.08
 

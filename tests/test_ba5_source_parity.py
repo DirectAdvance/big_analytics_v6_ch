@@ -83,6 +83,8 @@ def test_lead_sources_fill_crm_from_source_type_not_domain_lookup():
     sql = _build_crop_sql_batched("AND l.created_date >= toDate('2026-01-01')")
 
     assert "l.source_type = 'crmf_excel', 'Фаиг'" in sql
+    assert "l.source_type = 'rivendell_excel', 'Ривендел'" in sql
+    assert "l.source_type = 'perform_api', 'Ривендел'" in sql
     assert "AS `Название crm`" in sql
     assert "crm.crm_name AS `Название crm`" not in sql
 
