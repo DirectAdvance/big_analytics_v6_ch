@@ -74,7 +74,7 @@ _API_SOURCE = """
         ifNull(t.`источник`, '') = 'VK', 'Посевы_VK',
         ifNull(t.`источник`, '') = 'Max', 'Посевы_Max',
         ifNull(t.`источник`, '') = '', 'Посевы_Telegram',
-        concat('Посевы_', ifNull(t.`источник`, ''))
+        'Посевы_Telegram'
     )
 """
 

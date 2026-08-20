@@ -1362,7 +1362,7 @@ def _crop_source_expr(prefix: str = "l.") -> str:
             match(lowerUTF8(ifNull({prefix}utm_campaign, '')), '(^|_)max($|_|[0-9])'), 'Посевы_Max',
             lowerUTF8(ifNull({prefix}utm_source, '')) IN ('telegram', 'stories_tg', 'telegram_storis', 'instagram'), 'Посевы_Telegram',
             ifNull({prefix}utm_source, '') = '', 'Посевы_Telegram',
-            concat('Посевы_', ifNull({prefix}utm_source, ''))
+            'Посевы_Telegram'
         )
     """
 

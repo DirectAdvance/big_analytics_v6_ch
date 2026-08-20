@@ -89,6 +89,12 @@ def test_crop_leads_keep_channel_source_for_cost_overlay_aggregation():
     assert "'vk_ads'" in sql
     assert "'vk_zero'" in sql
     assert "'Посевы' AS `источник`" not in sql
+    assert "concat('Посевы_'" not in sql
+
+
+def test_telega_api_unknown_source_does_not_create_domain_source():
+    assert "concat('Посевы_'" not in step10._API_SOURCE
+    assert "'Посевы_Telegram'" in step10._API_SOURCE
 
 
 def test_lead_sources_fill_crm_from_source_type_not_domain_lookup():
