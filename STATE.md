@@ -5,10 +5,10 @@ direct-cookie PBI views. История — `git log -p STATE.md`._
 
 ## Где мы сейчас
 
-Прогон 34 минуты, `ad_analytics` 2.06 ГиБ. `verify_big_analytics.py` = **PASS**
-(golden Кудерко 25 642 434.57, Δ+219 660.57 игнорируется из-за `KUDERKO_RAW_INCOMPLETE`;
-продажи 57 при floor 54). Факт свежий: `fact_big_analytics` = 5 274 040 строк,
-максимальная `Date` = 2026-08-16.
+Свежий прогон `--from-step=3` от 2026-08-20 занял 33м42с, `verify_big_analytics.py` = **PASS**
+(golden Кудерко 25 697 413.60, Δ+274 639.60 игнорируется из-за `KUDERKO_RAW_INCOMPLETE`;
+продажи 57 при floor 54). Факт свежий: `fact_big_analytics` = 5 314 601 строк,
+максимальная `Date` = 2026-08-19.
 Оптимизация и фикс двойного счёта пикселя **закоммичены** (`3c0c726`, `c0fd79c`).
 2026-08-17: `Dim_Date.year_month` переведён с `YYYY-MM` на русские названия месяцев; `month_key`
 остаётся числовым `YYYYMM` для сортировки. Код доставлен на Victory и `Dim_Date` пересобран.
@@ -112,6 +112,16 @@ lookup/orphan-запросы. Коммит `513e729` доставлен на Vic
 copy-строк в `raw_leads/raw_calls/raw_perform_leads` = 0. Compare v5→v6 теперь доходит до
 чисел, но FAIL по всем 8 метрикам; отчёты сохранены в
 `logs/compare_v5_v6_copyfilter_20260819.{txt,json}`.
+2026-08-20: исправлена потеря `Название crm` в BA6. Для lead-based веток CRM теперь берётся
+из `source_type`, а не из domain lookup; cost-overlay crop/Telega получает CRM через домен из
+`raw_leads/raw_calls`; star `Dim_CRMStatus` нормализует пустую строку в `Не указана`.
+Код доставлен на Victory, `pipeline.py --from-step=3` завершился PASS
+(`run_id=435232fd3052`, лог `logs/manual_crm_fill_20260820_061158.log`): пустых CRM в
+`big_analytics_full`, `fact_big_analytics`, `pbi_big_analytics_full`, `Dim_CRMStatus` = 0.
+`Не указана` в BA6 осталась только на cost-only строках без обращений (`obr=0`), не на заявках
+из `raw_data.leads_all`. Сверки сохранены в
+`logs/compare_v5_v6_crmfill_20260820.json` и
+`logs/crm_funnel_monthly_ba5_ba6_20260820.tsv`.
 
 ## Главное, что выяснилось 15.08
 

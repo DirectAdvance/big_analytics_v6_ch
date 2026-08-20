@@ -684,7 +684,7 @@ DIM_DDL = {
             (
                 SELECT
                     {_dimension_key_sql(CRM_STATUS_KEY_COLUMNS, "crm_status_key")},
-                    CAST(ifNull(`Название crm`, ''), 'String') AS `Название crm`,
+                    CAST(if(ifNull(`Название crm`, '') = '', 'Не указана', `Название crm`), 'String') AS `Название crm`,
                     `тип_заявки`,
                     `статус`,
                     cascade_level

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
-from step3_build_sources.step3 import CROP_SOURCE_TYPES, SOURCE_STORE
+from step3_build_sources.step3 import CROP_SOURCE_TYPES, CRM_NAME_BY_SOURCE_TYPE, SOURCE_STORE
 
 logger = logging.getLogger("pipeline.step10")
 
@@ -23,6 +23,29 @@ TELEGA_PRICE_OVERRIDES = "telega_in_order_price_overrides"
 TELEGA_FIELD_OVERRIDES = "telega_in_order_field_overrides"
 JOIN_QUERY_SETTINGS = {**SAFE_QUERY_SETTINGS, "join_use_nulls": 1}
 CROP_TYPES_SQL = ", ".join(f"'{source_type}'" for source_type in CROP_SOURCE_TYPES)
+
+
+def _crm_by_domain_cte() -> str:
+    branches = "".join(
+        f"has(groupArray(source_type), '{source_type}'), '{crm_name}', "
+        for source_type, crm_name in sorted(CRM_NAME_BY_SOURCE_TYPE.items())
+    )
+    return f"""
+        crm_by_domain AS
+        (
+            SELECT
+                domain_key,
+                multiIf({branches}ifNull(nullIf(anyLast(source_type), ''), 'Не указана')) AS crm_name
+            FROM
+            (
+                SELECT lowerUTF8(trim(ifNull(domain, ''))) AS domain_key, source_type FROM ad_analytics.raw_leads
+                UNION ALL
+                SELECT lowerUTF8(trim(ifNull(domain, ''))) AS domain_key, source_type FROM ad_analytics.raw_calls
+            )
+            WHERE domain_key != ''
+            GROUP BY domain_key
+        )
+    """
 
 
 _GS_DATE = "assumeNotNull(toDate(parseDateTimeBestEffortOrNull(ifNull(g.`Дата`, ''))))"
@@ -662,7 +685,8 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
             FROM reference_data.gsheet_sites
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
-        )
+        ),
+        {_crm_by_domain_cte()}
         SELECT
             concat('crop_cost|gs|', toString(g.id)) AS key3,
             {_GS_DATE} AS `Date`,
@@ -691,7 +715,7 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
             CAST('посевы', 'Nullable(String)') AS manager_login,
             '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4, '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
             '' AS `марки авто`,
-            '' AS `Название crm`,
+            ifNull(nullIf(crm.crm_name, ''), 'Не указана') AS `Название crm`,
             CAST('Заявки', 'Nullable(String)') AS `тип_заявки`,
             {_gs_metric("kol_vo_zayavok")} AS kol_vo_zayavok,
             {_gs_metric("korr")} AS korr,
@@ -735,6 +759,7 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
         FROM ad_analytics.gsheets_crop_targeting_account_leads g
         LEFT JOIN gs_salon gs ON gs.salon_key = lowerUTF8(trim(replaceAll(replaceAll(replaceAll(ifNull(g.`Гео`, ''), 'АЦ на Жукова', 'Автоцентр на Жукова'), 'АвтоПарк Южный', 'Автопарк Южный'), 'М-Авто', 'М-авто')))
         LEFT JOIN gs_domain gd ON gd.domain_key = lowerUTF8(trim(ifNull(g.`Сайт`, '')))
+        LEFT JOIN crm_by_domain crm ON crm.domain_key = lowerUTF8(trim(ifNull(g.`Сайт`, '')))
         WHERE parseDateTimeBestEffortOrNull(ifNull(g.`Дата`, '')) IS NOT NULL
           AND {_GS_DATE} >= toDate('2026-01-01')
           AND {_GS_DATE} < toDate('2026-05-01')
@@ -758,7 +783,8 @@ def _insert_crop_api_costs(client, target: str) -> None:
             FROM reference_data.gsheet_sites
             WHERE ifNull(salon, '') != ''
             GROUP BY salon_key
-        )
+        ),
+        {_crm_by_domain_cte()}
         SELECT
             concat('crop_cost|api|', toString(t.id)) AS key3,
             assumeNotNull(t.`Date`) AS `Date`,
@@ -787,7 +813,7 @@ def _insert_crop_api_costs(client, target: str) -> None:
             CAST('посевы', 'Nullable(String)') AS manager_login,
             '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4, '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
             '' AS `марки авто`,
-            '' AS `Название crm`,
+            ifNull(nullIf(crm.crm_name, ''), 'Не указана') AS `Название crm`,
             CAST('Заявки', 'Nullable(String)') AS `тип_заявки`,
             {_api_metric("kol_vo_zayavok")} AS kol_vo_zayavok,
             {_api_metric("korr")} AS korr,
@@ -830,6 +856,7 @@ def _insert_crop_api_costs(client, target: str) -> None:
             CAST(NULL, 'Nullable(String)') AS payment_model
         FROM ad_analytics.crop_targeting_api_telegain_lead t
         LEFT JOIN gs_salon gs ON gs.salon_key = lowerUTF8(trim(ifNull(t.`салон`, '')))
+        LEFT JOIN crm_by_domain crm ON crm.domain_key = lowerUTF8(trim(ifNull(t.domain, '')))
         WHERE t.`Date` >= toDate('2026-05-01')
           AND ifNull(t.total_cost, toDecimal64(0, 6)) != 0
         """,
@@ -904,7 +931,7 @@ def _insert_vk_ads_costs(client, target: str) -> None:
             CAST('VK Ads', 'Nullable(String)') AS manager_login,
             '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4, '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
             '' AS `марки авто`,
-            '' AS `Название crm`,
+            'Не указана' AS `Название crm`,
             CAST('Заявки', 'Nullable(String)') AS `тип_заявки`,
             toDecimal256(0, 6) AS kol_vo_zayavok,
             toDecimal256(0, 6) AS korr,

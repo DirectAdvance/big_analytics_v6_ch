@@ -130,6 +130,13 @@ def test_dim_site_uses_ba5_empty_crm_label():
     assert "CAST(ifNull(crm_name, ''), 'String') AS `Название crm`" not in sql
 
 
+def test_dim_crm_status_uses_ba5_empty_crm_label():
+    sql = build_star.DIM_DDL["Dim_CRMStatus"]
+
+    assert "'Не указана'" in sql
+    assert "CAST(ifNull(`Название crm`, ''), 'String') AS `Название crm`" not in sql
+
+
 def test_dim_campaign_normalizes_kviz_to_quiz():
     ddl_sql = build_star.DIM_DDL["Dim_Campaign"]
     build_source = inspect.getsource(build_star.build_dim_campaign)

@@ -42,6 +42,17 @@ CRM_BY_SOURCE_TYPE = {
     "redauto_excel": "redauto",
     "rivendell_excel": "rivendell",
 }
+CRM_NAME_BY_SOURCE_TYPE = {
+    "crmf_excel": "Фаиг",
+    "genzes_excel": "Генезис",
+    "marcar_crm_excel": "Маркар",
+    "mauto_excel": "МаАвто",
+    "mega_crm_excel": "Мега",
+    "perform_api": "rivendell_excel",
+    "plex_excel": "Плекс",
+    "redauto_excel": "Ред Авто",
+    "rivendell_excel": "rivendell_excel",
+}
 # Фолбэк для source_type, которого нет в словаре: снять суффикс `_excel` / `_crm_excel`.
 _CRM_FALLBACK_RE = "(_crm)?_excel$"
 STEP3_QUERY_SETTINGS = {
@@ -132,6 +143,15 @@ def _crm_expr(source_type_expr: str) -> str:
     )
     fallback = f"replaceRegexpOne({source_type_expr}, '{_CRM_FALLBACK_RE}', '')"
     return f"multiIf({branches}{fallback})"
+
+
+def _crm_name_expr(source_type_expr: str) -> str:
+    branches = "".join(
+        f"{source_type_expr} = '{source_type}', '{crm_name}', "
+        for source_type, crm_name in sorted(CRM_NAME_BY_SOURCE_TYPE.items())
+    )
+    fallback = f"replaceRegexpOne({source_type_expr}, '{_CRM_FALLBACK_RE}', '')"
+    return f"ifNull(nullIf(multiIf({branches}{fallback}), ''), 'Не указана')"
 
 
 def check_crm_mapping_coverage(client) -> list[str]:
@@ -611,7 +631,7 @@ crm_by_domain AS
             has(groupArray(source_type), 'redauto_excel'), 'Ред Авто',
             has(groupArray(source_type), 'genzes_excel'), 'Генезис',
             has(groupArray(source_type), 'mauto_excel'), 'МаАвто',
-            anyLast(source_type)
+            ifNull(nullIf(anyLast(source_type), ''), 'Не указана')
         ) AS crm_name
     FROM
     (
@@ -1045,6 +1065,7 @@ lead_scored AS
         lower(trim(ifNull(domain, ''))) AS domain_key,
         domain AS domain,
         fid AS fid,
+        {_crm_name_expr("source_type")} AS crm_name,
         {_metric_expr("status", "reason", "source_type", "salon")}
     FROM ad_analytics.{LEADS_DEDUPED_STAGE}
     WHERE {_direct_lead_universe_filter()}
@@ -1056,6 +1077,7 @@ la AS
         anyLast(domain_key) AS domain_key,
         anyLast(domain) AS domain,
         anyLast(fid) AS fid,
+        anyLast(crm_name) AS crm_name,
         sum(kol_vo_zayavok) AS kol_vo_zayavok,
         sum(korr) AS korr,
         sum(kval) AS kval,
@@ -1097,7 +1119,7 @@ SELECT
     coalesce(nullIf(yd.manager_login, ''), {_gs_pick_expr("directologist")}) AS manager_login,
     {_ag_parts_expr("yd.")},
     '' AS `марки авто`,
-    crm.crm_name AS `Название crm`,
+    ifNull(nullIf(coalesce(la.crm_name, crm.crm_name), ''), 'Не указана') AS `Название crm`,
     if(la.kol_vo_zayavok > 0, 'Заявка', NULL) AS `тип_заявки`,
     ifNull(la.kol_vo_zayavok, toDecimal64(0, 6)) AS kol_vo_zayavok,
     ifNull(la.korr, toDecimal64(0, 6)) AS korr,
@@ -1194,7 +1216,7 @@ def _lead_source_columns(
         ("ag_part6", "CAST(NULL, 'Nullable(String)')"),
         ("ag_part7", "CAST(NULL, 'Nullable(String)')"),
         ("марки авто", "''"),
-        ("Название crm", "crm.crm_name"),
+        ("Название crm", _crm_name_expr("l.source_type")),
         ("тип_заявки", "if(ifNull(l.deal_type, '') = '', 'Заявка', l.deal_type)"),
         ("kol_vo_zayavok", "l.kol_vo_zayavok"),
         ("korr", "l.korr"),

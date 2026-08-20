@@ -79,6 +79,22 @@ def test_crop_leads_keep_channel_source_for_cost_overlay_aggregation():
     assert "'Посевы' AS `источник`" not in sql
 
 
+def test_lead_sources_fill_crm_from_source_type_not_domain_lookup():
+    sql = _build_crop_sql_batched("AND l.created_date >= toDate('2026-01-01')")
+
+    assert "l.source_type = 'crmf_excel', 'Фаиг'" in sql
+    assert "AS `Название crm`" in sql
+    assert "crm.crm_name AS `Название crm`" not in sql
+
+
+def test_crop_cost_overlays_fill_crm_from_domain_source_type():
+    source = inspect.getsource(step10)
+
+    assert "def _crm_by_domain_cte" in source
+    assert "ifNull(nullIf(crm.crm_name, ''), 'Не указана') AS `Название crm`" in source
+    assert "'' AS `Название crm`" not in source
+
+
 def test_crop_source_views_use_the_same_ba5_source_types():
     for source_type in CROP_SOURCE_TYPES:
         assert f"'{source_type}'" in CROP_TYPES_SQL
