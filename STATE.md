@@ -142,6 +142,15 @@ copy-строк в `raw_leads/raw_calls/raw_perform_leads` = 0. Compare v5→v6 
 2026-08-20: отображаемое имя CRM для `rivendell_excel`/`perform_api` заменено на `Ривендел`.
 Код доставлен на Victory; текущий `Dim_CRMStatus` обновлён live-мутацией:
 `rivendell_excel=0`, `Ривиндел=0`, `Ривендел=19`.
+2026-08-20: исправлены PBI-ошибки вокруг фидов/дубликатов. В BA6 удалены ручные builders
+`build_arf_fact`/`build_arc_fact`, чтобы нельзя было пересоздать старые compatibility-view поверх
+нефидовых данных; live `arf_fact/arc_fact/bi_arf_fact/bi_arc_fact` = 0 объектов. В BA6 PBIP скрыты
+страницы «Я.Директ_фиды/Фиды» и два админских дубликата `Я.Директ_тексты объявлений_тексты`.
+Код `build_pbi_compat.py` доставлен на Victory, `py_compile` OK, `pipeline.py --from-step=146`
+завершился PASS (`run_id=3ef8f746462d`, лог `logs/manual_pbi_errors_fix_20260820_100556.log`).
+Остаток не кодовый: настоящая фидовая воронка в BA6 всё ещё невозможна без сырого Direct-источника
+с `feed_id/feed_url` и метриками/воронкой; текущий `fact_direct_feed_funnel` остаётся агрегатом
+по площадкам РСЯ для страницы площадок.
 
 ## Главное, что выяснилось 15.08
 
