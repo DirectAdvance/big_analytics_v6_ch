@@ -5,10 +5,16 @@ direct-cookie PBI views. История — `git log -p STATE.md`._
 
 ## Где мы сейчас
 
-Свежий прогон `--from-step=3` от 2026-08-20 занял 33м42с, `verify_big_analytics.py` = **PASS**
-(golden Кудерко 25 697 413.60, Δ+274 639.60 игнорируется из-за `KUDERKO_RAW_INCOMPLETE`;
-продажи 57 при floor 54). Факт свежий: `fact_big_analytics` = 5 314 601 строк,
+Свежий прогон `--from-step=3` от 2026-08-20 (`run_id=5274cfa41cb1`,
+`logs/manual_pixel_victory_answers_20260820_074141.log`) завершился `pipeline OK`,
+`verify_big_analytics.py` = **PASS** (golden Кудерко 25 697 413.60,
+Δ+274 639.60 игнорируется из-за `KUDERKO_RAW_INCOMPLETE`; продажи 57 при floor 54).
+Факт свежий: `fact_big_analytics` = 5 237 828 строк,
 максимальная `Date` = 2026-08-19.
+2026-08-20: step5 pixel переведён на канон `reference_data.victory_pixel_answers FINAL`
+(`product='пиксель'`): `big_analytics_pixel=41 456`, `pixel_cost=48 603 850.00`,
+`big_analytics_full[pixel]=41 456`, `fact_big_analytics[pixel]=41 456`; canonical vs BA6
+сходится 1:1 по строкам и cost. Строк без `site` = 398, они остаются в итогах по салону.
 Оптимизация и фикс двойного счёта пикселя **закоммичены** (`3c0c726`, `c0fd79c`).
 2026-08-17: `Dim_Date.year_month` переведён с `YYYY-MM` на русские названия месяцев; `month_key`
 остаётся числовым `YYYYMM` для сортировки. Код доставлен на Victory и `Dim_Date` пересобран.
