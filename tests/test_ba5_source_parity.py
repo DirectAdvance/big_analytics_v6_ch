@@ -5,7 +5,7 @@ from star_refactor.cleanup_wide_intermediates import SOURCE_VIEWS
 from step10_crop_targeting import step10
 from step10_crop_targeting.step10 import CROP_TYPES_SQL
 from step13_arrival.step13 import _calls_branch_columns, _calls_branch_sql, _leads_branch_sql
-from step3_build_sources.step3 import CROP_SOURCE_TYPES, _build_crop_sql_batched, _build_seo_sql
+from step3_build_sources.step3 import CROP_SOURCE_TYPES, _build_crop_sql_batched, _build_direct_zero_sql, _build_seo_sql
 from step3_build_sources.step3 import _leads_deduped_cte
 from step5_build_pixel.build_pixel import _build_pixel_insert_sql
 from step6_build_full.step6 import _calls_select
@@ -17,9 +17,9 @@ def test_regular_calls_use_ba5_context_or_seo_source():
     assert "gs.status = 'SEO Flow', 'SEO Flow'" in sql
     assert "gs.status = 'SEO', 'SEO'" in sql
     assert "FROM ad_analytics.gsheets_crop_targeting_account" in sql
-    assert "FROM ad_analytics.big_analytics_sources" in sql
-    assert "FROM ad_analytics.big_analytics_crop_targeting" in sql
     assert "ifNull(gs.direction_main, '') = 'Посевы'" in sql
+    assert "FROM ad_analytics.big_analytics_sources" not in sql
+    assert "FROM ad_analytics.big_analytics_crop_targeting" not in sql
     assert "CAST('звонки', 'Nullable(String)') AS campaign_code" in sql
 
 
@@ -59,8 +59,19 @@ def test_seo_keeps_crop_seo_and_seo_flow_sources():
     sql = _build_seo_sql("AND l.created_date >= toDate('2026-01-01')")
 
     assert "'Посевы_SEO'" in sql
+    assert "ifNull(gs.direction_main, '') = 'Посевы', 'Посевы_SEO'" in sql
+    assert "gs.direction_main," in sql
     assert "gs.status = 'SEO Flow', 'SEO Flow'" in sql
     assert "AND lowerUTF8(trim(ifNull(domain, ''))) NOT IN" not in sql
+
+
+def test_posev_repaint_domains_do_not_depend_on_active_crop_gate():
+    sql = _build_direct_zero_sql("2026-01-01", "2026-01-02")
+
+    assert "posev_repaint_domains AS" in sql
+    assert "gs.direction_main = 'Посевы'" in sql
+    assert "posev_active_domains" not in sql
+    assert "match(ifNull(utm_campaign, ''), '(?i)tp(8|9|10)_(cpc|cpa)_')" not in sql
 
 
 def test_crop_leads_keep_channel_source_for_cost_overlay_aggregation():

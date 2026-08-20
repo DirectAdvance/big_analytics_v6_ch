@@ -5,12 +5,23 @@ direct-cookie PBI views. История — `git log -p STATE.md`._
 
 ## Где мы сейчас
 
-Свежий прогон `--from-step=3` от 2026-08-20 (`run_id=5274cfa41cb1`,
-`logs/manual_pixel_victory_answers_20260820_074141.log`) завершился `pipeline OK`,
+Свежий прогон `--from-step=3` от 2026-08-20 (`run_id=2b10ff444daa`,
+`logs/manual_posev_repaint_fix_20260820_091041.log`) завершился `pipeline OK`,
 `verify_big_analytics.py` = **PASS** (golden Кудерко 25 697 413.60,
 Δ+274 639.60 игнорируется из-за `KUDERKO_RAW_INCOMPLETE`; продажи 57 при floor 54).
-Факт свежий: `fact_big_analytics` = 5 237 828 строк,
+Факт свежий: `fact_big_analytics` = 5 237 830 строк,
 максимальная `Date` = 2026-08-19.
+2026-08-20: восстановлен BA5-паритет посевных repaint-правил для BA6. Звонки посевных
+доменов теперь берутся не только из hard crop-account, но и из `gsheet_sites.direction_main='Посевы'`
+с BA5-приоритетом VK-Авто; SEO/direct_zero repaint больше не зависит от active crop-gate.
+На Victory дополнительно досинкован уже закоммиченный `pipeline.py`, потому что remote отставал
+и не запускал `step10a` перед step6. Живая проверка после прогона: `Посевы_Звонки/calls`
+в `big_analytics_calls`, `big_analytics_full` и `fact_big_analytics` = 4 861 обращение /
+3 814 корр / 1 274 квал / 738 приездов / 61 продажа; старого `источник='Звонки'` и пустых
+источников в `big_analytics_full` = 0. BA5↔BA6 по `2026-01-01..2026-08-20`:
+`Посевы_Звонки` 4 771→4 861 обращение, продажи 61→61; `Посевы_SEO` 1 177→1 205 обращений,
+продажи 13→14. Контроль `2026-02-01..2026-07-31`: `Посевы_Звонки` 3 565→3 675,
+`Посевы_SEO` 809→786.
 2026-08-20: step5 pixel переведён на канон `reference_data.victory_pixel_answers FINAL`
 (`product='пиксель'`): `big_analytics_pixel=41 456`, `pixel_cost=48 603 850.00`,
 `big_analytics_full[pixel]=41 456`, `fact_big_analytics[pixel]=41 456`; canonical vs BA6

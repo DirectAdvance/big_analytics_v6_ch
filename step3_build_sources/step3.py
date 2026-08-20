@@ -847,62 +847,36 @@ AND NOT ({_perform_vk_filter()})
 # этой ветки неизвестен (ни tp, ни utm-канал сюда не долетают), поэтому берётся
 # тот же дефолт, что и у step10 для неопределённого канала посевов — Telegram.
 #
-# EXISTS-гейт v5 (POSEVY_ALLTIME_ACTIVITY_GATE_2026-08-05) сохранён: репейнтятся
-# только домены с РЕАЛЬНОЙ посевной активностью за всю историю. В v5 гейт смотрел
-# на {T_CROP} (`_source_table IN ('crop_targeting','tp8','tp9','tp10')` И
-# `kol_vo_zayavok > 0`); в v6 обе половины выражены через ИСТОЧНИК тех же строк —
-# лиды staging-таблицы со статусом (`kol_vo_zayavok > 0` ⟺ `status != ''`):
-#   * crop_targeting → лид посевного utm-универса (`_CROP_UTM_FILTER`);
-#   * tp8/tp9/tp10   → лид с посевным кодером в собственной `utm_campaign`.
-# ⚠️ tp-половину НЕЛЬЗЯ выкидывать: замерено, что 25 из 43 посевных доменов с
-# такими лидами засеяны ТОЛЬКО через tp-кампании Директа и в utm-универс не
-# попадают вовсе (ufa-autohouse.ru: 0 crop-utm лидов против 784 tp-лидов).
-# Кодер берётся из `utm_campaign` лида, а НЕ из `raw_yandex.tp`: на посевных
-# доменах оба определения дают идентичное множество (замерено: 0 расхождений в
-# обе стороны), а чтение staging-таблицы не требует полного скана raw_yandex
-# в каждом из ~217 дневных батчей.
+# BA5-факт на 2026-01..08 показывает, что repaint живёт по доменному справочнику
+# `direction_main='Посевы'`: старый active-gate оставлял часть BA5-посевных доменов
+# в `Контекст`/`SEO`. Поэтому CTE ниже намеренно не зависит от текущей crop-активности.
 # ══════════════════════════════════════════════════════════════════════════════
 
 _POSEV_REPAINT_PREDICATE = "l.domain_key IN (SELECT domain_key FROM posev_repaint_domains)"
-# Посевные кодеры Директа (tp8/tp9/tp10) в utm_campaign лида. tp6/tp7 — не посевы.
-_POSEV_TP_CODER_RE = "(?i)tp(8|9|10)_(cpc|cpa)_"
 
 
 def _posev_repaint_cte() -> str:
-    return f"""
-posev_active_domains AS
-(
-    SELECT DISTINCT lower(trim(ifNull(domain, ''))) AS domain_key
-    FROM ad_analytics.{LEADS_DEDUPED_STAGE}
-    WHERE ifNull(status, '') != ''
-      AND ifNull(domain, '') != ''
-      AND (
-          {_CROP_UTM_FILTER.strip()}
-          OR match(ifNull(utm_campaign, ''), '{_POSEV_TP_CODER_RE}')
-      )
-),
+    return """
 posev_repaint_domains AS
 (
     SELECT DISTINCT lower(trim(ifNull(gs.domain, ''))) AS domain_key
     FROM reference_data.gsheet_sites gs
     WHERE gs.direction_main = 'Посевы'
       AND ifNull(gs.domain, '') != ''
-      AND lower(trim(ifNull(gs.domain, ''))) IN (SELECT domain_key FROM posev_active_domains)
 )"""
 
 
 def _unmatched_source_expr() -> str:
     """`источник` ветки direct_unmatched — порт v5 step3.py:1090-1096 + repaint 6a3.
 
-    v5 сначала ставит источник по `gsheet_sites.status`, а посевной repaint (step6 6a3)
-    трогает ТОЛЬКО строки, у которых источник остался NULL. Порядок ветвей multiIf
-    воспроизводит это: статус выигрывает у repaint'а.
+    В BA5 repaint 6a3 идёт до fallback-заполнения `Контекст`/`SEO`, поэтому посевной
+    домен должен выигрывать у статуса сайта.
     """
     return f"""multiIf(
+        {_POSEV_REPAINT_PREDICATE}, 'Посевы_Telegram',
         gs.status = 'Контекст активно', 'Контекст',
         gs.status = 'SEO', 'SEO',
         gs.status = 'SEO Flow', 'SEO Flow',
-        {_POSEV_REPAINT_PREDICATE}, 'Посевы_Telegram',
         'Контекст')"""
 
 
@@ -1029,6 +1003,7 @@ gs_best AS
             gs.city,
             gs.region,
             gs.direction,
+            gs.direction_main,
             gs.project_manager,
             gs.client_id,
             gs.sales_manager,
@@ -1322,6 +1297,7 @@ gs_domain_best AS
             gs.city,
             gs.region,
             gs.direction,
+            gs.direction_main,
             gs.project_manager,
             gs.client_id,
             gs.sales_manager,
@@ -1456,10 +1432,14 @@ AND lowerUTF8(trim(ifNull(domain, ''))) IN (
             "источник": (
                 "multiIf("
                 f"l.domain_key IN ({_CROP_ACCOUNT_DOMAIN_SUBQUERY}), 'Посевы_SEO', "
+                "ifNull(gs.direction_main, '') = 'Посевы', 'Посевы_SEO', "
                 "gs.status = 'SEO Flow', 'SEO Flow', "
                 "'SEO')"
             ),
-            "поставщик": f"if(l.domain_key IN ({_CROP_ACCOUNT_DOMAIN_SUBQUERY}), 'Посевы', 'Victory')",
+            "поставщик": (
+                f"if(l.domain_key IN ({_CROP_ACCOUNT_DOMAIN_SUBQUERY}) "
+                "OR ifNull(gs.direction_main, '') = 'Посевы', 'Посевы', 'Victory')"
+            ),
         },
     )
 

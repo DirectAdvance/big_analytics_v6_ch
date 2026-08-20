@@ -70,35 +70,20 @@ def _create_calls_shadow(client, shadow: str) -> None:
     )
 
 
-# CROP_CALLS_PARITY_2026-08-06: домены посевного справочника (~19-21 сайтов) — порт v5
-# step3.py:2415-2419 `_CROP_DOMAIN_SUBQUERY`. Используется ДВАЖДЫ в `_calls_select`:
+# CROP_CALLS_PARITY_2026-08-06: посевные звонки — порт двух BA5-правил:
+# hard crop-account домены из step3 `_add_crop_calls_sql` и mixed-домены
+# `gsheet_sites.direction_main='Посевы'` из step6 UPDATE 3c. Используется ДВАЖДЫ:
 #   * crop=False — NOT IN (эти звонки не должны попадать в обычный бакет 'Звонки'/'Контекст');
-#   * crop=True  — IN (посевные звонки репейнтятся в 'Посевы_Звонки'/'Комплекс', мирроря v5
-#     `_add_crop_calls_sql`, step3.py:2422-2525), а не исчезают из big_analytics_full.
+#   * crop=True  — IN (посевные звонки репейнтятся в 'Посевы_Звонки'/'Комплекс').
 _CROP_DOMAIN_SUBQUERY = """
     SELECT DISTINCT lower(trim(ifNull(`Сайт`, '')))
     FROM ad_analytics.gsheets_crop_targeting_account
     WHERE ifNull(`Сайт`, '') != ''
 """
 
-_POSEV_ACTIVITY_DOMAIN_SUBQUERY = """
-    SELECT DISTINCT lower(trim(ifNull(domain, '')))
-    FROM ad_analytics.{source_store}
-    WHERE ifNull(domain, '') != ''
-      AND _source_table IN ('crop_targeting', 'tp8', 'tp9', 'tp10')
-      AND ifNull(kol_vo_zayavok, 0) > 0
-    UNION DISTINCT
-    SELECT DISTINCT lower(trim(ifNull(domain, '')))
-    FROM ad_analytics.big_analytics_crop_targeting
-    WHERE ifNull(domain, '') != ''
-      AND _source_table IN ('crop_targeting', 'tp8', 'tp9', 'tp10')
-      AND ifNull(kol_vo_zayavok, 0) > 0
-""".format(source_store=SOURCE_STORE)
-
 _POSEV_MIXED_CALL_DOMAIN_SQL = f"""
 (
     ifNull(gs.direction_main, '') = 'Посевы'
-    AND lower(trim(ifNull(c.domain, ''))) IN ({_POSEV_ACTIVITY_DOMAIN_SUBQUERY})
     AND NOT (
         nullIf(trim(ifNull(gs.vk_client_id, '')), '') IS NOT NULL
         AND ifNull(gs.direction, '') = 'Авто'
@@ -120,8 +105,8 @@ def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
     'Авто')='Авто'` — звонок БЕЗ матча в справочнике проходил фильтр, мирроря-инвертируя v5
     step6.py:239-240 `gs."domain" IS NOT NULL AND gs."direction"='Авто'`) И домен НЕ входит в
     посевной справочник (BUG2_CALLS_CROP_EXCLUDE_2026-08-06, порт v5 step3.py:2512 `NOT IN`).
-    `crop=True` (посевные звонки) — домен ОБЯЗАН входить в посевной справочник, без гейта по
-    `gs.direction` (v5 `_add_crop_calls_sql` его тоже не ставит — посевной домен главнее).
+    `crop=True` (посевные звонки) — hard crop-account домен или
+    `direction_main='Посевы'`; VK-Авто домены сохраняют BA5-приоритет VK > посевы.
     """
     metrics = _metric_expr("c.status", "c.reason", "c.source_type", "gs.salon")
     specialist_expr = specialist_correction_expr("c.created_date", "gs.login_key", _domain_specialist_expr("gs"))
