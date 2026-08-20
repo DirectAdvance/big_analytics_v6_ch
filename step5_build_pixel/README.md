@@ -15,82 +15,94 @@
 > Визитную ось step13 читает из `big_analytics_pixel_score` напрямую и пишет
 > `направление='Пиксель'`. Замер live ClickHouse: 2026-08-17.
 
-Шаг 5 пайплайна. Собирает `big_analytics_pixel` — таблицу для пиксельных лидов из
-канонического источника `reference_data.victory_pixel_answers FINAL` (`product='пиксель'`).
+Шаг 5 пайплайна. Собирает `big_analytics_pixel` — гибридный слой пиксельных лидов:
+до `2026-06-03` из `raw_data.leads_all`, с `2026-06-03` из
+`reference_data.victory_answers FINAL` (`product='пиксель'`).
 
 В отличие от `big_analytics_direct`, эта таблица НЕ попадает в `big_analytics_full` напрямую через step6 — атрибуция к кампаниям выполняется отдельно в step11 (`pixel_score`).
 
 ## Назначение
 
-- Берёт одну строку `victory_pixel_answers` как одну засчитанную pixel-заявку.
-- Берёт `total_cost` напрямую из `victory_pixel_answers.cost`.
+- До `2026-06-03` повторяет BA5: находит pixel-лиды в `raw_data.leads_all` через
+  `local_pixel_config`, цену берёт из `local_pixel_price_history` или baseline-конфига.
+- С `2026-06-03` берёт одну строку `victory_answers` как одну засчитанную pixel-заявку,
+  а `total_cost` напрямую из `victory_answers.cost`.
+- Для строк `victory_answers` матчит raw-лид по `phone + bill_month` и считает
+  `korr/kval/priezd/prodazhi` по статусам `raw_data.leads_all`, как остальные BA6 lead-ветки.
 - Маппит домен/салон к справочнику `reference_data.gsheet_sites`.
 
 ## Архитектурная схема
 
 ```
-reference_data.victory_pixel_answers FINAL
-              │ product='пиксель'
+raw_data.leads_all (< 2026-06-03) + local_pixel_config / price_history
+reference_data.victory_answers FINAL (>= 2026-06-03) + raw_data.leads_all statuses
+              │
               ▼
 reference_data.gsheet_sites ──► big_analytics_pixel
-              (агрегаты + воронка + total_cost)
-                       │
-                       ▼ (НЕ через step6 — через step11)
-              big_analytics_pixel_score (атрибуция к кампаниям)
-                       │
-                       ▼
-              big_analytics_full (_source_table='pixel')
+              │
+              ▼
+big_analytics_pixel_score ──► big_analytics_full (_source_table='pixel')
 ```
 
 ## Формула total_cost
 
 ```
-total_cost = victory_pixel_answers.cost
+Date <  2026-06-03: total_cost = kol_vo_zayavok * COALESCE(history.price, config.price)
+Date >= 2026-06-03: total_cost = victory_answers.cost
 ```
 
-Стоимость уже итоговая в канонической таблице, поэтому step5 её не пересчитывает.
-`Date = coalesce(bill_day, date)`: в старых месяцах `bill_day` может быть пустой.
+После `2026-06-03` стоимость уже итоговая в канонической таблице, поэтому step5 её
+не пересчитывает. `Date = coalesce(bill_day, date)`: в старых строках `bill_day`
+может быть пустой.
 
 ## Источник пикселя
 
 Обязательные условия:
-- читать `reference_data.victory_pixel_answers FINAL`;
+- читать `reference_data.victory_answers FINAL`;
 - фильтровать `product = 'пиксель'`;
 - использовать `site` как домен, `salon` как салон, `cost` как стоимость строки;
 - период пикселя задаётся `bill_month`, дневная ось — `coalesce(bill_day, date)`.
 
 ## Параметры
 
-- `T_PIXEL_SOURCE` = `'reference_data.victory_pixel_answers'`
+- cutoff = `2026-06-03`
+- reference source = `reference_data.victory_answers`
+- legacy sources = `raw_data.leads_all`, `ad_analytics.local_pixel_config`,
+  `ad_analytics.local_pixel_price_history`
 - `T_GSHEET_SITES` = `'reference_data.gsheet_sites'`
 - `T_PIXEL` = `'big_analytics_pixel'`
 
 ## Зависимости
 
-- `reference_data.victory_pixel_answers`
+- `reference_data.victory_answers`
+- `raw_data.leads_all`
+- `ad_analytics.local_pixel_config`
+- `ad_analytics.local_pixel_price_history`
 - `reference_data.gsheet_sites`
 
 ## Примеры запуска
 
 ```bash
 # Только step5 в составе pipeline:
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 pipeline.py --only-step=5"
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 pipeline.py --only-step=5"
 
 # Аудит результатов:
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 step5_build_pixel/audit_pixels.py"
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 step5_build_pixel/check_pixel_table.py"
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 step5_build_pixel/audit_pixels.py"
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 step5_build_pixel/check_pixel_table.py"
 ```
 
 ## Проверки после запуска
 
 ```sql
--- `big_analytics_pixel` должен сходиться с каноном по количеству и стоимости
+-- reference-часть должна сходиться с каноном по количеству и стоимости
 SELECT count(), sum(cost)
-FROM reference_data.victory_pixel_answers FINAL
-WHERE product = 'пиксель' AND bill_month >= '2026-01'
+FROM reference_data.victory_answers FINAL
+WHERE product = 'пиксель' AND coalesce(bill_day, date) >= '2026-06-03'
 UNION ALL
-SELECT sum(kol_vo_zayavok), sum(total_cost)
-FROM big_analytics_pixel;
+SELECT count(), sum(total_cost)
+FROM big_analytics_pixel
+WHERE Date >= '2026-06-03'
+  AND cascade_level = 'victory_answers_from_2026_06_03';
 
 -- Объёмы по доменам
 SELECT domain, COUNT(*), SUM(kol_vo_zayavok), SUM(total_cost)
@@ -108,8 +120,8 @@ WHERE domain IS NULL;
 | Файл | Описание |
 |------|----------|
 | `build_pixel.py` | Основной шаг 5 (build pixel_leads + big_analytics_pixel) |
-| `sync_pixel_config.py` | Legacy sync старого конфига; step5 больше его не читает |
-| `set_pixel_price.py` | Legacy CLI старой истории цен; step5 больше её не читает |
+| `sync_pixel_config.py` | Legacy sync старого конфига; нужен для периода до `2026-06-03` |
+| `set_pixel_price.py` | Legacy CLI старой истории цен; нужна для периода до `2026-06-03` |
 | `audit_pixels.py` | Legacy аудит старого конфига |
 | `audit_pixels_detailed.py` | Legacy детальный аудит старого конфига |
 | `check_pixel_table.py` | Проверка консистентности |

@@ -44,8 +44,11 @@
     },
     "Название crm": {
       "v5": "f.\"Название crm\"",
-      "v6": "dcs.`Название crm`",
-      "v6_joins": ["LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key"]
+      "v6": "if(ifNull(dcs.`Название crm`, '') IN ('', 'Не указана'), if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`), dcs.`Название crm`)",
+      "v6_joins": [
+        "LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key",
+        "LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key"
+      ]
     },
     "_source_table": {
       "v5": "f.\"_source_table\"",
@@ -66,7 +69,8 @@
       "ad_analytics.fact_big_analytics": ["Date", "атрибуция", "_source_table", "total_cost", "kol_vo_zayavok", "korr", "kval", "priedet", "priezd", "prodazhi", "nekorr", "source_key", "salon_key", "crm_status_key"],
       "ad_analytics.Dim_Source": ["source_key", "источник"],
       "ad_analytics.Dim_Salon": ["salon_key", "специалист"],
-      "ad_analytics.Dim_CRMStatus": ["crm_status_key", "Название crm"]
+      "ad_analytics.Dim_CRMStatus": ["crm_status_key", "Название crm"],
+      "ad_analytics.Dim_Site": ["site_key", "Название crm"]
     }
   }
 }

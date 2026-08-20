@@ -115,16 +115,21 @@ def test_crop_cost_overlays_fill_crm_from_domain_source_type():
     assert "'' AS `Название crm`" not in source
 
 
-def test_pixel_uses_victory_answers_as_canonical_source():
+def test_pixel_uses_hybrid_source_and_raw_status_funnel():
     sql = _build_pixel_insert_sql("ad_analytics.big_analytics_sources_new")
 
-    assert "FROM (SELECT * FROM reference_data.victory_pixel_answers FINAL) AS v" in sql
+    assert "FROM (SELECT * FROM reference_data.victory_answers FINAL) AS v" in sql
     assert "v.product = 'пиксель'" in sql
-    assert "toDecimal64(v.cost, 6) AS total_cost" in sql
-    assert "toDecimal64(1, 6) AS kol_vo_zayavok" in sql
-    assert "toDecimal64(1, 6) AS korr" in sql
-    assert "ad_analytics.local_pixel_config" not in sql
-    assert "raw_data.leads_all" not in sql
+    assert "2026-06-03" in sql
+    assert "raw_data.leads_all AS l" in sql
+    assert "ad_analytics.local_pixel_config AS pc" in sql
+    assert "ad_analytics.local_pixel_price_history AS h" in sql
+    assert "row_number() OVER" in sql
+    assert "right(replaceRegexpAll(ifNull(l.phone, ''), '[^0-9]', ''), 10) = v.phone" in sql
+    assert "toYYYYMM(l.created_date) = toYYYYMM(v.answer_date)" in sql
+    assert "v.cost AS total_cost" in sql
+    assert "toDecimal64(if(ifNull(m.status, '') != '', 1, 0), 6) AS kol_vo_zayavok" in sql
+    assert "toDecimal64(0, 6) AS prodazhi" not in sql
 
 
 def test_crop_source_views_use_the_same_ba5_source_types():

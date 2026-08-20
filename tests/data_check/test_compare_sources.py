@@ -31,11 +31,13 @@ def test_build_query_v6_joins_dim_salon_for_specialist():
     assert "dsl.`специалист`" in sql
 
 
-def test_build_query_v6_joins_dim_crm_status_for_crm_name():
+def test_build_query_v6_uses_site_fallback_for_crm_name():
     c = load_contract(CONTRACT_PATH)
     sql, _ = build_query(c, "v6", "Название crm")
     assert "LEFT JOIN ad_analytics.Dim_CRMStatus dcs" in sql
+    assert "LEFT JOIN ad_analytics.Dim_Site dsite" in sql
     assert "dcs.`Название crm`" in sql
+    assert "dsite.`Название crm`" in sql
 
 
 def test_build_query_rejects_unknown_dimension():

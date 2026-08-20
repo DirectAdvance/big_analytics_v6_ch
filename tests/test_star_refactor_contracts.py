@@ -127,6 +127,11 @@ def test_dim_site_uses_ba5_empty_crm_label():
     sql = build_star.DIM_DDL["Dim_Site"]
 
     assert "'Не указана'" in sql
+    assert "raw_crm AS" in sql
+    assert "FROM raw_data.leads_all" in sql
+    assert "is_copy_for_removal = 0" in sql
+    assert "if(ifNull(rc.crm_name, '') = '', 'Не указана', rc.crm_name)" in sql
+    assert "u.crm_name) = 'PLEX', 'Плекс'" in sql
     assert "CAST(ifNull(crm_name, ''), 'String') AS `Название crm`" not in sql
 
 
@@ -134,6 +139,9 @@ def test_dim_crm_status_uses_ba5_empty_crm_label():
     sql = build_star.DIM_DDL["Dim_CRMStatus"]
 
     assert "'Не указана'" in sql
+    assert "`Название crm` = 'One CRM', 'Фаиг'" in sql
+    assert "`Название crm` = 'PLEX', 'Плекс'" in sql
+    assert "`Название crm` = 'crmf', 'Фаиг'" in sql
     assert "CAST(ifNull(`Название crm`, ''), 'String') AS `Название crm`" not in sql
 
 
@@ -317,8 +325,11 @@ def test_pbi_full_restores_duplicate_text_attrs_from_new_dimensions():
     assert "LEFT JOIN ad_analytics.Dim_Account da ON da.account_key = f.account_key" in sql
     assert "LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key" in sql
     assert "LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key" in sql
+    assert "LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key" in sql
     assert "concat(ifNull(da.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`" in sql
-    assert "dcs.`Название crm`" in sql
+    assert "if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`)" in sql
+    assert "dsl.`специалист` AS `специалист`" in sql
+    assert "dcs.`статус` AS `статус`" in sql
     assert "dsl.`салон`" in sql
     assert "f.`салон`" not in sql
     assert "f.`специалист`" not in sql
@@ -330,8 +341,9 @@ def test_wide_compat_views_restore_duplicate_text_attrs_from_new_dimensions():
     assert "LEFT JOIN ad_analytics.Dim_Account dac ON dac.account_key = f.account_key" in sql
     assert "LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key" in sql
     assert "LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key" in sql
+    assert "LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key" in sql
     assert "concat(ifNull(dac.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`" in sql
-    assert "dcs.`Название crm`" in sql
+    assert "if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`)" in sql
     assert "dsl.`салон`" in sql
     assert "f.account_login" not in sql
     assert "f.`салон`" not in sql

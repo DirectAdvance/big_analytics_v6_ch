@@ -80,7 +80,11 @@ def _wide_fact_sql(where_sql: str) -> str:
             dag.ag_part6 AS ag_part6,
             dag.ag_part7 AS ag_part7,
             dag.`марки авто` AS `марки авто`,
-            dcs.`Название crm` AS `Название crm`,
+            if(
+                ifNull(dcs.`Название crm`, '') IN ('', 'Не указана'),
+                if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`),
+                dcs.`Название crm`
+            ) AS `Название crm`,
             dcs.`тип_заявки` AS `тип_заявки`,
             f.kol_vo_zayavok AS kol_vo_zayavok,
             f.korr AS korr,
@@ -134,6 +138,7 @@ def _wide_fact_sql(where_sql: str) -> str:
         LEFT JOIN ad_analytics.Dim_Account dac ON dac.account_key = f.account_key
         LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key
         LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key
+        LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key
         {where_sql}
     """
 

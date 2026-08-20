@@ -24,7 +24,7 @@ from config.ch_utils import (
     table_engine,
     table_exists,
 )
-from step3_build_sources.step3 import _metric_expr
+from step3_build_sources.step3 import _crm_name_expr, _metric_expr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("build_star")
@@ -127,6 +127,18 @@ FACT_SWAP_COMPAT_OBJECTS = [
 
 def _normalized_string_expr(column: str) -> str:
     return f"lowerUTF8(trim(BOTH ' ' FROM ifNull({q(column)}, '')))"
+
+
+def _canonical_crm_name_sql(crm_expr: str) -> str:
+    return (
+        "multiIf("
+        f"ifNull({crm_expr}, '') = '', 'Не указана', "
+        f"{crm_expr} = 'One CRM', 'Фаиг', "
+        f"{crm_expr} = 'PLEX', 'Плекс', "
+        f"{crm_expr} = 'crmf', 'Фаиг', "
+        f"{crm_expr} IN ('RivendellCRM', 'rivendell_excel'), 'Ривендел', "
+        f"{crm_expr})"
+    )
 
 
 def _dimension_key_sql(columns: list[str], alias: str) -> str:
@@ -297,7 +309,7 @@ DIM_DDL = {
         # 2 (domains the directory does not cover at all) is untouched -- it
         # already sourced these 3 columns from fact, so it was never part of the
         # A/B/C bug.
-        "Dim_Site": """
+        "Dim_Site": f"""
             CREATE TABLE ad_analytics.Dim_Site_new
             ENGINE = MergeTree
             ORDER BY site_key
@@ -356,24 +368,49 @@ DIM_DDL = {
                     GROUP BY site_key, crm_name
                 )
                 GROUP BY site_key
+            ),
+            raw_crm AS
+            (
+                SELECT
+                    site_key,
+                    argMax(crm_name, tuple(cnt, max_date, crm_name)) AS crm_name
+                FROM
+                (
+                    SELECT
+                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(utm_source, '')))) AS site_key,
+                        {_crm_name_expr("source_type")} AS crm_name,
+                        count() AS cnt,
+                        max(created_date) AS max_date
+                    FROM raw_data.leads_all
+                    WHERE is_copy_for_removal = 0
+                      AND created_date >= toDate('2026-01-01')
+                      AND ifNull(utm_source, '') != ''
+                      AND ifNull(source_type, '') != ''
+                    GROUP BY site_key, crm_name
+                    HAVING crm_name != 'Не указана'
+                )
+                GROUP BY site_key
             )
             SELECT
-                site_key,
-                domain,
-                salon AS `салон`,
-                city AS `город`,
-                region AS `регион`,
-                site_type AS `тип_сайта`,
-                template AS `шаблон`,
-                direction AS `направление`,
-                site_status AS `статус`,
-                site_status AS status,
-                specialist AS `специалист`,
-                project AS `проджект`,
-                project AS project_manager,
-                salon_id AS `id_салона`,
-                manager AS `менеджер`,
-                CAST(if(ifNull(crm_name, '') = '', 'Не указана', crm_name), 'String') AS `Название crm`
+                u.site_key,
+                u.domain,
+                u.salon AS `салон`,
+                u.city AS `город`,
+                u.region AS `регион`,
+                u.site_type AS `тип_сайта`,
+                u.template AS `шаблон`,
+                u.direction AS `направление`,
+                u.site_status AS `статус`,
+                u.site_status AS status,
+                u.specialist AS `специалист`,
+                u.project AS `проджект`,
+                u.project AS project_manager,
+                u.salon_id AS `id_салона`,
+                u.manager AS `менеджер`,
+                CAST(
+                    {_canonical_crm_name_sql("if(ifNull(u.crm_name, '') IN ('', 'Не указана'), if(ifNull(rc.crm_name, '') = '', 'Не указана', rc.crm_name), u.crm_name)")},
+                    'String'
+                ) AS `Название crm`
             FROM
             (
                 -- 1) domains covered by the master directory: the 9
@@ -496,7 +533,8 @@ DIM_DDL = {
                              direction, site_status, specialist, project, salon_id, manager, crm_name
                 )
                 GROUP BY site_key
-            )
+            ) AS u
+            LEFT JOIN raw_crm rc ON rc.site_key = u.site_key
         """,
         "Dim_Campaign": """
             CREATE TABLE ad_analytics.Dim_Campaign_new
@@ -684,7 +722,7 @@ DIM_DDL = {
             (
                 SELECT
                     {_dimension_key_sql(CRM_STATUS_KEY_COLUMNS, "crm_status_key")},
-                    CAST(if(ifNull(`Название crm`, '') = '', 'Не указана', `Название crm`), 'String') AS `Название crm`,
+                    CAST({_canonical_crm_name_sql("`Название crm`")}, 'String') AS `Название crm`,
                     `тип_заявки`,
                     `статус`,
                     cascade_level

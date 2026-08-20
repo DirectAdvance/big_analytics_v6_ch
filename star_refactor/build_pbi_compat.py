@@ -150,22 +150,27 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 'Заявки',
                 dcs.`тип_заявки`
             ) AS `тип_заявки`,
-            dsl.`специалист`,
-            dsl.`салон`,
-            dsl.`город`,
-            dsl.`регион`,
-            dsl.`тип_сайта`,
-            dsl.`шаблон`,
-            dcs.`статус`,
-            dsl.`проджект`,
-            dsl.`менеджер`,
-            dsl.`id_салона`,
-            dcs.`Название crm`,
+            dsl.`специалист` AS `специалист`,
+            dsl.`салон` AS `салон`,
+            dsl.`город` AS `город`,
+            dsl.`регион` AS `регион`,
+            dsl.`тип_сайта` AS `тип_сайта`,
+            dsl.`шаблон` AS `шаблон`,
+            dcs.`статус` AS `статус`,
+            dsl.`проджект` AS `проджект`,
+            dsl.`менеджер` AS `менеджер`,
+            dsl.`id_салона` AS `id_салона`,
+            if(
+                ifNull(dcs.`Название crm`, '') IN ('', 'Не указана'),
+                if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`),
+                dcs.`Название crm`
+            ) AS `Название crm`,
             toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key
         FROM ad_analytics.fact_big_analytics f
         LEFT JOIN ad_analytics.Dim_Account da ON da.account_key = f.account_key
         LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key
         LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key
+        LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key
         {where_sql}
     """
 

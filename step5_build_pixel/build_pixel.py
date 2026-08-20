@@ -11,16 +11,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_utils import count_rows, swap_shadow, table_exists
-from step3_build_sources.step3 import SOURCE_STORE, _weekday_expr, recreate_source_views
+from step3_build_sources.step3 import (
+    SOURCE_STORE,
+    _crm_name_expr,
+    _metric_expr,
+    _weekday_expr,
+    recreate_source_views,
+)
 
 logger = logging.getLogger("pipeline.step5")
+
+PIXEL_REFERENCE_CUTOFF = "2026-06-03"
 
 
 def _required_tables_exist(client) -> list[str]:
     required = [
         ("ad_analytics", SOURCE_STORE),
-        ("reference_data", "victory_pixel_answers"),
+        ("ad_analytics", "local_pixel_config"),
+        ("ad_analytics", "local_pixel_price_history"),
+        ("reference_data", "victory_answers"),
         ("reference_data", "gsheet_sites"),
+        ("raw_data", "leads_all"),
     ]
     return [f"{db}.{table}" for db, table in required if not table_exists(client, db, table)]
 
@@ -42,11 +53,37 @@ def _crm_from_gsheet_expr(crm_expr: str) -> str:
 
 
 def _build_pixel_insert_sql(shadow: str) -> str:
-    answer_date = "coalesce(v.bill_day, v.date)"
-    crm_name = _crm_from_gsheet_expr("ifNull(gs.crm, gs_salon.crm)")
+    answer_date_raw = "coalesce(v.bill_day, v.date)"
+    answer_date = f"assumeNotNull({answer_date_raw})"
+    crm_name = f"if({_crm_name_expr('m.source_type')} = 'Не указана', {_crm_from_gsheet_expr('ifNull(gs.crm, gs_salon.crm)')}, {_crm_name_expr('m.source_type')})"
+    matched_metrics = _metric_expr("m.status", "m.reason", "m.source_type", "m.raw_salon")
+    legacy_metrics = _metric_expr("status", "reason", "source_type", "raw_salon")
     return f"""
         INSERT INTO {shadow}
         WITH
+        ref_answers AS
+        (
+            SELECT
+                id,
+                {answer_date} AS answer_date,
+                bill_month,
+                project,
+                salon,
+                toDecimal64(cost, 6) AS cost,
+                status,
+                phone,
+                site
+            FROM (SELECT * FROM reference_data.victory_answers FINAL) AS v
+            WHERE v.product = 'пиксель'
+              AND {answer_date_raw} >= toDate('{PIXEL_REFERENCE_CUTOFF}')
+              AND {answer_date_raw} IS NOT NULL
+        ),
+        ref_phone_months AS
+        (
+            SELECT DISTINCT phone, toYYYYMM(answer_date) AS ym
+            FROM ref_answers
+            WHERE phone != ''
+        ),
         gs_domain AS
         (
             SELECT
@@ -89,6 +126,114 @@ def _build_pixel_insert_sql(shadow: str) -> str:
             FROM reference_data.gsheet_sites AS s
             WHERE ifNull(s.salon, '') != ''
             GROUP BY salon_key
+        ),
+        legacy_raw AS
+        (
+            SELECT
+                l.id AS lead_id,
+                assumeNotNull(l.created_date) AS created_date,
+                ifNull(l.status, '') AS status,
+                ifNull(l.reason, '') AS reason,
+                ifNull(l.source_type, '') AS source_type,
+                ifNull(l.salon, '') AS raw_salon,
+                pc.pixel_name AS pixel_name,
+                lowerUTF8(trim(ifNull(l.utm_source, ''))) AS domain,
+                if(
+                    ifNull(h.pixel_name, '') != '',
+                    coalesce(h.cost_per_lead, h.cost_total, toDecimal64(0, 6)),
+                    coalesce(pc.cost_per_lead, pc.cost_total, toDecimal64(0, 6))
+                ) AS lead_cost
+            FROM raw_data.leads_all AS l
+            INNER JOIN ad_analytics.local_pixel_config AS pc
+              ON ifNull(l.source_name, '') = pc.pixel_name
+              OR lowerUTF8(trim(ifNull(l.utm_source, ''))) = lowerUTF8(trim(pc.pixel_name))
+            LEFT JOIN ad_analytics.local_pixel_price_history AS h
+              ON h.pixel_name = pc.pixel_name
+             AND h.valid_from <= l.created_date
+             AND (h.valid_to IS NULL OR l.created_date <= h.valid_to)
+            WHERE l.is_copy_for_removal = 0
+              AND l.created_date >= toDate('2026-01-01')
+              AND l.created_date < toDate('{PIXEL_REFERENCE_CUTOFF}')
+              AND lowerUTF8(trim(ifNull(l.utm_source, ''))) IN (SELECT domain_key FROM gs_domain)
+              AND (right(replaceRegexpAll(ifNull(l.phone, ''), '[^0-9]', ''), 10), toYYYYMM(l.created_date))
+                    NOT IN (SELECT phone, ym FROM ref_phone_months)
+        ),
+        legacy_scored AS
+        (
+            SELECT
+                lead_id,
+                created_date,
+                pixel_name,
+                domain,
+                source_type,
+                raw_salon,
+                lead_cost,
+                {legacy_metrics}
+            FROM legacy_raw
+        ),
+        legacy_agg AS
+        (
+            SELECT
+                domain,
+                created_date,
+                pixel_name,
+                max(lead_cost) AS lead_cost,
+                anyLast(source_type) AS source_type,
+                anyLast(nullIf(raw_salon, '')) AS pixel_salon_raw,
+                sum(kol_vo_zayavok) AS kol_vo_zayavok,
+                sum(korr) AS korr,
+                sum(kval) AS kval,
+                sum(priezd) AS priezd,
+                sum(prodazhi) AS prodazhi,
+                sum(nekorr) AS nekorr,
+                sum(ne_otvechaet) AS ne_otvechaet,
+                sum(filtr) AS filtr,
+                sum(nedozvon) AS nedozvon,
+                sum(priedet) AS priedet,
+                sum(dohod_do_kredita) AS dohod_do_kredita,
+                sum(dobro) AS dobro
+            FROM legacy_scored
+            GROUP BY domain, created_date, pixel_name
+        ),
+        raw_phone_candidates AS
+        (
+            SELECT
+                v.id AS answer_id,
+                l.id AS lead_id,
+                assumeNotNull(l.created_date) AS created_date,
+                ifNull(l.status, '') AS status,
+                ifNull(l.reason, '') AS reason,
+                ifNull(l.source_type, '') AS source_type,
+                ifNull(l.salon, '') AS raw_salon,
+                row_number() OVER (
+                    PARTITION BY v.id
+                    ORDER BY
+                        if(lowerUTF8(trim(ifNull(l.utm_source, ''))) = lowerUTF8(trim(ifNull(v.site, ''))) AND ifNull(v.site, '') != '', 0, 1),
+                        if(ifNull(l.salon, '') = ifNull(v.salon, '') AND ifNull(v.salon, '') != '', 0, 1),
+                        if(ifNull(l.status, '') != '', 0, 1),
+                        abs(dateDiff('day', l.created_date, v.answer_date)),
+                        l.created_date DESC,
+                        l.id DESC
+                ) AS rn
+            FROM ref_answers AS v
+            LEFT JOIN raw_data.leads_all AS l
+              ON right(replaceRegexpAll(ifNull(l.phone, ''), '[^0-9]', ''), 10) = v.phone
+             AND toYYYYMM(l.created_date) = toYYYYMM(v.answer_date)
+             AND l.is_copy_for_removal = 0
+             AND l.created_date IS NOT NULL
+        ),
+        matched_raw AS
+        (
+            SELECT *
+            FROM raw_phone_candidates
+            WHERE rn = 1
+        ),
+        matched_scored AS
+        (
+            SELECT
+                answer_id,
+                {matched_metrics}
+            FROM matched_raw AS m
         )
         SELECT
             s.*
@@ -98,10 +243,82 @@ def _build_pixel_insert_sql(shadow: str) -> str:
         UNION ALL
 
         SELECT
+            concat('pixel_legacy|', toString(agg.created_date), '|', agg.domain, '|', agg.pixel_name) AS key3,
+            agg.created_date AS `Date`,
+            {_weekday_expr("agg.created_date")} AS `День недели`,
+            toStartOfWeek(agg.created_date, 1) AS week_start,
+            toInt64(0) AS `CampaignId`,
+            CAST(agg.pixel_name, 'Nullable(String)') AS `CampaignName`,
+            toInt64(0) AS `AdGroupId`,
+            CAST(agg.pixel_name, 'Nullable(String)') AS `AdGroupName`,
+            CAST(NULL, 'Nullable(String)') AS `AdNetworkType`,
+            CAST(NULL, 'Nullable(String)') AS `Device`,
+            toDecimal64(0, 6) AS `Impressions`,
+            toDecimal64(0, 6) AS `Clicks`,
+            agg.kol_vo_zayavok * agg.lead_cost AS total_cost,
+            CAST(agg.domain, 'Nullable(String)') AS domain,
+            toInt64(0) AS `RlAdjustmentId`,
+            '' AS `RlAdjustmentId_total`,
+            CAST(NULL, 'Nullable(String)') AS campaign_code,
+            '' AS tp,
+            '' AS cpc_cpa,
+            '' AS site_quiz,
+            CAST(NULL, 'Nullable(String)') AS adgroup_code,
+            'пиксель' AS account_login,
+            CAST('пиксель', 'Nullable(String)') AS manager_login,
+            '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4, '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
+            '' AS `марки авто`,
+            {_crm_name_expr("agg.source_type")} AS `Название crm`,
+            CAST('Заявки', 'Nullable(String)') AS `тип_заявки`,
+            agg.kol_vo_zayavok AS kol_vo_zayavok,
+            agg.korr AS korr,
+            agg.kval AS kval,
+            agg.priezd AS priezd,
+            agg.prodazhi AS prodazhi,
+            agg.nekorr AS nekorr,
+            agg.ne_otvechaet AS ne_otvechaet,
+            agg.filtr AS filtr,
+            agg.nedozvon AS nedozvon,
+            agg.priedet AS priedet,
+            agg.dohod_do_kredita AS dohod_do_kredita,
+            agg.dobro AS dobro,
+            CAST(gs.status, 'Nullable(String)') AS `статус`,
+            gs.directologist AS `специалист`,
+            gs.site_type AS `тип_сайта`,
+            gs.template AS `шаблон`,
+            coalesce(agg.pixel_salon_raw, gs.salon) AS `салон`,
+            gs.city AS `город`,
+            gs.region AS `регион`,
+            gs.direction AS direction,
+            CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
+            CAST(NULL, 'Nullable(String)') AS fid,
+            gs.project_manager AS `проджект`,
+            gs.client_id AS `id_салона`,
+            gs.sales_manager AS `менеджер`,
+            'Пиксель' AS `источник`,
+            if(agg.domain LIKE '%pixel\\_pr', 'Перформ', 'Пиксель') AS `направление`,
+            '' AS `номер кампании | название кампании`,
+            '' AS `номер группы | название группы`,
+            CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
+            CAST(NULL, 'Nullable(Int32)') AS `План приезда`,
+            concat(ifNull(gs.login_key, ''), '|', agg.domain) AS `аккаунт|сайт`,
+            CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
+            CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
+            'Victory' AS `поставщик`,
+            'pixel' AS _source_table,
+            CAST('leads_all_before_2026_06_03', 'Nullable(String)') AS cascade_level,
+            CAST(NULL, 'Nullable(String)') AS campaign_status,
+            CAST(NULL, 'Nullable(String)') AS payment_model
+        FROM legacy_agg AS agg
+        LEFT JOIN gs_domain AS gs ON gs.domain_key = agg.domain
+
+        UNION ALL
+
+        SELECT
             concat('pixel_answer|', toString(v.id)) AS key3,
-            assumeNotNull({answer_date}) AS `Date`,
-            {_weekday_expr(f"assumeNotNull({answer_date})")} AS `День недели`,
-            toStartOfWeek(assumeNotNull({answer_date}), 1) AS week_start,
+            v.answer_date AS `Date`,
+            {_weekday_expr("v.answer_date")} AS `День недели`,
+            toStartOfWeek(v.answer_date, 1) AS week_start,
             toInt64(0) AS `CampaignId`,
             CAST(coalesce(nullIf(v.project, ''), 'Пиксель'), 'Nullable(String)') AS `CampaignName`,
             toInt64(0) AS `AdGroupId`,
@@ -110,7 +327,7 @@ def _build_pixel_insert_sql(shadow: str) -> str:
             CAST(NULL, 'Nullable(String)') AS `Device`,
             toDecimal64(0, 6) AS `Impressions`,
             toDecimal64(0, 6) AS `Clicks`,
-            toDecimal64(v.cost, 6) AS total_cost,
+            v.cost AS total_cost,
             CAST(nullIf(v.site, ''), 'Nullable(String)') AS domain,
             toInt64(0) AS `RlAdjustmentId`,
             '' AS `RlAdjustmentId_total`,
@@ -125,18 +342,18 @@ def _build_pixel_insert_sql(shadow: str) -> str:
             '' AS `марки авто`,
             {crm_name} AS `Название crm`,
             CAST('Пиксель', 'Nullable(String)') AS `тип_заявки`,
-            toDecimal64(1, 6) AS kol_vo_zayavok,
-            toDecimal64(1, 6) AS korr,
-            toDecimal64(0, 6) AS kval,
-            toDecimal64(0, 6) AS priezd,
-            toDecimal64(0, 6) AS prodazhi,
-            toDecimal64(0, 6) AS nekorr,
-            toDecimal64(0, 6) AS ne_otvechaet,
-            toDecimal64(0, 6) AS filtr,
-            toDecimal64(0, 6) AS nedozvon,
-            toDecimal64(0, 6) AS priedet,
-            toInt64(0) AS dohod_do_kredita,
-            toInt64(0) AS dobro,
+            ifNull(ms.kol_vo_zayavok, toDecimal64(0, 6)) AS kol_vo_zayavok,
+            ifNull(ms.korr, toDecimal64(0, 6)) AS korr,
+            ifNull(ms.kval, toDecimal64(0, 6)) AS kval,
+            ifNull(ms.priezd, toDecimal64(0, 6)) AS priezd,
+            ifNull(ms.prodazhi, toDecimal64(0, 6)) AS prodazhi,
+            ifNull(ms.nekorr, toDecimal64(0, 6)) AS nekorr,
+            ifNull(ms.ne_otvechaet, toDecimal64(0, 6)) AS ne_otvechaet,
+            ifNull(ms.filtr, toDecimal64(0, 6)) AS filtr,
+            ifNull(ms.nedozvon, toDecimal64(0, 6)) AS nedozvon,
+            ifNull(ms.priedet, toDecimal64(0, 6)) AS priedet,
+            ifNull(ms.dohod_do_kredita, 0) AS dohod_do_kredita,
+            ifNull(ms.dobro, 0) AS dobro,
             CAST(v.status, 'Nullable(String)') AS `статус`,
             coalesce(gs.directologist, gs_salon.directologist) AS `специалист`,
             coalesce(gs.site_type, gs_salon.site_type) AS `тип_сайта`,
@@ -161,15 +378,14 @@ def _build_pixel_insert_sql(shadow: str) -> str:
             CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
             'Victory' AS `поставщик`,
             'pixel' AS _source_table,
-            CAST('victory_pixel_answers', 'Nullable(String)') AS cascade_level,
+            CAST('victory_answers_from_2026_06_03', 'Nullable(String)') AS cascade_level,
             CAST(NULL, 'Nullable(String)') AS campaign_status,
             CAST(NULL, 'Nullable(String)') AS payment_model
-        FROM (SELECT * FROM reference_data.victory_pixel_answers FINAL) AS v
-        LEFT JOIN gs_domain gs ON gs.domain_key = lowerUTF8(trim(ifNull(v.site, '')))
+        FROM ref_answers AS v
+        LEFT JOIN matched_raw AS m ON m.answer_id = v.id
+        LEFT JOIN matched_scored AS ms ON ms.answer_id = v.id
+        LEFT JOIN gs_domain AS gs ON gs.domain_key = lowerUTF8(trim(ifNull(v.site, '')))
         LEFT JOIN gs_salon ON gs_salon.salon_key = lowerUTF8(trim(ifNull(v.salon, '')))
-        WHERE v.product = 'пиксель'
-          AND ifNull(v.bill_month, '') >= '2026-01'
-          AND {answer_date} IS NOT NULL
         """
 
 
@@ -198,7 +414,11 @@ def _apply_pixel_costs(client) -> tuple[int, float]:
 
 
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
-    logger.info("Шаг 5 v6_ch: применение pixel из reference_data.victory_pixel_answers")
+    logger.info(
+        "Шаг 5 v6_ch: гибридный pixel leads_all<%s + victory_answers>=%s",
+        PIXEL_REFERENCE_CUTOFF,
+        PIXEL_REFERENCE_CUTOFF,
+    )
     client = get_client()
     t0 = time.perf_counter()
     missing = _required_tables_exist(client)
