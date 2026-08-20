@@ -667,16 +667,6 @@ def build_pbi_import_region_spend(client) -> int:
     return count_rows(client, "ad_analytics.pbi_import_region_spend")
 
 
-def build_arf_fact(client) -> int:
-    _replace_view(client, "arf_fact", "SELECT * FROM ad_analytics.pbi_import_fact_direct_feed_funnel")
-    return count_rows(client, "ad_analytics.arf_fact")
-
-
-def build_arc_fact(client) -> int:
-    _replace_view(client, "arc_fact", _criterion_spend_pbi_sql())
-    return count_rows(client, "ad_analytics.arc_fact")
-
-
 def _dim_criterion_sql() -> str:
     return f"""
         SELECT

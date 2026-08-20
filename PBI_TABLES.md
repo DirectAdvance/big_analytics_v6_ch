@@ -4,7 +4,7 @@
 
 ---
 
-# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-18, обновлено 2026-08-19
+# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-18, обновлено 2026-08-20
 
 Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
 что живут на v5.** Метод: живая модель
@@ -28,6 +28,11 @@ cookie-страницы, поисковые запросы) — есть и по
 | 5 | `yandex_direct_accounts_human_cyborgs` | справочника нет в `raw_data`; PBIP пока читает `raw_new_human_cyborgs` |
 | — | `Dim_Distance` (DAX) | считается из `distance_km_agreg`; в физических `fact_region_*` v6 колонки нет, есть только в `bi_*`-вьюхах |
 | — | `fact_direct_feed_funnel` (по смыслу) | имя занято, но это **не** воронка по фидам — см. §0.3 |
+
+20.08 страницы «Я.Директ_фиды/Фиды» скрыты в admin/user PBIP, потому что
+`bi_Dim_PlacementFeed` содержит 35 394 площадки и 0 `feed_name/feed_url`. В админском PBIP также
+скрыты две страницы `Дубликат Я.Директ_тексты объявлений_тексты`; рабочая страница текстов
+объявлений остаётся отдельной.
 
 18.08 `yandex_direct_ads_texts` и `yandex_direct_type_placement_report_master` переведены в PBIP
 на `bi_yandex_direct_ads_texts` и `bi_yandex_direct_type_placement_report_master`. Обе view читают
@@ -80,12 +85,12 @@ Power BI.
 | `v_yandex_direct_minus_delta` | `yandex_direct_raw.v_yandex_direct_minus_delta` | 32 831 | `v_yandex_direct_minus_delta` | 1 546 | ⚠️ |
 | `yandex_direct_404_errors` | `yandex_direct_raw.yandex_direct_404_errors` | 11 780 | `yandex_direct_404_errors` | 13 548 | ✅ |
 | `yandex_direct_accounts_human_cyborgs` | `victoryads_direct_automation.…` | 17 | — | — | ❌ |
-| `yandex_direct_ads_texts` | `yandex_direct_raw.…_ads_texts_master_light` | 5 106 097 | `bi_yandex_direct_ads_texts` | 53 488 831 | ⚠️ |
+| `yandex_direct_ads_texts` | `yandex_direct_raw.…_ads_texts_master_light` | 5 106 097 | `bi_yandex_direct_ads_texts` | 16 162 458 | ⚠️ |
 | `yandex_direct_cookie_analytics_website_pages` | `yandex_direct_raw.…` | 1 011 518 | `yandex_direct_cookie_analytics_website_pages` | 965 764 | ✅ |
 | `yandex_direct_korrektirovki` | `yandex_direct_raw.…` | 43 603 | `yandex_direct_korrektirovki` | 190 286 | ✅ |
 | `yandex_direct_minus_snapshot` | `yandex_direct_raw.…` | 32 831 | `yandex_direct_minus_snapshot` | 1 546 | ⚠️ |
 | `yandex_direct_search_query_report_master` | `yandex_direct_raw.…_master_pbi` | 328 658 | `yd_search_query_report_master` | 40 136 496 | ⚠️ |
-| `yandex_direct_type_placement_report_master` | `yandex_direct_raw.…_master_light` | 7 539 230 | `bi_yandex_direct_type_placement_report_master` | 8 398 376 | ⚠️ |
+| `yandex_direct_type_placement_report_master` | `yandex_direct_raw.…_master_light` | 7 539 230 | `bi_yandex_direct_type_placement_report_master` | 8 453 279 | ⚠️ |
 
 ## §0.3 Что означает каждая ⚠️
 
