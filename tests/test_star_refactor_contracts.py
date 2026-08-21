@@ -132,6 +132,9 @@ def test_dim_site_uses_ba5_empty_crm_label():
     assert "is_copy_for_removal = 0" in sql
     assert "if(ifNull(rc.crm_name, '') = '', 'Не указана', rc.crm_name)" in sql
     assert "u.crm_name) = 'PLEX', 'Плекс'" in sql
+    assert "u.crm_name) = 'MarCar CRM', 'Маркар'" in sql
+    assert "u.crm_name) = 'MEGA CRM', 'Мега'" in sql
+    assert "u.crm_name) = 'GenzesCRM', 'Генезис'" in sql
     assert "CAST(ifNull(crm_name, ''), 'String') AS `Название crm`" not in sql
 
 
@@ -141,8 +144,29 @@ def test_dim_crm_status_uses_ba5_empty_crm_label():
     assert "'Не указана'" in sql
     assert "`Название crm` = 'One CRM', 'Фаиг'" in sql
     assert "`Название crm` = 'PLEX', 'Плекс'" in sql
+    assert "`Название crm` = 'MarCar CRM', 'Маркар'" in sql
+    assert "`Название crm` = 'MEGA CRM', 'Мега'" in sql
+    assert "`Название crm` = 'GenzesCRM', 'Генезис'" in sql
     assert "`Название crm` = 'crmf', 'Фаиг'" in sql
     assert "CAST(ifNull(`Название crm`, ''), 'String') AS `Название crm`" not in sql
+
+
+def test_manager_login_dimension_keeps_only_email_logins():
+    select_sql, target_cols = build_star.build_fact_projection(["Date", "manager_login"])
+    dim_sql = build_star.DIM_DDL["Dim_ManagerLogin"]
+
+    assert "manager_login_key" in target_cols
+    assert "position(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, ''))), '@') > 0" in select_sql
+    assert "position(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, ''))), '@') > 0" in dim_sql
+    assert "cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, ''))))" in dim_sql
+    assert "trim(BOTH ' ' FROM ifNull(manager_login, '')), '') AS manager_login" in dim_sql
+
+
+def test_dim_salon_collapses_blank_project_and_manager():
+    sql = build_star.DIM_DDL["Dim_Salon"]
+
+    assert "anyLast(nullIf(trim(BOTH ' ' FROM ifNull(`проджект`, '')), '')) AS `проджект`" in sql
+    assert "anyLast(nullIf(trim(BOTH ' ' FROM ifNull(`менеджер`, '')), '')) AS `менеджер`" in sql
 
 
 def test_dim_campaign_normalizes_kviz_to_quiz():

@@ -20,6 +20,9 @@ reference_data.domains ───────────────────
 таблицы. `raw_domains` — `VIEW` поверх `reference_data.domains`. `raw_perform_leads`
 остаётся совместимой пустой таблицей, пока нет живого источника `raw_data.perform_leads`.
 Строки `raw_data.leads_all` с `is_copy_for_removal=1` не попадают в CRM RAW-выходы.
+Если `raw_data.leads_all.salon` содержит префиксный код клиента, step1 резолвит его в название
+салона через `raw_data.gsheet_autosalony_clients.client_id → salon`; пустой extracted key
+превращается в `NULL`, чтобы не матчить пустые `client_id` и не размножать лиды.
 
 ## Архитектурная схема
 
@@ -35,6 +38,7 @@ raw_data.yandex_direct_report_rows ─────► raw_yandex
 raw_data.leads_all + reference_data.domains ─► raw_leads (deal_type != 'Звонок', is_copy_for_removal=0)
                               ├── id, created_date, arrival_date, domain_id, domain
                               ├── status, source_type, campaign_id, group_id, correction_id
+                              ├── salon = client-code → название из gsheet_autosalony_clients, иначе исходное значение
                               ├── utm_source/medium/campaign/content/term, phone, yclid
                               ├── fid = после 'fid:' в utm_content
                               ├── key3 = ключ по created_date
@@ -88,10 +92,24 @@ REPLACE("CampaignName", chr(1089), 'c')
   `rt-avtomarket-geely.ru`) и пропускало реальный мусор (`victory-crm.ru`, id=17478 в CH) —
   см. `KNOWN_ISSUES.md` #33.
 
+## Резолв салона
+
+`_salon_client_id_expr()` достаёт из `raw_data.leads_all.salon` только префиксный код клиента
+и сразу делает `nullIf(..., '')`. Это важно: в
+`raw_data.gsheet_autosalony_clients` есть строки с пустым `client_id`, и JOIN по пустой строке
+размножает обычные лиды без кода. Проверка 2026-08-20: старый пустой JOIN давал `5 816`
+матчей, новый `NULL`-ключ даёт `0`.
+
+Резолв применяется в:
+
+- `raw_leads`;
+- `raw_perform_leads`;
+- pixel date-shift ветке step13 через тот же helper.
+
 ## Зависимости
 
 - step0 должен пройти ClickHouse preflight.
-- Python 3.10+, `clickhouse-connect`, доступ к `victory_clickhouse` через `.secret/loader.py`.
+- Python 3.10+, `clickhouse-connect`, доступ к `victory_clickhouse` через общий project secret loader.
 
 ## Примеры запуска
 
@@ -128,7 +146,7 @@ SELECT key3 FROM ad_analytics.raw_yandex LIMIT 5;
 ## Связи с другими шагами
 
 - **Зависит от:** step0 (ClickHouse preflight)
-- **Используется:** step2 (индексы), step3 (`base_join` CTE, CTE сборки источников), step6 (звонки inline из `raw_calls`)
+- **Используется:** step2 (OPTIMIZE), step3 (сборка source store), step6 (звонки из `raw_calls`)
 - **Финализация:** step7 не делает PostgreSQL `UNLOGGED → LOGGED`; v6 RAW уже живёт в ClickHouse.
 
 ## Файлы

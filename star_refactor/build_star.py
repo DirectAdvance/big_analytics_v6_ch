@@ -135,10 +135,25 @@ def _canonical_crm_name_sql(crm_expr: str) -> str:
         f"ifNull({crm_expr}, '') = '', 'Не указана', "
         f"{crm_expr} = 'One CRM', 'Фаиг', "
         f"{crm_expr} = 'PLEX', 'Плекс', "
+        f"{crm_expr} = 'MEGA CRM', 'Мега', "
+        f"{crm_expr} = 'MarCar CRM', 'Маркар', "
+        f"{crm_expr} = 'M-Auto CRM', 'МаАвто', "
+        f"{crm_expr} = 'RedautoCRM', 'Ред Авто', "
+        f"{crm_expr} = 'GenzesCRM', 'Генезис', "
         f"{crm_expr} = 'crmf', 'Фаиг', "
-        f"{crm_expr} IN ('RivendellCRM', 'rivendell_excel'), 'Ривендел', "
+        f"{crm_expr} IN ('RivendellCRM', 'rivendell_excel', 'perform_api'), 'Ривендел', "
         f"{crm_expr})"
     )
+
+
+def _manager_login_key_sql(expr: str = "manager_login", alias: str = "manager_login_key") -> str:
+    normalized = f"lowerUTF8(trim(BOTH ' ' FROM ifNull({expr}, '')))"
+    return f"if(position({normalized}, '@') > 0, cityHash64({normalized}), toUInt64(0)) AS {alias}"
+
+
+def _manager_login_label_sql(expr: str = "manager_login", alias: str = "manager_login") -> str:
+    normalized = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
+    return f"if(position(lowerUTF8({normalized}), '@') > 0, {normalized}, '') AS {alias}"
 
 
 def _dimension_key_sql(columns: list[str], alias: str) -> str:
@@ -202,11 +217,7 @@ def build_fact_projection(source_cols: list[str]) -> tuple[str, list[str]]:
             "lowerUTF8(trim(BOTH ' ' FROM ifNull(`источник`, ''))) AS source_key"
         )
     if "manager_login" in source_cols:
-        alias_exprs.append(
-            "if(notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))), "
-            "cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))), toUInt64(0)) "
-            "AS manager_login_key"
-        )
+        alias_exprs.append(_manager_login_key_sql())
     if all(column in source_cols for column in ACCOUNT_KEY_COLUMNS):
         alias_exprs.append(_dimension_key_sql(ACCOUNT_KEY_COLUMNS, "account_key"))
     if all(column in source_cols for column in CRM_STATUS_KEY_COLUMNS):
@@ -670,7 +681,7 @@ DIM_DDL = {
             FROM locations
             GROUP BY id_location
         """,
-        "Dim_ManagerLogin": """
+        "Dim_ManagerLogin": f"""
             CREATE TABLE ad_analytics.Dim_ManagerLogin_new
             ENGINE = MergeTree
             ORDER BY manager_login_key
@@ -681,11 +692,8 @@ DIM_DDL = {
             FROM
             (
                 SELECT
-                    if(notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))),
-                        cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(manager_login, '')))),
-                        toUInt64(0)
-                    ) AS manager_login_key,
-                    ifNull(manager_login, '') AS manager_login
+                    {_manager_login_key_sql()},
+                    {_manager_login_label_sql()}
                 FROM ad_analytics.big_analytics_unified
             )
             GROUP BY manager_login_key
@@ -743,8 +751,8 @@ DIM_DDL = {
                 anyLast(`тип_сайта`) AS `тип_сайта`,
                 anyLast(`шаблон`) AS `шаблон`,
                 anyLast(`специалист`) AS `специалист`,
-                anyLast(`проджект`) AS `проджект`,
-                anyLast(`менеджер`) AS `менеджер`,
+                anyLast(nullIf(trim(BOTH ' ' FROM ifNull(`проджект`, '')), '')) AS `проджект`,
+                anyLast(nullIf(trim(BOTH ' ' FROM ifNull(`менеджер`, '')), '')) AS `менеджер`,
                 anyLast(`id_салона`) AS `id_салона`,
                 anyLast(`направление`) AS `направление`
             FROM

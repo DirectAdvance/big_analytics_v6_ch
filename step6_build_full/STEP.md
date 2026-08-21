@@ -1,26 +1,25 @@
-# STEP.md — Шаг 4: big_analytics_full (UNION ALL)
+# STEP.md — Шаг 6: `big_analytics_full`
 
-## Что делает
+## Что Делает
 
-Собирает `big_analytics_full` = UNION ALL всех source-таблиц + звонки inline.
+Собирает `ad_analytics.big_analytics_full` из:
 
-```
-big_analytics_full =
-  big_analytics_direct          (расходы + лиды директ + tp8)
-  UNION ALL
-  big_analytics_crop_targeting  (посевы + лиды посевов)
-  UNION ALL
-  big_analytics_seo             (лиды без UTM)
-  UNION ALL
-  big_analytics_pixel           (pixel лиды)
-  UNION ALL
-  big_analytics_telegram        (telegram utm-посевы)
-  UNION ALL
-  raw_calls → GROUP BY домен+дата  (звонки)
-```
+- `ad_analytics.big_analytics_sources` без `_source_table='pixel'`;
+- `ad_analytics.big_analytics_calls`, пересобранной в начале шага.
+
+## Звонки
+
+| Тип | Условие | Источник |
+|---|---|---|
+| обычные | `gs.direction='Авто'` и не посевной домен | `Контекст`/`SEO`/`SEO Flow` |
+| посевные | crop-domain или `direction_main='Посевы'` | `Посевы_Звонки` |
+
+## Публикация
+
+Full пишется в `big_analytics_full_new`, затем публикуется через `swap_shadow`.
 
 ## Важно
 
-- **SELECT * запрещён** — все ветки перечисляют колонки явно (иначе при расхождении DDL данные тихо сместятся)
-- Звонки строятся inline в этом шаге — своей таблицы у них нет
-- Таблица создаётся как `UNLOGGED` → SET LOGGED в шаге 5
+- `SELECT *` не используется для вставки: колонки берутся из `column_names()`.
+- `key_pixel_score` добавляется на этом шаге.
+- Pixel не вставляется в full этим шагом.

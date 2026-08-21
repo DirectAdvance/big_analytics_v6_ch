@@ -214,6 +214,14 @@ def _perform_cohort_condition(alias: str, *, include_extra: bool) -> str:
     )
 
 
+def _salon_client_id_expr(alias: str) -> str:
+    return f"nullIf(lowerUTF8(extract(ifNull({alias}.salon, ''), '^([A-Za-z]+_[0-9]+)')), '')"
+
+
+def _resolved_lead_salon_expr(alias: str, client_alias: str) -> str:
+    return f"coalesce(nullIf({client_alias}.salon, ''), {alias}.salon)"
+
+
 def _drop_and_create(client, table: str, create_sql: str) -> None:
     client.command(f"DROP TABLE IF EXISTS {table} SYNC")
     client.command(create_sql, settings=SAFE_QUERY_SETTINGS)
@@ -429,7 +437,7 @@ SELECT
     l.yclid,
     l.is_copy_for_removal,
     l.reason,
-    l.salon,
+    {_resolved_lead_salon_expr("l", "salon_client")} AS salon,
     nullIf(extract(ifNull(l.utm_content, ''), 'fid:([^|]+)'), '') AS fid,
     lower(concat(
         ifNull(toString(l.created_date), ''), '|',
@@ -459,6 +467,8 @@ SELECT
     ))) AS key3_arrival_date
 FROM {source} AS l
 LEFT JOIN reference_data.domains AS d ON d.id = l.domain_id
+LEFT JOIN raw_data.gsheet_autosalony_clients AS salon_client
+  ON lowerUTF8(trim(ifNull(salon_client.client_id, ''))) = {_salon_client_id_expr("l")}
 {_marcar_join_sql("l")}
 WHERE l.deal_type != 'Звонок'
   AND ifNull(l.is_copy_for_removal, 0) = 0
@@ -744,7 +754,7 @@ SELECT
     CAST(NULL, 'Nullable(String)') AS yclid,
     l.is_copy_for_removal,
     l.reason,
-    l.salon,
+    {_resolved_lead_salon_expr("l", "salon_client")} AS salon,
     CAST(NULL, 'Nullable(String)') AS fid,
     '' AS key3,
     CAST(NULL, 'Nullable(String)') AS key3_arrival_date
@@ -756,6 +766,8 @@ CROSS JOIN
     WHERE domain = 'cars-rus.ru'
     LIMIT 1
 ) AS d_perf
+LEFT JOIN raw_data.gsheet_autosalony_clients AS salon_client
+  ON lowerUTF8(trim(ifNull(salon_client.client_id, ''))) = {_salon_client_id_expr("l")}
 WHERE (l.deal_type IS NULL OR l.deal_type != 'Звонок')
   AND ifNull(l.is_copy_for_removal, 0) = 0
   AND ifNull(l.phone, '') != ''

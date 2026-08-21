@@ -8,12 +8,12 @@
 >
 > | объект / ось | `_source_table` | строк |
 > |---|---|---:|
-> | `big_analytics_pixel_score` (физическая таблица) | `pixel` | 243 278 |
-> | `big_analytics_full` — ось «По дате заявки» | `pixel` | 31 464 |
-> | `big_analytics_full_arrival` — ось «По дате визита» | `pixel` | 85 160 |
+> | `big_analytics_pixel` (source-layer) | `pixel` | 62 049 |
+> | `fact_big_analytics` — ось «По дате заявки» | `pixel` | 62 049 |
+> | `fact_big_analytics` — ось «По дате визита» | `pixel` | 30 019 |
 >
 > Визитную ось step13 читает из `big_analytics_pixel_score` напрямую и пишет
-> `направление='Пиксель'`. Замер live ClickHouse: 2026-08-17.
+> `направление='Пиксель'`. Замер live ClickHouse: 2026-08-20, run_id `ed6bfc6f9c23`.
 
 Шаг 5 пайплайна. Собирает `big_analytics_pixel` — гибридный слой пиксельных лидов:
 до `2026-06-03` из `raw_data.leads_all`, с `2026-06-03` из
@@ -54,6 +54,10 @@ Date >= 2026-06-03: total_cost = victory_answers.cost
 После `2026-06-03` стоимость уже итоговая в канонической таблице, поэтому step5 её
 не пересчитывает. `Date = coalesce(bill_day, date)`: в старых строках `bill_day`
 может быть пустой.
+
+Последний проверенный прогон: `big_analytics_pixel=62 049`, `total_cost=143 061 550.00`,
+`kol_vo_zayavok=161 610`, `korr=115 615`, `kval=12 336`, `priezd=8 370`,
+`prodazhi=646`, период `2026-01-02..2026-08-19`.
 
 ## Источник пикселя
 

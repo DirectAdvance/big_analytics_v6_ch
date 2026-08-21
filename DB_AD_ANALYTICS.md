@@ -73,9 +73,9 @@
    переименовывают колонки под модель, джойнят измерения, фильтруют.
 3. **Материализовать вьюху в таблицу — только по замеру.** Единственный законный повод: Power BI
    не выдерживает джойн на каждом обновлении. Такой случай в схеме один —
-   `pbi_import_fact_direct_feed_funnel` (13.4 млн строк, 144 МиБ поверх
+   `pbi_import_fact_direct_feed_funnel` (13.58 млн строк, 144 МиБ поверх
    `fact_direct_feed_funnel_light`). Рядом есть облегчённый future-star слой
-   `pbi_import_fact_direct_feed_funnel_star` (13.4 млн строк, 11 колонок, 115 МиБ) для перевязки
+   `pbi_import_fact_direct_feed_funnel_star` (13.58 млн строк, 11 колонок, 115 МиБ) для перевязки
    Power BI на `Dim_PlacementFeed` по `placement_feed_id`; текущая модель пока читает старый
    compatibility-объект. `bi_fact_region_spend_star` и `bi_fact_criterion_spend_star` сделаны
    view, потому что это простые проекции без join. Материализация обязана быть помечена замером,

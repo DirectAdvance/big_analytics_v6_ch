@@ -1,6 +1,6 @@
 # RAW_DATA_LOAD_GAPS_2026-08-18 — что ещё нужно грузить для BA6
 
-Проверено на живом ClickHouse 2026-08-18: `raw_data` и `ad_analytics` на
+Проверено на живом ClickHouse 2026-08-20: `raw_data` и `ad_analytics` на
 `rc1b-q7j2ie10fdverqrk`. Цель файла — не просить лишнее и не плодить новые временные
 `raw_new_*` в `ad_analytics`.
 
@@ -26,14 +26,14 @@
 
 ## Что уже есть и не нужно просить повторно
 
-| Таблица `raw_data` | Живой объём 2026-08-18 | Что заменяет / покрывает |
+| Таблица `raw_data` | Живой объём 2026-08-20 | Что заменяет / покрывает |
 |---|---:|---|
 | `direct_cookie_ads_texts_master` | 65 241 324 строк, 2026-01-01..2026-08-17 | используется в `bi_yandex_direct_ads_texts`; старый `raw_new_ads_texts_master_pbi` был 5 106 097 строк до 2026-08-03 |
 | `direct_cookie_ads_texts_master_current` | 65 241 324 строк, 2026-01-01..2026-08-17 | current-вьюха над тем же набором |
 | `direct_cookie_type_placement_master` | 8 398 376 строк, 2026-01-01..2026-08-17 | используется в `bi_yandex_direct_type_placement_report_master`; старый `raw_new_type_placement_report_master` был 7 539 230 строк до 2026-08-03 |
 | `direct_cookie_type_placement_master_current` | 8 397 852 строки, 2026-01-01..2026-08-17 | current-вьюха; 12 типов размещения |
-| `direct_cookie_feed_urls` | 5 923 строки, 5 874 feed_id, 300 клиентов | справочник URL фидов; не заменяет сам отчёт по фидам |
-| `yandex_direct_report_rows` | 26 416 882 строки, 2026-01-01..2026-08-17 | основной Direct spend/clicks/impressions/placement/criterion/goals |
+| `direct_cookie_feed_urls` | 42 096 строк, 3 817 feed_id, 936 клиентов, loaded_at до 2026-08-20 | справочник URL фидов; не заменяет сам отчёт по фидам |
+| `yandex_direct_report_rows` | 26 631 082 строки, 2026-01-01..2026-08-19 | основной Direct spend/clicks/impressions/placement/criterion/goals |
 | `domains`, `gsheet_*` | обновлены 2026-08-18 | прежний пункт про отставание `domains/gsheet_sites` уже не главный блокер |
 
 Важная разница по `direct_cookie_*`: в новых таблицах одна метрика `goals`, а в старом PBI-контракте
@@ -45,6 +45,8 @@ BA6/PBI-маппинга.
 Нужно, если страница PBI `fact_direct_feed_funnel` должна остаться как в BA5: фид × кампания ×
 группа × дата с расходом и воронкой. Сейчас `ad_analytics.fact_direct_feed_funnel` в BA6 — это
 агрегат по площадкам РСЯ из `yandex_direct_report_rows.placement`, а не товарные фиды.
+Простой join `campaign_id -> campaign_ids` из `direct_cookie_feed_urls` запрещён: у 2 068 кампаний
+больше одного фида, максимум 11, такой join размножит расход.
 
 Уже есть:
 

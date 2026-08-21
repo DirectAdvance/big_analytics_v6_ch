@@ -1,16 +1,16 @@
 # step11_pixel_score — алгоритм атрибуции (детали)
 
 <!-- pixel-dedup-2026-08-17 -->
-> **PIXEL_DEDUP_2026-08-17.**
+> **PIXEL_DEDUP / HYBRID_PIXEL_2026-08-20.**
 > Старый `Пиксель_атрибуц` выведен из BA6-контракта; live-канон пикселя —
 > `_source_table='pixel'`, `источник='Пиксель'`, `направление='Пиксель'`.
-> Как стало:
+> Замер после accepted run `ed6bfc6f9c23`:
 >
 > | объект / ось | `_source_table` | строк |
 > |---|---|---:|
-> | `big_analytics_pixel_score` (физическая таблица) | `pixel` | 243 278 |
-> | `big_analytics_full` — ось «По дате заявки» | `pixel` | 31 464 |
-> | `big_analytics_full_arrival` — ось «По дате визита» | `pixel` | 85 160 |
+> | `big_analytics_pixel_score` | `pixel` | 62 049 |
+> | `big_analytics_full` — ось «По дате заявки» | `pixel` | 62 049 |
+> | `big_analytics_full_arrival` — ось «По дате визита» | `pixel` | 30 019 |
 >
 > Визитную ось step13 читает из `big_analytics_pixel_score` напрямую и пишет
 > `направление='Пиксель'`. Замер live ClickHouse: 2026-08-17.
@@ -182,4 +182,4 @@ SUM(big_analytics_pixel.total_cost)     ≈ SUM(big_analytics_pixel_score.total_
 
 Сначала keep-пересборка удаляет старые пиксельные строки
 (`_source_table IN ('pixel','пиксель_атрибуц')`), затем INSERT канонического `pixel` из
-`big_analytics_pixel_score` без построчного округления метрик.
+`big_analytics_sources` без построчного округления метрик.

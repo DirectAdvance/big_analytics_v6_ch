@@ -4,7 +4,7 @@
 
 ---
 
-# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-18, обновлено 2026-08-20
+# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-20
 
 Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
 что живут на v5.** Метод: живая модель
@@ -14,9 +14,10 @@
 
 ## §0.1 Короткий ответ
 
-**Нет, не финал — но direct-cookie хвост 18.08 закрыт через `bi_*`.** Ядро отчёта (главная
+**Операционное ядро BA6 готово, но фидовая страница остаётся unsupported.** Ядро отчёта (главная
 витрина, звезда, spend-витрины по регионам/форматам/критериям, воронки, корректировки, 404,
-cookie-страницы, поисковые запросы) — есть и по числам сходится с v5 в пределах ±3.5%.
+cookie-страницы, поисковые запросы) — есть и по числам сходится с v5 в пределах текущих принятых
+дельт.
 После перевязки PBIP на `*_star` и direct-cookie `bi_*` остаются такие пробелы:
 
 | # | Таблица модели | Причина |
@@ -30,7 +31,7 @@ cookie-страницы, поисковые запросы) — есть и по
 | — | `fact_direct_feed_funnel` (по смыслу) | имя занято, но это **не** воронка по фидам — см. §0.3 |
 
 20.08 страницы «Я.Директ_фиды/Фиды» скрыты в admin/user PBIP, потому что
-`bi_Dim_PlacementFeed` содержит 35 394 площадки и 0 `feed_name/feed_url`. В админском PBIP также
+`bi_Dim_PlacementFeed` содержит 35 441 площадку и 0 `feed_name/feed_url`. В админском PBIP также
 скрыты две страницы `Дубликат Я.Директ_тексты объявлений_тексты`; рабочая страница текстов
 объявлений остаётся отдельной.
 
@@ -61,7 +62,7 @@ Power BI.
 
 | Таблица PBI | Источник v5 | v5 строк | Объект v6 `ad_analytics` | v6 строк | |
 |---|---|---:|---|---:|:-:|
-| `big_analytics_full` | `public.pbi_big_analytics_full` | 5 019 702 | `pbi_big_analytics_full` | 5 231 242 | ⚠️ |
+| `big_analytics_full` | `public.pbi_big_analytics_full` | 5 019 702 | `pbi_big_analytics_full` | 5 288 442 | ⚠️ |
 | `Dim_AdGroup` | `public.Dim_AdGroup` | 229 264 | `Dim_AdGroup` | 603 116 | ✅ |
 | `Dim_Campaign` | `public.Dim_Campaign` | 38 413 | `Dim_Campaign` | 24 445 | ⚠️ |
 | `Dim_Date` | `public.Dim_Date` | 226 | `Dim_Date` | 227 | ✅ |
@@ -77,7 +78,7 @@ Power BI.
 | `fact_adformat_spend` | `public.fact_adformat_spend_light` | 3 018 471 | `fact_adformat_spend` | 3 104 439 | ⚠️ |
 | `fact_criterion_spend` | `public.fact_criterion_spend_light` | 4 837 544 | `fact_criterion_spend` | 4 977 987 | ⚠️ |
 | `fact_criterion_zayavki` | `public.fact_criterion_zayavki` | 137 602 | `fact_criterion_zayavki` | 137 890 | ✅ |
-| `fact_direct_feed_funnel` | `public.fact_direct_feed_funnel` | 92 016 | `fact_direct_feed_funnel` | 13 304 023 | ❌ смысл |
+| `fact_direct_feed_funnel` | `public.fact_direct_feed_funnel` | 92 016 | `fact_direct_feed_funnel` | 13 584 766 | ❌ смысл |
 | `fact_ml_korrektirovki` | `public.fact_ml_korrektirovki` | 11 674 | `fact_ml_korrektirovki` | 15 396 | ✅ |
 | `fact_region_spend` | `public.fact_region_spend_light` | 13 989 880 | `fact_region_spend` | 14 175 006 | ⚠️ |
 | `fact_region_zayavki` | `public.fact_region_zayavki` | 188 432 | `fact_region_zayavki` | 188 691 | ⚠️ |
@@ -119,7 +120,7 @@ Power BI.
 
 **`fact_direct_feed_funnel`** — имя сохранено, содержимое другое. В v5 это воронка по товарным
 фидам (92 016 строк, 36 колонок, полная воронка `kol_vo_zayavok…prodazhi`, `feed_id`/`feed_name`/`feed_url`).
-В v6 это агрегат по площадкам РСЯ (13 304 023 строки, 13 колонок, только `cost/clicks/impressions/
+В v6 это агрегат по площадкам РСЯ (13 584 766 строк, только `cost/clicks/impressions/
 all_forms/crm_order_*`, **воронки нет вообще**). Причина и список недостающих источников —
 шапка `direct_feed_funnel/build.py` (`FEED_FUNNEL_NOT_PORTED_2026-08-05`). Страница «Фиды» в v6 не соберётся.
 
@@ -148,16 +149,17 @@ ClickHouse. `type_placement_ru` теперь маппится внутри view;
 
 ## §0.4 Числовая сверка ядра
 
-`fact_big_analytics`, 2026-02-01…2026-07-31, ось «По дате заявки», без пикселя:
+`fact_big_analytics`, 2026-02-01…2026-07-31, ось «По дате заявки», без пикселя,
+после прогона `ed6bfc6f9c23`:
 
 | метрика | v5 | v6 | Δ% |
 |---|---:|---:|---:|
-| cost | 1 052 177 987.70 | 1 056 015 699.73 | +0.36% |
-| заявки | 292 489 | 296 912 | +1.51% |
-| корректные | 148 012 | 153 209 | +3.51% |
-| квалифицированные | 44 543 | 43 308 | −2.77% |
-| приезды | 33 487 | 33 460 | −0.08% |
-| продажи | 3 063 | 3 062 | −0.03% |
+| cost | 1 052 258 244.29 | 1 056 015 699.73 | +0.36% |
+| обращения | 292 409 | 286 631 | −1.98% |
+| корректные | 147 907 | 146 716 | −0.81% |
+| квалифицированные | 44 271 | 44 432 | +0.36% |
+| приезды | 33 543 | 33 735 | +0.57% |
+| продажи | 3 071 | 3 090 | +0.62% |
 
 Подробности и разбор остаточных дельт — [`RAW_DIFF_FINDINGS.md`](RAW_DIFF_FINDINGS.md) §6.
 

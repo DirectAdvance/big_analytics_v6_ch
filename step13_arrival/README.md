@@ -1,6 +1,6 @@
 # step13_arrival — Воронка по дате визита
 
-Строит таблицу `big_analytics_full_arrival` в БД `ad_analytics_bi`.
+Строит таблицу `ad_analytics.big_analytics_full_arrival` в ClickHouse.
 
 ## Зачем
 
@@ -83,21 +83,17 @@ cd ~/big_analytics_v6_ch
 | Таблица | Роль |
 |---|---|
 | raw_leads | Лиды (не-звонки), создаётся в step1 |
-| local_leads_all | Все лиды включая звонки (постоянная) |
-| local_domains | domain_id → name |
-| local_gsheet_sites | domain → атрибуты (salon, city, direction...) |
-| local_gsheet_priezdi_marcar | Дата приезда, статус и source-домен Маркар из Google Sheet |
-| local_crm_statuses | Маппинг статусов → priezd/prodazhi |
+| raw_data.leads_all | arrival/source_record_id для звонков и pixel date-shift |
+| raw_data.gsheet_autosalony_clients | Резолв префиксных `salon` client-code для pixel date-shift |
+| reference_data.gsheet_sites | domain → атрибуты (salon, city, direction...) |
+| reference_data.gsheet_priezdi_marcar | Дата приезда, статус и source-домен Маркар из Google Sheet |
+| reference_data.crm_status_mapping | Маппинг статусов → priezd/prodazhi |
+| big_analytics_pixel_score | Дробная pixel-атрибуция для визитной оси |
 
-## Текущие метрики (26.05.2026)
+## Live-Контроль Pixel
 
-| source_type | priezd | prodazhi |
-|---|---|---|
-| crmf_excel | 16,988 | 1,317 |
-| plex_excel | 11,695 | 646 |
-| mega_crm_excel | 1,704 | 136 |
-| marcar_crm_excel | 1,252 | 138 |
-| **Итого** | **31,639** | **2,237** |
+Accepted run `ed6bfc6f9c23`: pixel-ветка в `big_analytics_full_arrival` даёт
+`30 019` строк на визитной оси.
 
 ## Power BI интеграция (26.05.2026)
 
@@ -127,7 +123,8 @@ cd ~/big_analytics_v6_ch
 **Пиксель и Direct:** визитная ось не несёт расход/клики/показы. Direct/SEO/посевные
 лиды и звонки считаются через lead/call-ветки по реальной дате визита; дробная
 пиксельная атрибуция переносится отдельной веткой `pixel` с date-shift по долям
-визит-лидов.
+визит-лидов. В pixel-пуле `salon`-коды из `raw_data.leads_all` резолвятся тем же helper,
+что и в step1; пустой extracted key не матчится с пустыми `client_id`.
 
 **Слайсеры домен/регион/специалист не фильтруют arrival:** TREATAS только по `салон`.
 Остальные фильтры страницы (город, регион, специалист, домен) применяются к `big_analytics_full`,

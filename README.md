@@ -72,8 +72,10 @@
 ---
 
 **Шаг 5 — Сборка пикселя** (`step5_build_pixel`)
-Конфиг пикселей (Google Sheets `local_pixel_config`) → `big_analytics_pixel`.
-Лиды `utm_source LIKE 'victory_%'`, стоимость заявки из конфига.
+Гибридный пиксель → `big_analytics_pixel`: до `2026-06-03` строки берутся из
+`raw_data.leads_all` по legacy-конфигу `local_pixel_config`/`local_pixel_price_history`,
+с `2026-06-03` — из `reference_data.victory_answers FINAL` (`product='пиксель'`).
+Для reference-строк статусы подтягиваются из `raw_data.leads_all` по телефону и месяцу.
 
 > ⚠️ **UTM-аудит** (`check_utm` / `check_utm_fuck_direct`) — это НЕ дневной шаг 5.
 > Он уехал в `step_cron_night/step13_utm_direct_audit/` и запускается ночным
@@ -122,8 +124,8 @@ UNION ALL всех источников → `big_analytics_full`.
 
 | ось | `_source_table` | `источник` | строк |
 |---|---|---|---:|
-| По дате заявки | `pixel` | `Пиксель` | 31 464 |
-| По дате визита | `pixel` | `Пиксель` | 85 160 |
+| По дате заявки | `pixel` | `Пиксель` | 62 049 |
+| По дате визита | `pixel` | `Пиксель` | 30 019 |
 
 ⚠️ Меры и визуалы PBI должны фильтровать пиксель только как `источник='Пиксель'`.
 

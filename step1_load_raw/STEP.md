@@ -1,31 +1,27 @@
-# STEP.md — Шаг 1: RAW UNLOGGED таблицы
+# STEP.md — Шаг 1: RAW ClickHouse
 
-## Что делает
+## Что Делает
 
-Создаёт RAW UNLOGGED таблицы из локальных копий. Каждый запуск: DROP → CREATE UNLOGGED → INSERT.
+Пересобирает рабочие RAW-объекты в `ad_analytics` из `raw_data.*` и `reference_data.domains`.
 
 ## Таблицы
 
-| RAW таблица | Источник | Фильтры |
-|-------------|----------|---------|
-| `raw_yandex` | `yandex_direct_manager_reports` (FDW) | `CampaignId IS NOT NULL AND != 0`, `Date >= '2026-01-01'` |
-| `raw_leads` | `local_leads_all` | `deal_type != 'Звонок'` AND `domain_id NOT IN (1645, 883)` |
-| `raw_calls` | `local_leads_all` | `deal_type = 'Звонок'` |
-| `raw_domains` | `local_domains` | нет |
-| `raw_perform_leads` | `local_perform_leads` + ветка (b) `local_leads_all` | `deal_type IS NULL OR != 'Звонок'`, `domain_id NOT IN (1645, 883)` |
+| RAW объект | Источник | Фильтр |
+|---|---|---|
+| `raw_yandex` | `raw_data.yandex_direct_report_rows` | `campaign_id != 0`, `date >= '2026-01-01'` |
+| `raw_leads` | `raw_data.leads_all` + `reference_data.domains` | не звонки, `is_copy_for_removal=0`, домен не исключён |
+| `raw_calls` | `raw_data.leads_all` + `reference_data.domains` | `deal_type='Звонок'`, `is_copy_for_removal=0` |
+| `raw_domains` | `reference_data.domains` | view |
+| `raw_perform_leads` | нет live-источника | совместимая пустая таблица |
 
-## Почему UNLOGGED
+## Важно
 
-- Без записи в WAL → INSERT в 2–3× быстрее
-- Таблицы пересоздаются каждый запуск — нет накопленного мусора
-- При аварийном отключении сервера данные теряются (допустимо: пересоздаём при следующем запуске)
+- `is_copy_for_removal=1` из `raw_data.leads_all` полностью исключается.
+- `salon` с префиксным client-code резолвится через `raw_data.gsheet_autosalony_clients.client_id`.
+  Пустой extracted key становится `NULL`, чтобы не матчить пустые `client_id`.
+- `victory-crm.ru` фильтруется по имени домена, не по numeric id.
+- `raw_yandex` проверяется guard-ом: `sum(total_cost)` не должен быть 0.
 
-## Почему domain_id 1645 и 883 исключены
+## Следующий Шаг
 
-`1645` — priezd shared key3: общий ключ с другим доменом → лиды дублируются в директе.  
-`883` — victory-crm.ru: не клиент. Оба исключены из `raw_leads` и `raw_perform_leads`.
-
-## Следующий шаг
-
-Шаг 2 добавляет индексы на RAW таблицы и запускает ANALYZE.  
-Индексы создаются ПОСЛЕ вставки данных — так они строятся один раз по готовым данным.
+Шаг 2 выполняет `OPTIMIZE TABLE ... FINAL` для физических RAW-таблиц.

@@ -1,9 +1,27 @@
 # big_analytics_v6_ch — статус
 
-_2026-08-18, после перевязки части Power BI на `*_star`/`bi_*`, push BA6/PBIP и live-обновления
-direct-cookie PBI views. История — `git log -p STATE.md`._
+_2026-08-20, после гибридного пикселя, CRM fallback, BA5↔BA6 сверок и принятия BA6-ядра.
+История — `git log -p STATE.md`._
 
 ## Где мы сейчас
+
+2026-08-20: локально подготовлен фикс `raw_data.leads_all.salon`: `avto_XXXX` теперь резолвится
+через `raw_data.gsheet_autosalony_clients.client_id → salon` при сборке `raw_leads` и в прямой
+пиксельной ветке `step13_arrival`; fallback оставляет старое текстовое название. Пустой extracted
+key превращается в `NULL`, иначе JOIN матчился с пустыми `client_id` и размножал лиды
+(live-check: старый пустой JOIN `5 816`, новый `0`). Деплой и полный pipeline ещё не запускались.
+В том же локальном хвосте подготовлен фикс PBI-измерений: `Dim_Site` канонизирует CRM из
+`gsheet_sites.crm` (`MarCar CRM`/`MEGA CRM`/`GenzesCRM` и др.), `manager_login_key` строится только
+для email-логинов, а пустые `проджект`/`менеджер` в `Dim_Salon` схлопываются в один пустой элемент.
+Для применения нужен deploy кода и пересборка star/PBI-compat или pipeline хвостом.
+
+Принятый прогон BA6 `--from-step=3` от 2026-08-20 (`run_id=ed6bfc6f9c23`,
+`logs/manual_hybrid_pixel_crm_from3_20260820.log`) завершился `pipeline OK`,
+`verify_big_analytics.py` = **PASS**. Время прогона ≈30м22с. Итоговые live-объёмы:
+`fact_big_analytics=5 288 442`, `big_analytics_full=5 218 726`,
+`big_analytics_unified=5 288 442`, `pbi_import_big_analytics_full=5 288 442`.
+`Dim_Source` не содержит мелких `Посевы_<domain>`; `Dim_PlacementFeed=35 441`, но
+`feed_name/feed_url=0`, потому что настоящего Direct feed-report в `raw_data` нет.
 
 Свежий прогон `--from-step=3` от 2026-08-20 (`run_id=2b10ff444daa`,
 `logs/manual_posev_repaint_fix_20260820_091041.log`) завершился `pipeline OK`,
@@ -22,11 +40,15 @@ direct-cookie PBI views. История — `git log -p STATE.md`._
 `Посевы_Звонки` 4 771→4 861 обращение, продажи 61→61; `Посевы_SEO` 1 177→1 205 обращений,
 продажи 13→14. Контроль `2026-02-01..2026-07-31`: `Посевы_Звонки` 3 565→3 675,
 `Посевы_SEO` 809→786.
-2026-08-20: step5 pixel переведён на канон `reference_data.victory_pixel_answers FINAL`
-(`product='пиксель'`): `big_analytics_pixel=41 456`, `pixel_cost=48 603 850.00`,
-`big_analytics_full[pixel]=41 456`, `fact_big_analytics[pixel]=41 456`; canonical vs BA6
-сходится 1:1 по строкам и cost. Строк без `site` = 398, они остаются в итогах по салону.
-Оптимизация и фикс двойного счёта пикселя **закоммичены** (`3c0c726`, `c0fd79c`).
+2026-08-20: step5 pixel переведён на гибридный канон: до `2026-06-03` — `raw_data.leads_all`
+по legacy цене BA5, с `2026-06-03` — `reference_data.victory_answers FINAL`
+(`product='пиксель'`) с ценой из `cost`; статусы reference-заявок подтягиваются из
+`raw_data.leads_all` по телефону и месяцу. Live после `ed6bfc6f9c23`:
+`big_analytics_pixel=62 049`, `pixel_cost=143 061 550.00`,
+`fact_big_analytics[pixel, По дате заявки]=62 049`,
+`fact_big_analytics[pixel, По дате визита]=30 019`.
+Оптимизация и фикс двойного счёта пикселя **закоммичены** (`3c0c726`, `c0fd79c`),
+гибридный слой — `1ffdf07`.
 2026-08-17: `Dim_Date.year_month` переведён с `YYYY-MM` на русские названия месяцев; `month_key`
 остаётся числовым `YYYYMM` для сортировки. Код доставлен на Victory и `Dim_Date` пересобран.
 2026-08-17: ночной step 102 `check_utm` переписан на `raw_data` Direct и вручную пересобран:

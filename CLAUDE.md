@@ -22,9 +22,9 @@
 - One live PostgreSQL dependency remains: step3 `_fetch_reviews_rows_from_postgres` reads
   `yandex_direct_raw.yandex_direct_reports_reviews` from Victory PG — reviews are absent from
   `raw_data`.
-- Power BI parity is NOT reached: 7 of the 31 model tables have no v6 source
-  (`PBI_TABLES.md` §0, `KNOWN_ISSUES.md` #39). Raw data itself is richer than v5
-  (`RAW_DIFF_FINDINGS.md`, measured 2026-08-15).
+- BA6 operational core is accepted after run `ed6bfc6f9c23` (2026-08-20). Power BI feed pages stay
+  unsupported/hidden: `fact_direct_feed_funnel` in v6 is placement spend, not BA5 feed funnel
+  (`PBI_TABLES.md` §0). Raw Direct data itself is richer than v5 (`RAW_DIFF_FINDINGS.md`).
 - Freshness must be read from table dates, never from `raw_data.etl_runs` or
   `leads_all.updated_at` — both are stale by design (`KNOWN_ISSUES.md` #43).
 - Latest status, open v5↔v6 deltas, and run ids live in `STATE.md` and `KNOWN_ISSUES.md`.

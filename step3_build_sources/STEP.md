@@ -1,41 +1,26 @@
-# STEP.md — Шаг 3: Сборка таблиц по источникам
+# STEP.md — Шаг 3: Source Store
 
-## Что создаётся
+## Что Создаётся
 
-| Таблица | Источник | поставщик |
-|---------|----------|-----------|
-| `big_analytics_direct` | raw_yandex + raw_leads (директ) | `'Яндекс'` |
-| `big_analytics_seo` | raw_leads (без UTM) | `'SEO'` |
-| `big_analytics_pixel` | DDL-only в step3 (пустая), заполняется step5 | — |
-| `big_analytics_crop_targeting` | DDL по образцу direct + посевы (GSheet, tp8/9/10, звонки/SEO 19 доменов, telegram, VK Ads) | разное |
-| `big_analytics_reviews` | DDL по образцу direct (данные из `yandex_direct_reports_reviews`, обновляются вручную) | `'Отзывы'` |
+| Объект | Тип | Назначение |
+|---|---|---|
+| `ad_analytics.big_analytics_sources` | MergeTree | общий source store для direct/seo/crop/reviews |
+| `ad_analytics.big_analytics_direct` | View | `_source_table IN ('direct','tp8','tp9','tp10')` |
+| `ad_analytics.big_analytics_seo` | View | `_source_table='seo'` |
+| `ad_analytics.big_analytics_pixel` | View | `_source_table='pixel'`, заполняет step5 |
+| `ad_analytics.big_analytics_crop_targeting` | View | crop/VK/telegram/social branches |
+| `ad_analytics.big_analytics_reviews` | View | reviews branches |
 
-Все таблицы создаются как `UNLOGGED` → финализируются в шаге 7 через `SET LOGGED`.
+## Как Строится
 
-## Атрибуция лидов в big_analytics_direct
+1. Direct вставляется дневными батчами из `raw_yandex`.
+2. Lead-ветки вставляются дневными батчами из `raw_leads`.
+3. `vk_perform` добирается отдельной вставкой из raw leads.
+4. Reviews временно импортируются из Victory PostgreSQL.
+5. Shadow table меняется местами с боевой через `swap_shadow`.
 
-Лиды директ = все лиды, кроме:
-- посевов (`leads_crop_attribution WHERE is_crop=TRUE`)
-- SEO (`utm_source IS NULL OR utm_source = ''`)
-- pixel (`utm_source LIKE 'victory_%'`)
-- telegram-посевов (`utm_source IN ('telegram','stories_tg') AND utm_medium = 'posev'`)
-- vk/tg storis-посевов (`utm_source IN ('vk_storis','telegram_storis') AND utm_medium = 'posev'`)
-- VK Ads Комплекс/зазор/Перформ (`utm_source IN ('vkads', ...)` — уходят в crop через `_add_vk_ads_to_crop_sql`)
+## Главное
 
-## big_analytics_direct — 4 части (UNION ALL)
-
-| Часть | _source_table | Содержание |
-|-------|----------------|------------|
-| 1 | `direct` | Строки Яндекс с данными (DISTINCT ON key3) |
-| 2 | `direct_unmatched` | Лиды без пары в Яндексе (нет key3 в raw_yandex, каскад тоже не нашёл) |
-| 2b | `direct` (cascade_level заполнен) | Лиды с каскадным матчем (CASCADE_MATCH_2026-07-03), total_cost=NULL — расход не дублируется |
-| 3 | `direct_zero` | Лиды без campaign_id, группируются по домен+дата |
-
-## big_analytics_pixel
-
-Таблица создаётся всегда, но в step3 остаётся пустой — `_build_pixel_sql()` делает только DDL
-(CREATE + TRUNCATE), без INSERT. Заполняется отдельным шагом `step5_build_pixel/build_pixel.py`.
-
-## Конфигурация work_mem
-
-Перед каждой тяжёлой сборкой: `SET work_mem = '1999MB'` — чтобы sort/join не спиллились на диск.
+- Pixel здесь не строится.
+- Воронка считается через `reference_data.crm_status_mapping` и code overrides.
+- Порядок и набор колонок должны оставаться совместимыми со step6.

@@ -23,6 +23,22 @@ logger = logging.getLogger("pipeline.step5")
 
 PIXEL_REFERENCE_CUTOFF = "2026-06-03"
 
+_GSHEET_LOOKUP_COLUMNS = [
+    "status",
+    "directologist",
+    "site_type",
+    "template",
+    "salon",
+    "city",
+    "region",
+    "direction",
+    "project_manager",
+    "client_id",
+    "sales_manager",
+    "login_key",
+    "crm",
+]
+
 
 def _required_tables_exist(client) -> list[str]:
     required = [
@@ -52,12 +68,38 @@ def _crm_from_gsheet_expr(crm_expr: str) -> str:
     """
 
 
+def _phone10_expr(expr: str) -> str:
+    return f"right(replaceRegexpAll(ifNull({expr}, ''), '[^0-9]', ''), 10)"
+
+
+def _gsheet_lookup_cte(name: str, key_name: str, key_expr: str, populated_expr: str) -> str:
+    columns = ",\n                ".join(
+        f"anyLast(s.{col}) AS {col}" for col in _GSHEET_LOOKUP_COLUMNS
+    )
+    return f"""
+        {name} AS
+        (
+            SELECT
+                {key_expr} AS {key_name},
+                {columns}
+            FROM reference_data.gsheet_sites AS s
+            WHERE ifNull({populated_expr}, '') != ''
+            GROUP BY {key_name}
+        )"""
+
+
+def _crm_from_raw_or_gsheet_expr(source_type_expr: str, gsheet_crm_expr: str) -> str:
+    raw_crm = _crm_name_expr(source_type_expr)
+    return f"if({raw_crm} = 'Не указана', {_crm_from_gsheet_expr(gsheet_crm_expr)}, {raw_crm})"
+
+
 def _build_pixel_insert_sql(shadow: str) -> str:
     answer_date_raw = "coalesce(v.bill_day, v.date)"
     answer_date = f"assumeNotNull({answer_date_raw})"
-    crm_name = f"if({_crm_name_expr('m.source_type')} = 'Не указана', {_crm_from_gsheet_expr('ifNull(gs.crm, gs_salon.crm)')}, {_crm_name_expr('m.source_type')})"
+    crm_name = _crm_from_raw_or_gsheet_expr("m.source_type", "ifNull(gs.crm, gs_salon.crm)")
     matched_metrics = _metric_expr("m.status", "m.reason", "m.source_type", "m.raw_salon")
     legacy_metrics = _metric_expr("status", "reason", "source_type", "raw_salon")
+    lead_phone10 = _phone10_expr("l.phone")
     return f"""
         INSERT INTO {shadow}
         WITH
@@ -84,49 +126,8 @@ def _build_pixel_insert_sql(shadow: str) -> str:
             FROM ref_answers
             WHERE phone != ''
         ),
-        gs_domain AS
-        (
-            SELECT
-                lowerUTF8(trim(ifNull(s.domain, ''))) AS domain_key,
-                anyLast(s.domain) AS domain,
-                anyLast(s.status) AS status,
-                anyLast(s.directologist) AS directologist,
-                anyLast(s.site_type) AS site_type,
-                anyLast(s.template) AS template,
-                anyLast(s.salon) AS salon,
-                anyLast(s.city) AS city,
-                anyLast(s.region) AS region,
-                anyLast(s.direction) AS direction,
-                anyLast(s.project_manager) AS project_manager,
-                anyLast(s.client_id) AS client_id,
-                anyLast(s.sales_manager) AS sales_manager,
-                anyLast(s.login_key) AS login_key,
-                anyLast(s.crm) AS crm
-            FROM reference_data.gsheet_sites AS s
-            WHERE ifNull(s.domain, '') != ''
-            GROUP BY domain_key
-        ),
-        gs_salon AS
-        (
-            SELECT
-                lowerUTF8(trim(ifNull(s.salon, ''))) AS salon_key,
-                anyLast(s.status) AS status,
-                anyLast(s.directologist) AS directologist,
-                anyLast(s.site_type) AS site_type,
-                anyLast(s.template) AS template,
-                anyLast(s.salon) AS salon,
-                anyLast(s.city) AS city,
-                anyLast(s.region) AS region,
-                anyLast(s.direction) AS direction,
-                anyLast(s.project_manager) AS project_manager,
-                anyLast(s.client_id) AS client_id,
-                anyLast(s.sales_manager) AS sales_manager,
-                anyLast(s.login_key) AS login_key,
-                anyLast(s.crm) AS crm
-            FROM reference_data.gsheet_sites AS s
-            WHERE ifNull(s.salon, '') != ''
-            GROUP BY salon_key
-        ),
+        {_gsheet_lookup_cte("gs_domain", "domain_key", "lowerUTF8(trim(ifNull(s.domain, '')))", "s.domain")},
+        {_gsheet_lookup_cte("gs_salon", "salon_key", "lowerUTF8(trim(ifNull(s.salon, '')))", "s.salon")},
         legacy_raw AS
         (
             SELECT
@@ -155,7 +156,7 @@ def _build_pixel_insert_sql(shadow: str) -> str:
               AND l.created_date >= toDate('2026-01-01')
               AND l.created_date < toDate('{PIXEL_REFERENCE_CUTOFF}')
               AND lowerUTF8(trim(ifNull(l.utm_source, ''))) IN (SELECT domain_key FROM gs_domain)
-              AND (right(replaceRegexpAll(ifNull(l.phone, ''), '[^0-9]', ''), 10), toYYYYMM(l.created_date))
+              AND ({lead_phone10}, toYYYYMM(l.created_date))
                     NOT IN (SELECT phone, ym FROM ref_phone_months)
         ),
         legacy_scored AS
@@ -217,7 +218,7 @@ def _build_pixel_insert_sql(shadow: str) -> str:
                 ) AS rn
             FROM ref_answers AS v
             LEFT JOIN raw_data.leads_all AS l
-              ON right(replaceRegexpAll(ifNull(l.phone, ''), '[^0-9]', ''), 10) = v.phone
+              ON {lead_phone10} = v.phone
              AND toYYYYMM(l.created_date) = toYYYYMM(v.answer_date)
              AND l.is_copy_for_removal = 0
              AND l.created_date IS NOT NULL

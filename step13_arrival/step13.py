@@ -110,6 +110,7 @@ from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, q, swap_shadow
 from corrections import specialist_correction_expr
+from step1_load_raw.step1 import _resolved_lead_salon_expr, _salon_client_id_expr
 from step3_build_sources.step3 import (
     _ag_parts_expr,
     _category_match_expr,
@@ -954,9 +955,19 @@ def _pixel_branch_sql(date_from: str) -> str:
     идёт в Float64, округление — только у итоговой суммы (round(,6)), int-каста нет.
     """
     isv = _category_match_expr(
-        ("visit", "sale", "credit", "approved"), "l.status", "l.reason", "l.source_type", "l.salon"
+        ("visit", "sale", "credit", "approved"),
+        "l.status",
+        "l.reason",
+        "l.source_type",
+        _resolved_lead_salon_expr("l", "salon_client"),
     )
-    iss = _category_match_expr(("sale",), "l.status", "l.reason", "l.source_type", "l.salon")
+    iss = _category_match_expr(
+        ("sale",),
+        "l.status",
+        "l.reason",
+        "l.source_type",
+        _resolved_lead_salon_expr("l", "salon_client"),
+    )
     return f"""
 WITH
 pixel_pool AS
@@ -982,6 +993,8 @@ pixel_pool AS
     FROM raw_data.leads_all l
     INNER JOIN ad_analytics.local_pixel_config pc
         ON (l.source_name = pc.pixel_name OR lower(ifNull(l.utm_source, '')) = lower(pc.pixel_name))
+    LEFT JOIN raw_data.gsheet_autosalony_clients AS salon_client
+        ON lowerUTF8(trim(ifNull(salon_client.client_id, ''))) = {_salon_client_id_expr("l")}
     WHERE l.is_copy_for_removal = 0
       AND l.created_date IS NOT NULL
       AND l.created_date >= toDate('{date_from}')
