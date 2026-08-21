@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import RAW_SOURCE_TABLES
 from config.ch_utils import SAFE_QUERY_SETTINGS, table_exists
+from step0_sync_local import load_city_tier
 
 logger = logging.getLogger("pipeline.step0")
 
@@ -72,13 +73,17 @@ def _check_objects(client, objects: dict[str, str], *, allow_empty: set[str] | N
 def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     logger.info("Шаг 0 v6_ch: ClickHouse-only preflight без PostgreSQL/v5 sync")
     client = get_client()
+    city_tier = load_city_tier.sync_city_tier(client)
 
     raw_objects = dict(RAW_SOURCE_TABLES)
     raw_objects.update(RAW_REQUIRED_EXTRA)
     counts = _check_objects(client, raw_objects)
     counts.update(_check_objects(client, CH_MANUAL_INPUTS, allow_empty={"local_pixel_price_history"}))
+    if table_exists(client, "ad_analytics", "gsheet_city_tier"):
+        counts["gsheet_city_tier"] = _count_table(client, "ad_analytics.gsheet_city_tier")
 
     details = ", ".join(f"{name}={rows:,}" for name, rows in sorted(counts.items()))
+    details = f"{details}, city_tier_current={city_tier['rows']:,}, city_tier_seeded={city_tier['seeded_rows']:,}"
     logger.info("Шаг 0 v6_ch завершён: %s", details)
     return {"rows": sum(counts.values()), "details": details}
 

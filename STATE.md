@@ -5,6 +5,19 @@ _2026-08-20, после гибридного пикселя, CRM fallback, BA5�
 
 ## Где мы сейчас
 
+2026-08-21: BA6 вернул срез `тир_месяца`/`Dim_City_Tier` в PBIP admin+user и live
+ClickHouse. `step0_sync_local/load_city_tier.py` грузит Google Sheet в
+`ad_analytics.gsheet_city_tier`, `star_refactor/build_pbi_compat.py` добавляет
+`city_tier_key` в `pbi_big_analytics_full` и строит `Dim_City_Tier`/`bi_Dim_City_Tier`.
+Деплой на Victory: md5 Mac==Victory, remote `py_compile` OK, `sync_city_tier()` OK.
+Прогон `pipeline.py --from-step=146` (`run_id=03c9c4978f64`) завершился `pipeline OK`,
+`verify_big_analytics.py` = **PASS**. Live-check: `Dim_City_Tier=182`, `uniqExact(city_tier_key)=182`,
+дублей = 0, `pbi_big_analytics_full LEFT JOIN Dim_City_Tier` orphan = 0.
+PBIP-check: `Dim_City_Tier`/`тир_месяца` есть в 41 visual admin и 41 visual user;
+лишняя user-кнопка `utmcheck2026new0000000/482c454b9796f6c13d0f` удалена.
+КО/добро оставлены как есть: `dohod_do_kredita = credit + approved`, `dobro = approved`;
+последний Adscope/autorules snapshot также держит `ko > dobro`.
+
 2026-08-21: найден и закрыт остаток `avto_####` в PBI-срезе `салон`: после предыдущих
 CRM/salon-фиксов коды уже не попадали из raw lead/call веток, но оставались в pixel-ветке
 step5 (`_source_table='pixel'`). `step5_build_pixel/build_pixel.py` теперь резолвит
@@ -18,7 +31,7 @@ step5 (`_source_table='pixel'`). `step5_build_pixel/build_pixel.py` теперь
 `салон LIKE 'avto_%'` = 0. Воронка по заявкам с `dohod_do_kredita`/`dobro` уже есть:
 `pbi_big_analytics_full`/`bi_pbi_big_analytics_full`, `fact_region_zayavki`/
 `bi_fact_region_zayavki`, `fact_criterion_zayavki`/`bi_fact_criterion_zayavki`.
-Маппинг берётся из `reference_data.crm_status_mapping`: `credit → dohod_do_kredita`,
+Маппинг берётся из `reference_data.crm_status_mapping`: `credit + approved → dohod_do_kredita`,
 `approved → dobro`.
 
 2026-08-21: BA6-фиксы срезов доставлены на Victory и пересобраны. Первый полный прогон

@@ -62,9 +62,10 @@ Power BI.
 
 | Таблица PBI | Источник v5 | v5 строк | Объект v6 `ad_analytics` | v6 строк | |
 |---|---|---:|---|---:|:-:|
-| `big_analytics_full` | `public.pbi_big_analytics_full` | 5 019 702 | `pbi_big_analytics_full` | 5 288 442 | ⚠️ |
+| `big_analytics_full` | `public.pbi_big_analytics_full` | 5 019 702 | `pbi_big_analytics_full` | 5 391 879 | ⚠️ |
 | `Dim_AdGroup` | `public.Dim_AdGroup` | 229 264 | `Dim_AdGroup` | 603 116 | ✅ |
 | `Dim_Campaign` | `public.Dim_Campaign` | 38 413 | `Dim_Campaign` | 24 445 | ⚠️ |
+| `Dim_City_Tier` | `public.Dim_City_Tier` | — | `Dim_City_Tier` | 182 | ✅ |
 | `Dim_Date` | `public.Dim_Date` | 226 | `Dim_Date` | 227 | ✅ |
 | `Dim_Location` | `public.Dim_Location` | 16 200 | `Dim_Location` | 16 317 | ✅ |
 | `Dim_Site` | `public.Dim_Site` | 5 023 | `Dim_Site` | 5 032 | ⚠️ |
@@ -95,9 +96,9 @@ Power BI.
 
 ## §0.3 Что означает каждая ⚠️
 
-**`big_analytics_full`** — v6 `pbi_big_analytics_full` отдаёт 42 колонки против 68 в v5. Это не
+**`big_analytics_full`** — v6 `pbi_big_analytics_full` отдаёт 43 колонки против 68 в v5. Это не
 потеря данных, а **звезда**: `AdNetworkType`/`Device`/`источник`/`manager_login` заменены на
-`*_key`, а текстовые атрибуты (`CampaignName`, `AdGroupName`, `campaign_code`, `tp`, `cpc_cpa`,
+`*_key`, `city_tier_key`, а текстовые атрибуты (`CampaignName`, `AdGroupName`, `campaign_code`, `tp`, `cpc_cpa`,
 `site_quiz`, `марки авто`, `ag_part1…7`, `campaign_status`, `payment_model`, `поставщик`,
 `неверный_кодер_new`, `week_start`, `День недели`, конкатенации «номер | название») переехали в
 `Dim_Campaign` / `Dim_AdGroup` / `Dim_Date` / `Dim_Source` / `Dim_Adjustment`. Все они проверены —
@@ -108,6 +109,8 @@ Power BI.
 
 **`Dim_Campaign`** — нет `статус_кампании` (есть только в `bi_Dim_Campaign`), `специалист`,
 `manager_login`; последние два живут в `Dim_Salon` / `Dim_ManagerLogin`.
+**`Dim_City_Tier`** — live-измерение для PBI-среза `тир_месяца`: `city_tier_key`, `город`,
+`тир_месяца`, `тир_месяца_backfill`, `тир_текущий`. Строится из `ad_analytics.gsheet_city_tier`.
 **`Dim_Site`** — атрибуты переименованы с английского на русский (`city`→`город`, `salon`→`салон`,
 `directologist`→`специалист` и т.д.); реально нет только `client_id` и `niche`.
 **`Dim_AdGroup`** — нет `ag_part1_name` в физической таблице, есть в `bi_Dim_AdGroup`.

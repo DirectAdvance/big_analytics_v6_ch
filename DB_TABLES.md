@@ -515,6 +515,11 @@ ad_analytics_bi/
     │   │     • manager_login TEXT, campaign_status TEXT, payment_model TEXT
     │   │     • "номер кампании|название кампании" TEXT
     │   │
+    │   ├── Dim_City_Tier                             ← измерение: тир города по месяцу
+    │   │     • city_tier_key TEXT PK
+    │   │     • город TEXT, тир_месяца TEXT, тир_месяца_backfill BOOL
+    │   │     • тир_текущий TEXT
+    │   │
     │   ├── Dim_Date                                  ← измерение: даты
     │   │     • Date DATE PK
     │   │     • week_start DATE, "День недели" TEXT

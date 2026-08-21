@@ -3,7 +3,7 @@
 <!-- v6-scope-banner -->
 > 🧭 **Область в v6_ch (2026-08-15).** Словарь снят с v5 PostgreSQL. В v6 колонок тоже 73, но
 > раскладка другая: `ad_analytics.big_analytics_full` — View поверх `fact_big_analytics` + `Dim_*`,
-> а PBI-проекция `ad_analytics.pbi_big_analytics_full` отдаёт **42** колонки (текстовые атрибуты
+> а PBI-проекция `ad_analytics.pbi_big_analytics_full` отдаёт **43** колонки (текстовые атрибуты
 > заменены на `*_key` и вынесены в справочники). Диффы колонок v5↔v6 — `PBI_TABLES.md` §0.3.
 
 > Словарь всех колонок `public.big_analytics_full` (73 колонки). Типы получены

@@ -30,6 +30,12 @@ def _site_key_expr(alias: str = "f") -> str:
     return f"cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull({alias}.domain, ''))))"
 
 
+def _city_tier_key_expr(city_expr: str, date_expr: str) -> str:
+    city = f"if(ifNull({city_expr}, '') = '', '(пусто)', ifNull({city_expr}, '(пусто)'))"
+    month = f"formatDateTime(toStartOfMonth(ifNull({date_expr}, toDate('1900-01-01'))), '%Y-%m')"
+    return f"concat({city}, '|', {month})"
+
+
 def _pbi_int64_key(expr: str) -> str:
     return f"reinterpretAsInt64({expr})"
 
@@ -42,6 +48,7 @@ PBI_SOURCE_OBJECTS = [
     "Dim_AdNetworkType",
     "Dim_Adjustment",
     "Dim_Campaign",
+    "Dim_City_Tier",
     "Dim_Date",
     "Dim_Device",
     "Dim_Location",
@@ -165,6 +172,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`),
                 dcs.`Название crm`
             ) AS `Название crm`,
+            {_city_tier_key_expr("dsl.`город`", "f.`Date`")} AS city_tier_key,
             toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key
         FROM ad_analytics.fact_big_analytics f
         LEFT JOIN ad_analytics.Dim_Account da ON da.account_key = f.account_key
@@ -183,6 +191,65 @@ def build_pbi_full(client) -> int:
         "SELECT * FROM ad_analytics.pbi_import_big_analytics_full"
     )
     return count_rows(client, "ad_analytics.pbi_big_analytics_full")
+
+
+def build_dim_city_tier(client) -> int:
+    shadow = "ad_analytics.Dim_City_Tier_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC", settings=SAFE_QUERY_SETTINGS)
+    source_exists = table_exists(client, "ad_analytics", "gsheet_city_tier")
+    if source_exists:
+        tier_join_sql = """
+            WITH
+            fact_grain AS
+            (
+                SELECT DISTINCT
+                    city_tier_key,
+                    if(ifNull(`город`, '') = '', '', `город`) AS `город`,
+                    toStartOfMonth(ifNull(`Date`, toDate('1900-01-01'))) AS month
+                FROM ad_analytics.pbi_big_analytics_full
+            ),
+            latest_tier AS
+            (
+                SELECT
+                    gorod,
+                    argMax(tier, month) AS `тир_текущий`
+                FROM ad_analytics.gsheet_city_tier
+                GROUP BY gorod
+            )
+            SELECT
+                fg.city_tier_key,
+                fg.`город`,
+                COALESCE(nullIf(mt.tier, ''), 'Без тира') AS `тир_месяца`,
+                ifNull(mt.is_backfill, false) AS `тир_месяца_backfill`,
+                COALESCE(nullIf(lt.`тир_текущий`, ''), 'Без тира') AS `тир_текущий`
+            FROM fact_grain fg
+            LEFT JOIN ad_analytics.gsheet_city_tier mt
+                ON mt.gorod = fg.`город` AND mt.month = fg.month
+            LEFT JOIN latest_tier lt
+                ON lt.gorod = fg.`город`
+        """
+    else:
+        tier_join_sql = """
+            SELECT DISTINCT
+                city_tier_key,
+                if(ifNull(`город`, '') = '', '', `город`) AS `город`,
+                'Без тира' AS `тир_месяца`,
+                false AS `тир_месяца_backfill`,
+                'Без тира' AS `тир_текущий`
+            FROM ad_analytics.pbi_big_analytics_full
+        """
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY city_tier_key
+        AS
+        {tier_join_sql}
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    swap_shadow(client, "ad_analytics.Dim_City_Tier", shadow)
+    return count_rows(client, "ad_analytics.Dim_City_Tier")
 
 
 def _pixel_score_sql(where_sql: str = "") -> str:
@@ -1203,6 +1270,18 @@ def _dim_adgroup_pbi_sql() -> str:
     """
 
 
+def _dim_city_tier_pbi_sql() -> str:
+    return """
+        SELECT
+            city_tier_key,
+            `город`,
+            `тир_месяца`,
+            `тир_месяца_backfill`,
+            `тир_текущий`
+        FROM ad_analytics.Dim_City_Tier
+    """
+
+
 def _dim_site_pbi_sql() -> str:
     return f"""
         SELECT
@@ -1517,6 +1596,7 @@ PBI_VIEW_SQL_BUILDERS = {
     "Dim_Salon": _dim_salon_pbi_sql,
     "Dim_Source": _dim_source_pbi_sql,
     "Dim_Campaign": _dim_campaign_pbi_sql,
+    "Dim_City_Tier": _dim_city_tier_pbi_sql,
     "Dim_AdGroup": _dim_adgroup_pbi_sql,
     "Dim_PlacementFeed": _dim_placement_feed_pbi_sql,
     "Dim_Site": _dim_site_pbi_sql,
@@ -1566,6 +1646,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     drop_bi_views(client)
     rows = {
         "pbi_big_analytics_full": build_pbi_full(client),
+        "Dim_City_Tier": build_dim_city_tier(client),
         "pixel_score": build_pixel_score(client),
         "Dim_PlacementFeed": build_dim_placement_feed(client),
         "pbi_import_fact_direct_feed_funnel": build_pbi_import_direct_feed_funnel(client),

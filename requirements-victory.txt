@@ -1,6 +1,8 @@
 certifi==2026.7.22
 charset-normalizer==3.4.9
 clickhouse-connect==0.15.1
+google-api-python-client==2.179.0
+google-auth==2.40.3
 idna==3.18
 lz4==4.4.5
 packaging==26.3
