@@ -30,6 +30,10 @@
 - Для строк `victory_answers` матчит raw-лид по `phone + bill_month` и считает
   `korr/kval/priezd/prodazhi` по статусам `raw_data.leads_all`, как остальные BA6 lead-ветки.
 - Маппит домен/салон к справочнику `reference_data.gsheet_sites`.
+- Если `victory_answers.salon` или matched/legacy `raw_data.leads_all.salon` содержит client-code
+  вида `avto_####`, step5 сначала резолвит его через
+  `raw_data.gsheet_autosalony_clients.client_id → salon`, чтобы PBI-срез `салон` не показывал
+  технические коды.
 
 ## Архитектурная схема
 

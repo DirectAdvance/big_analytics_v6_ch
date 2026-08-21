@@ -48,6 +48,7 @@ def _required_tables_exist(client) -> list[str]:
         ("reference_data", "victory_answers"),
         ("reference_data", "gsheet_sites"),
         ("raw_data", "leads_all"),
+        ("raw_data", "gsheet_autosalony_clients"),
     ]
     return [f"{db}.{table}" for db, table in required if not table_exists(client, db, table)]
 
@@ -70,6 +71,14 @@ def _crm_from_gsheet_expr(crm_expr: str) -> str:
 
 def _phone10_expr(expr: str) -> str:
     return f"right(replaceRegexpAll(ifNull({expr}, ''), '[^0-9]', ''), 10)"
+
+
+def _salon_client_id_expr(alias: str) -> str:
+    return f"nullIf(lowerUTF8(extract(ifNull({alias}.salon, ''), '^([A-Za-z]+_[0-9]+)')), '')"
+
+
+def _resolved_salon_expr(alias: str, client_alias: str) -> str:
+    return f"coalesce(nullIf({client_alias}.salon, ''), {alias}.salon)"
 
 
 def _gsheet_lookup_cte(name: str, key_name: str, key_expr: str, populated_expr: str) -> str:
@@ -110,12 +119,14 @@ def _build_pixel_insert_sql(shadow: str) -> str:
                 {answer_date} AS answer_date,
                 bill_month,
                 project,
-                salon,
+                {_resolved_salon_expr("v", "answer_salon_client")} AS salon,
                 toDecimal64(cost, 6) AS cost,
                 status,
                 phone,
                 site
             FROM (SELECT * FROM reference_data.victory_answers FINAL) AS v
+            LEFT JOIN raw_data.gsheet_autosalony_clients AS answer_salon_client
+              ON lowerUTF8(trim(ifNull(answer_salon_client.client_id, ''))) = {_salon_client_id_expr("v")}
             WHERE v.product = 'пиксель'
               AND {answer_date_raw} >= toDate('{PIXEL_REFERENCE_CUTOFF}')
               AND {answer_date_raw} IS NOT NULL
@@ -136,7 +147,7 @@ def _build_pixel_insert_sql(shadow: str) -> str:
                 ifNull(l.status, '') AS status,
                 ifNull(l.reason, '') AS reason,
                 ifNull(l.source_type, '') AS source_type,
-                ifNull(l.salon, '') AS raw_salon,
+                ifNull({_resolved_salon_expr("l", "legacy_salon_client")}, '') AS raw_salon,
                 pc.pixel_name AS pixel_name,
                 lowerUTF8(trim(ifNull(l.utm_source, ''))) AS domain,
                 if(
@@ -152,6 +163,8 @@ def _build_pixel_insert_sql(shadow: str) -> str:
               ON h.pixel_name = pc.pixel_name
              AND h.valid_from <= l.created_date
              AND (h.valid_to IS NULL OR l.created_date <= h.valid_to)
+            LEFT JOIN raw_data.gsheet_autosalony_clients AS legacy_salon_client
+              ON lowerUTF8(trim(ifNull(legacy_salon_client.client_id, ''))) = {_salon_client_id_expr("l")}
             WHERE l.is_copy_for_removal = 0
               AND l.created_date >= toDate('2026-01-01')
               AND l.created_date < toDate('{PIXEL_REFERENCE_CUTOFF}')
@@ -205,12 +218,12 @@ def _build_pixel_insert_sql(shadow: str) -> str:
                 ifNull(l.status, '') AS status,
                 ifNull(l.reason, '') AS reason,
                 ifNull(l.source_type, '') AS source_type,
-                ifNull(l.salon, '') AS raw_salon,
+                ifNull({_resolved_salon_expr("l", "matched_salon_client")}, '') AS raw_salon,
                 row_number() OVER (
                     PARTITION BY v.id
                     ORDER BY
                         if(lowerUTF8(trim(ifNull(l.utm_source, ''))) = lowerUTF8(trim(ifNull(v.site, ''))) AND ifNull(v.site, '') != '', 0, 1),
-                        if(ifNull(l.salon, '') = ifNull(v.salon, '') AND ifNull(v.salon, '') != '', 0, 1),
+                        if(ifNull({_resolved_salon_expr("l", "matched_salon_client")}, '') = ifNull(v.salon, '') AND ifNull(v.salon, '') != '', 0, 1),
                         if(ifNull(l.status, '') != '', 0, 1),
                         abs(dateDiff('day', l.created_date, v.answer_date)),
                         l.created_date DESC,
@@ -222,6 +235,8 @@ def _build_pixel_insert_sql(shadow: str) -> str:
              AND toYYYYMM(l.created_date) = toYYYYMM(v.answer_date)
              AND l.is_copy_for_removal = 0
              AND l.created_date IS NOT NULL
+            LEFT JOIN raw_data.gsheet_autosalony_clients AS matched_salon_client
+              ON lowerUTF8(trim(ifNull(matched_salon_client.client_id, ''))) = {_salon_client_id_expr("l")}
         ),
         matched_raw AS
         (

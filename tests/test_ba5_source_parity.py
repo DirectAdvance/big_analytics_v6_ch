@@ -140,6 +140,11 @@ def test_pixel_uses_hybrid_source_and_raw_status_funnel():
     assert "v.product = 'пиксель'" in sql
     assert "2026-06-03" in sql
     assert "raw_data.leads_all AS l" in sql
+    assert "raw_data.gsheet_autosalony_clients AS answer_salon_client" in sql
+    assert "raw_data.gsheet_autosalony_clients AS legacy_salon_client" in sql
+    assert "raw_data.gsheet_autosalony_clients AS matched_salon_client" in sql
+    assert "extract(ifNull(v.salon, ''), '^([A-Za-z]+_[0-9]+)')" in sql
+    assert "extract(ifNull(l.salon, ''), '^([A-Za-z]+_[0-9]+)')" in sql
     assert "ad_analytics.local_pixel_config AS pc" in sql
     assert "ad_analytics.local_pixel_price_history AS h" in sql
     assert "row_number() OVER" in sql

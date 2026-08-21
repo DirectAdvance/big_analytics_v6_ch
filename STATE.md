@@ -5,6 +5,22 @@ _2026-08-20, после гибридного пикселя, CRM fallback, BA5�
 
 ## Где мы сейчас
 
+2026-08-21: найден и закрыт остаток `avto_####` в PBI-срезе `салон`: после предыдущих
+CRM/salon-фиксов коды уже не попадали из raw lead/call веток, но оставались в pixel-ветке
+step5 (`_source_table='pixel'`). `step5_build_pixel/build_pixel.py` теперь резолвит
+`victory_answers.salon` и matched/legacy `raw_data.leads_all.salon` через
+`raw_data.gsheet_autosalony_clients.client_id → salon` тем же принципом, что step1.
+Код доставлен на Victory (md5 + marker + remote `py_compile` OK). Прогон
+`pipeline.py --from-step=3` (`run_id=34d80b1dd949`,
+`logs/manual_pixel_salon_fix_from3_20260821_081659.log`) завершился `pipeline OK`,
+`verify_big_analytics.py` = **PASS**. Live-check: `pbi_big_analytics_full`,
+`Dim_Salon`, `big_analytics_full[pixel]` и `fact_big_analytics → Dim_Salon` по
+`салон LIKE 'avto_%'` = 0. Воронка по заявкам с `dohod_do_kredita`/`dobro` уже есть:
+`pbi_big_analytics_full`/`bi_pbi_big_analytics_full`, `fact_region_zayavki`/
+`bi_fact_region_zayavki`, `fact_criterion_zayavki`/`bi_fact_criterion_zayavki`.
+Маппинг берётся из `reference_data.crm_status_mapping`: `credit → dohod_do_kredita`,
+`approved → dobro`.
+
 2026-08-21: BA6-фиксы срезов доставлены на Victory и пересобраны. Первый полный прогон
 `--from-step=1` (`run_id=9273fa5a8abb`, `logs/manual_slices_rebuild_20260821_072915.log`)
 успел обновить raw (`raw_leads=971 409`, `raw_calls=70 883`), но упал на step3 из-за
