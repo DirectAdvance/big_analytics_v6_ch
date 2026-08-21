@@ -67,6 +67,7 @@ def test_lead_claim_type_preserves_ba5_cdr_bucket():
     arrival_sql = _leads_branch_sql("2026-01-01")
 
     assert "GROUP BY key3, zvonki_cdr" in direct_sql
+    assert "anyLast(zvonki_cdr)" not in direct_sql
     for sql in (direct_sql, crop_sql, arrival_sql):
         assert "'(^|[^a-z0-9])cdr([^a-z0-9]|$)'" in sql
         assert "'Звонки_CDR'" in sql

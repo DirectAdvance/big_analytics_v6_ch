@@ -1066,7 +1066,7 @@ la AS
         anyLast(domain) AS domain,
         anyLast(fid) AS fid,
         anyLast(crm_name) AS crm_name,
-        anyLast(zvonki_cdr) AS zvonki_cdr,
+        zvonki_cdr,
         sum(kol_vo_zayavok) AS kol_vo_zayavok,
         sum(korr) AS korr,
         sum(kval) AS kval,
