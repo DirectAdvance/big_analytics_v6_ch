@@ -177,6 +177,21 @@ def test_dim_campaign_normalizes_kviz_to_quiz():
     assert "replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code" in build_source
 
 
+def test_campaign_and_adgroup_labels_fallback_on_blank_values():
+    campaign_sql = build_star.DIM_DDL["Dim_Campaign"]
+    adgroup_sql = build_star.DIM_DDL["Dim_AdGroup"]
+    build_campaign_source = inspect.getsource(build_star.build_dim_campaign)
+    build_adgroup_source = inspect.getsource(build_star.build_dim_adgroup)
+
+    campaign_fallback = "nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), '')"
+    adgroup_fallback = "nullIf(trim(BOTH ' ' FROM ifNull(f.`номер группы | название группы`, '')), '')"
+
+    assert campaign_fallback in campaign_sql
+    assert campaign_fallback in build_campaign_source
+    assert adgroup_fallback in adgroup_sql
+    assert adgroup_fallback in build_adgroup_source
+
+
 def test_campaign_and_adgroup_default_to_single_merge_bucket():
     signature = inspect.signature(build_star.build_dim_campaign)
     source = inspect.getsource(build_star.build_dim_adgroup)

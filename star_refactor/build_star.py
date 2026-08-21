@@ -562,7 +562,10 @@ DIM_DDL = {
                 anyLast(site_quiz) AS site_quiz,
                 anyLast(campaign_status) AS campaign_status,
                 anyLast(payment_model) AS payment_model,
-                anyLast(`номер кампании | название кампании`) AS `номер кампании | название кампании`
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), ''),
+                    concat(toString(`CampaignId`), ' | ', ifNull(anyLast(`CampaignName`), ''))
+                ) AS `номер кампании | название кампании`
             FROM ad_analytics.big_analytics_unified
             WHERE `CampaignId` IS NOT NULL
             GROUP BY `CampaignId`
@@ -616,7 +619,10 @@ DIM_DDL = {
                 ifNull(f.ag_part5, '') AS ag_part5,
                 ifNull(f.ag_part6, '') AS ag_part6,
                 ifNull(f.ag_part7, '') AS ag_part7,
-                ifNull(f.`номер группы | название группы`, concat(toString(r.AdGroupId), ' | ', ifNull(r.AdGroupName, ''))) AS `номер группы | название группы`,
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(f.`номер группы | название группы`, '')), ''),
+                    concat(toString(r.AdGroupId), ' | ', ifNull(r.AdGroupName, ''))
+                ) AS `номер группы | название группы`,
                 f.`неверный_кодер_new` AS `неверный_кодер_new`,
                 ifNull(r.parent_CampaignId, f.parent_CampaignId) AS parent_CampaignId
             FROM raw_adgroups r
@@ -636,7 +642,10 @@ DIM_DDL = {
                 ifNull(f.ag_part5, '') AS ag_part5,
                 ifNull(f.ag_part6, '') AS ag_part6,
                 ifNull(f.ag_part7, '') AS ag_part7,
-                ifNull(f.`номер группы | название группы`, concat(toString(f.AdGroupId), ' | ', ifNull(f.AdGroupName, ''))) AS `номер группы | название группы`,
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(f.`номер группы | название группы`, '')), ''),
+                    concat(toString(f.AdGroupId), ' | ', ifNull(f.AdGroupName, ''))
+                ) AS `номер группы | название группы`,
                 f.`неверный_кодер_new`,
                 f.parent_CampaignId
             FROM fact_adgroups f
@@ -911,7 +920,10 @@ def build_dim_adgroup(client) -> int:
                 ifNull(f.ag_part5, '') AS ag_part5,
                 ifNull(f.ag_part6, '') AS ag_part6,
                 ifNull(f.ag_part7, '') AS ag_part7,
-                ifNull(f.`номер группы | название группы`, concat(toString(r.AdGroupId), ' | ', ifNull(r.AdGroupName, ''))) AS `номер группы | название группы`,
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(f.`номер группы | название группы`, '')), ''),
+                    concat(toString(r.AdGroupId), ' | ', ifNull(r.AdGroupName, ''))
+                ) AS `номер группы | название группы`,
                 f.`неверный_кодер_new` AS `неверный_кодер_new`,
                 ifNull(r.parent_CampaignId, f.parent_CampaignId) AS parent_CampaignId
             FROM raw_adgroups r
@@ -931,7 +943,10 @@ def build_dim_adgroup(client) -> int:
                 ifNull(f.ag_part5, '') AS ag_part5,
                 ifNull(f.ag_part6, '') AS ag_part6,
                 ifNull(f.ag_part7, '') AS ag_part7,
-                ifNull(f.`номер группы | название группы`, concat(toString(f.AdGroupId), ' | ', ifNull(f.AdGroupName, ''))) AS `номер группы | название группы`,
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(f.`номер группы | название группы`, '')), ''),
+                    concat(toString(f.AdGroupId), ' | ', ifNull(f.AdGroupName, ''))
+                ) AS `номер группы | название группы`,
                 f.`неверный_кодер_new`,
                 f.parent_CampaignId
             FROM fact_adgroups f
@@ -970,7 +985,10 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
             anyLast(site_quiz) AS site_quiz,
             anyLast(campaign_status) AS campaign_status,
             anyLast(payment_model) AS payment_model,
-            anyLast(`номер кампании | название кампании`) AS `номер кампании | название кампании`
+            coalesce(
+                nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), ''),
+                concat(toString(`CampaignId`), ' | ', ifNull(anyLast(`CampaignName`), ''))
+            ) AS `номер кампании | название кампании`
         FROM ad_analytics.big_analytics_unified
         WHERE 0 AND `CampaignId` IS NOT NULL
         GROUP BY `CampaignId`
@@ -994,7 +1012,10 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
                 anyLast(site_quiz) AS site_quiz,
                 anyLast(campaign_status) AS campaign_status,
                 anyLast(payment_model) AS payment_model,
-                anyLast(`номер кампании | название кампании`) AS `номер кампании | название кампании`
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), ''),
+                    concat(toString(`CampaignId`), ' | ', ifNull(anyLast(`CampaignName`), ''))
+                ) AS `номер кампании | название кампании`
             FROM ad_analytics.big_analytics_unified
             WHERE {bucket_filter}
             GROUP BY `CampaignId`
