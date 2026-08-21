@@ -5,27 +5,33 @@ _2026-08-20, после гибридного пикселя, CRM fallback, BA5�
 
 ## Где мы сейчас
 
-2026-08-21: локально возвращён BA5-bucket `Звонки_CDR`: `тип_заявки` теперь вычисляется по
-`utm_content` через общий `CDR_PATTERN` в direct/crop/arrival ветках, а Direct join группирует лиды
-по `key3, zvonki_cdr`, чтобы CDR не смешивался с обычными заявками. Для применения нужен deploy
-кода и пересборка step3/step13 + PBI-compat хвостом или полный pipeline.
+2026-08-21: BA6-фиксы срезов доставлены на Victory и пересобраны. Первый полный прогон
+`--from-step=1` (`run_id=9273fa5a8abb`, `logs/manual_slices_rebuild_20260821_072915.log`)
+успел обновить raw (`raw_leads=971 409`, `raw_calls=70 883`), но упал на step3 из-за
+`anyLast(zvonki_cdr)` в `GROUP BY`; hotfix `37a0128` убрал агрегат из CDR group key.
+Прогон `--from-step=3` (`run_id=77c6a767e107`) пересобрал wide/funnel-слой до star, затем упал
+на `Dim_Campaign` из-за агрегата внутри fallback label. Hotfix вынес campaign-агрегаты во
+внутренний SELECT. Финальный хвост `--from-step=145` (`run_id=9362d9b6387f`,
+`logs/manual_slices_rebuild_from145_20260821_075531.log`) завершился `pipeline OK`,
+`verify_big_analytics.py` = **PASS**. Live totals: `big_analytics_full=5 259 533`,
+`big_analytics_unified=5 328 843`, `fact_big_analytics=5 328 843`,
+`pbi_big_analytics_full=5 328 843`.
 
 2026-08-21: в PBIP `Отчеты_victory_Powerbi` дополнительно удалены кнопки навигации `фиды/Фиды`,
 которые всё ещё открывали hidden-страницу «Я.Директ_фиды/Фиды». Сами страницы оставлены hidden:
 настоящего Direct feed-report в BA6 нет, текущий `fact_direct_feed_funnel` остаётся площадками РСЯ.
-Тем же локальным аудитом срезов найден и исправлен fallback label для `Dim_Campaign`/`Dim_AdGroup`:
+Тем же аудитом срезов найден и исправлен fallback label для `Dim_Campaign`/`Dim_AdGroup`:
 пустой `номер кампании | название кампании` / `номер группы | название группы` теперь заменяется на
-`id | name`, а не остаётся пустым значением в PBI-срезе.
+`id | name`, а не остаётся пустым значением в PBI-срезе. Live-check после пересборки:
+`Dim_Campaign` blank labels = 0, `Dim_AdGroup` blank labels = 0, `Dim_ManagerLogin` non-email = 0,
+`Dim_Salon` пустые `проджект/менеджер` схлопнуты в один `<NULL>/<NULL>` элемент,
+`raw_leads.salon` вида `avto_XXXX` = 0.
 
-2026-08-20: локально подготовлен фикс `raw_data.leads_all.salon`: `avto_XXXX` теперь резолвится
-через `raw_data.gsheet_autosalony_clients.client_id → salon` при сборке `raw_leads` и в прямой
-пиксельной ветке `step13_arrival`; fallback оставляет старое текстовое название. Пустой extracted
-key превращается в `NULL`, иначе JOIN матчился с пустыми `client_id` и размножал лиды
-(live-check: старый пустой JOIN `5 816`, новый `0`). Деплой и полный pipeline ещё не запускались.
-В том же локальном хвосте подготовлен фикс PBI-измерений: `Dim_Site` канонизирует CRM из
-`gsheet_sites.crm` (`MarCar CRM`/`MEGA CRM`/`GenzesCRM` и др.), `manager_login_key` строится только
-для email-логинов, а пустые `проджект`/`менеджер` в `Dim_Salon` схлопываются в один пустой элемент.
-Для применения нужен deploy кода и пересборка star/PBI-compat или pipeline хвостом.
+2026-08-21: CRM/salon/campaign fixes применены в live ClickHouse. `Звонки_CDR` вернулся в
+PBI-таблицу: `22 960` строк, `24 783` обращений, `34 040 850.31` ₽. `Название crm='Не указана'`
+больше не несёт массовые CRM-заявки из скрина: осталось `252` обращения, все из `vk_perform`,
+а основной хвост `Не указана` — cost-only Direct/VK/посевы без CRM-привязки
+(`kol_vo_zayavok=0`, `direct` cost `351 388 261.69` ₽).
 
 Принятый прогон BA6 `--from-step=3` от 2026-08-20 (`run_id=ed6bfc6f9c23`,
 `logs/manual_hybrid_pixel_crm_from3_20260820.log`) завершился `pipeline OK`,

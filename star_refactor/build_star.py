@@ -554,21 +554,34 @@ DIM_DDL = {
             AS
             SELECT
                 `CampaignId`,
-                anyLast(`CampaignName`) AS `CampaignName`,
-                anyLast(account_login) AS account_login,
-                replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code,
-                anyLast(tp) AS tp,
-                anyLast(cpc_cpa) AS cpc_cpa,
-                anyLast(site_quiz) AS site_quiz,
-                anyLast(campaign_status) AS campaign_status,
-                anyLast(payment_model) AS payment_model,
+                `CampaignName`,
+                account_login,
+                replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code,
+                tp,
+                cpc_cpa,
+                site_quiz,
+                campaign_status,
+                payment_model,
                 coalesce(
-                    nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), ''),
-                    concat(toString(`CampaignId`), ' | ', ifNull(anyLast(`CampaignName`), ''))
+                    nullIf(trim(BOTH ' ' FROM ifNull(campaign_label, '')), ''),
+                    concat(toString(`CampaignId`), ' | ', ifNull(`CampaignName`, ''))
                 ) AS `номер кампании | название кампании`
-            FROM ad_analytics.big_analytics_unified
-            WHERE `CampaignId` IS NOT NULL
-            GROUP BY `CampaignId`
+            FROM (
+                SELECT
+                    `CampaignId`,
+                    anyLast(`CampaignName`) AS `CampaignName`,
+                    anyLast(account_login) AS account_login,
+                    anyLast(campaign_code) AS campaign_code,
+                    anyLast(tp) AS tp,
+                    anyLast(cpc_cpa) AS cpc_cpa,
+                    anyLast(site_quiz) AS site_quiz,
+                    anyLast(campaign_status) AS campaign_status,
+                    anyLast(payment_model) AS payment_model,
+                    anyLast(`номер кампании | название кампании`) AS campaign_label
+                FROM ad_analytics.big_analytics_unified
+                WHERE `CampaignId` IS NOT NULL
+                GROUP BY `CampaignId`
+            )
         """,
         "Dim_AdGroup": """
             CREATE TABLE ad_analytics.Dim_AdGroup_new
@@ -977,21 +990,34 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
         AS
         SELECT
             `CampaignId`,
-            anyLast(`CampaignName`) AS `CampaignName`,
-            anyLast(account_login) AS account_login,
-            replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code,
-            anyLast(tp) AS tp,
-            anyLast(cpc_cpa) AS cpc_cpa,
-            anyLast(site_quiz) AS site_quiz,
-            anyLast(campaign_status) AS campaign_status,
-            anyLast(payment_model) AS payment_model,
+            `CampaignName`,
+            account_login,
+            replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code,
+            tp,
+            cpc_cpa,
+            site_quiz,
+            campaign_status,
+            payment_model,
             coalesce(
-                nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), ''),
-                concat(toString(`CampaignId`), ' | ', ifNull(anyLast(`CampaignName`), ''))
+                nullIf(trim(BOTH ' ' FROM ifNull(campaign_label, '')), ''),
+                concat(toString(`CampaignId`), ' | ', ifNull(`CampaignName`, ''))
             ) AS `номер кампании | название кампании`
-        FROM ad_analytics.big_analytics_unified
-        WHERE 0 AND `CampaignId` IS NOT NULL
-        GROUP BY `CampaignId`
+        FROM (
+            SELECT
+                `CampaignId`,
+                anyLast(`CampaignName`) AS `CampaignName`,
+                anyLast(account_login) AS account_login,
+                anyLast(campaign_code) AS campaign_code,
+                anyLast(tp) AS tp,
+                anyLast(cpc_cpa) AS cpc_cpa,
+                anyLast(site_quiz) AS site_quiz,
+                anyLast(campaign_status) AS campaign_status,
+                anyLast(payment_model) AS payment_model,
+                anyLast(`номер кампании | название кампании`) AS campaign_label
+            FROM ad_analytics.big_analytics_unified
+            WHERE 0 AND `CampaignId` IS NOT NULL
+            GROUP BY `CampaignId`
+        )
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
@@ -1004,21 +1030,34 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
             INSERT INTO {shadow}
             SELECT
                 `CampaignId`,
-                anyLast(`CampaignName`) AS `CampaignName`,
-                anyLast(account_login) AS account_login,
-                replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code,
-                anyLast(tp) AS tp,
-                anyLast(cpc_cpa) AS cpc_cpa,
-                anyLast(site_quiz) AS site_quiz,
-                anyLast(campaign_status) AS campaign_status,
-                anyLast(payment_model) AS payment_model,
+                `CampaignName`,
+                account_login,
+                replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code,
+                tp,
+                cpc_cpa,
+                site_quiz,
+                campaign_status,
+                payment_model,
                 coalesce(
-                    nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), ''),
-                    concat(toString(`CampaignId`), ' | ', ifNull(anyLast(`CampaignName`), ''))
+                    nullIf(trim(BOTH ' ' FROM ifNull(campaign_label, '')), ''),
+                    concat(toString(`CampaignId`), ' | ', ifNull(`CampaignName`, ''))
                 ) AS `номер кампании | название кампании`
-            FROM ad_analytics.big_analytics_unified
-            WHERE {bucket_filter}
-            GROUP BY `CampaignId`
+            FROM (
+                SELECT
+                    `CampaignId`,
+                    anyLast(`CampaignName`) AS `CampaignName`,
+                    anyLast(account_login) AS account_login,
+                    anyLast(campaign_code) AS campaign_code,
+                    anyLast(tp) AS tp,
+                    anyLast(cpc_cpa) AS cpc_cpa,
+                    anyLast(site_quiz) AS site_quiz,
+                    anyLast(campaign_status) AS campaign_status,
+                    anyLast(payment_model) AS payment_model,
+                    anyLast(`номер кампании | название кампании`) AS campaign_label
+                FROM ad_analytics.big_analytics_unified
+                WHERE {bucket_filter}
+                GROUP BY `CampaignId`
+            )
             """,
             settings=SAFE_QUERY_SETTINGS,
         )

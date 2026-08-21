@@ -173,8 +173,8 @@ def test_dim_campaign_normalizes_kviz_to_quiz():
     ddl_sql = build_star.DIM_DDL["Dim_Campaign"]
     build_source = inspect.getsource(build_star.build_dim_campaign)
 
-    assert "replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code" in ddl_sql
-    assert "replaceAll(anyLast(campaign_code), 'kviz', 'quiz') AS campaign_code" in build_source
+    assert "replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code" in ddl_sql
+    assert "replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code" in build_source
 
 
 def test_campaign_and_adgroup_labels_fallback_on_blank_values():
@@ -183,11 +183,13 @@ def test_campaign_and_adgroup_labels_fallback_on_blank_values():
     build_campaign_source = inspect.getsource(build_star.build_dim_campaign)
     build_adgroup_source = inspect.getsource(build_star.build_dim_adgroup)
 
-    campaign_fallback = "nullIf(trim(BOTH ' ' FROM ifNull(anyLast(`номер кампании | название кампании`), '')), '')"
+    campaign_fallback = "nullIf(trim(BOTH ' ' FROM ifNull(campaign_label, '')), '')"
     adgroup_fallback = "nullIf(trim(BOTH ' ' FROM ifNull(f.`номер группы | название группы`, '')), '')"
 
     assert campaign_fallback in campaign_sql
     assert campaign_fallback in build_campaign_source
+    assert "anyLast(`номер кампании | название кампании`) AS campaign_label" in campaign_sql
+    assert "anyLast(`номер кампании | название кампании`) AS campaign_label" in build_campaign_source
     assert adgroup_fallback in adgroup_sql
     assert adgroup_fallback in build_adgroup_source
 
