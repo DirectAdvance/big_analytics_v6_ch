@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client, load_db
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, replace_view, swap_shadow
+from config.settings import CDR_PATTERN
 from step1_load_raw.step1 import MARCAR_SOURCE_TYPE, MARCAR_STATUS_PRIORITY
 
 logger = logging.getLogger("pipeline.step3")
@@ -937,6 +938,17 @@ def _lead_date_filter(lo: str, hi: str) -> str:
     return f"AND created_date >= toDate('{lo}') AND created_date < toDate('{hi}')"
 
 
+def _zvonki_cdr_expr(utm_content_expr: str) -> str:
+    return f"match(lowerUTF8(ifNull({utm_content_expr}, '')), '{CDR_PATTERN}')"
+
+
+def _claim_type_expr(utm_content_expr: str, deal_type_expr: str) -> str:
+    return (
+        f"if({_zvonki_cdr_expr(utm_content_expr)}, "
+        f"'Звонки_CDR', if(ifNull({deal_type_expr}, '') = '', 'Заявка', {deal_type_expr}))"
+    )
+
+
 def _yd_agg_cte(raw_date_filter: str = "") -> str:
     """CTE `yd` — статистика Директа, свёрнутая по key3.
 
@@ -1041,6 +1053,7 @@ lead_scored AS
         domain AS domain,
         fid AS fid,
         {_crm_name_expr("source_type")} AS crm_name,
+        {_zvonki_cdr_expr("utm_content")} AS zvonki_cdr,
         {_metric_expr("status", "reason", "source_type", "salon")}
     FROM ad_analytics.{LEADS_DEDUPED_STAGE}
     WHERE {_direct_lead_universe_filter()}
@@ -1053,6 +1066,7 @@ la AS
         anyLast(domain) AS domain,
         anyLast(fid) AS fid,
         anyLast(crm_name) AS crm_name,
+        anyLast(zvonki_cdr) AS zvonki_cdr,
         sum(kol_vo_zayavok) AS kol_vo_zayavok,
         sum(korr) AS korr,
         sum(kval) AS kval,
@@ -1066,7 +1080,7 @@ la AS
         sum(dohod_do_kredita) AS dohod_do_kredita,
         sum(dobro) AS dobro
     FROM lead_scored
-    GROUP BY key3
+    GROUP BY key3, zvonki_cdr
 )
 SELECT
     yd.key3 AS key3,
@@ -1095,7 +1109,7 @@ SELECT
     {_ag_parts_expr("yd.")},
     '' AS `марки авто`,
     ifNull(nullIf(coalesce(la.crm_name, crm.crm_name), ''), 'Не указана') AS `Название crm`,
-    if(la.kol_vo_zayavok > 0, 'Заявка', NULL) AS `тип_заявки`,
+    if(la.kol_vo_zayavok > 0, if(la.zvonki_cdr, 'Звонки_CDR', 'Заявка'), NULL) AS `тип_заявки`,
     ifNull(la.kol_vo_zayavok, toDecimal64(0, 6)) AS kol_vo_zayavok,
     ifNull(la.korr, toDecimal64(0, 6)) AS korr,
     ifNull(la.kval, toDecimal64(0, 6)) AS kval,
@@ -1192,7 +1206,7 @@ def _lead_source_columns(
         ("ag_part7", "CAST(NULL, 'Nullable(String)')"),
         ("марки авто", "''"),
         ("Название crm", _crm_name_expr("l.source_type")),
-        ("тип_заявки", "if(ifNull(l.deal_type, '') = '', 'Заявка', l.deal_type)"),
+        ("тип_заявки", _claim_type_expr("l.utm_content", "l.deal_type")),
         ("kol_vo_zayavok", "l.kol_vo_zayavok"),
         ("korr", "l.korr"),
         ("kval", "l.kval"),

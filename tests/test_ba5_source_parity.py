@@ -5,7 +5,13 @@ from star_refactor.cleanup_wide_intermediates import SOURCE_VIEWS
 from step10_crop_targeting import step10
 from step10_crop_targeting.step10 import CROP_TYPES_SQL
 from step13_arrival.step13 import _calls_branch_columns, _calls_branch_sql, _leads_branch_sql
-from step3_build_sources.step3 import CROP_SOURCE_TYPES, _build_crop_sql_batched, _build_direct_zero_sql, _build_seo_sql
+from step3_build_sources.step3 import (
+    CROP_SOURCE_TYPES,
+    _build_crop_sql_batched,
+    _build_direct_sql,
+    _build_direct_zero_sql,
+    _build_seo_sql,
+)
 from step3_build_sources.step3 import _leads_deduped_cte
 from step5_build_pixel.build_pixel import _build_pixel_insert_sql
 from step6_build_full.step6 import _calls_select
@@ -53,6 +59,17 @@ def test_arrival_leads_keep_posev_channel_sources():
     assert "lowerUTF8(ifNull(l.utm_source, '')) IN ('vk', 'vk_groups', 'vk_storis'), 'Посевы_VK'" in sql
     assert "'Посевы_SEO'" in sql
     assert "'SEO Flow'" in sql
+
+
+def test_lead_claim_type_preserves_ba5_cdr_bucket():
+    direct_sql = _build_direct_sql("tmp_direct")
+    crop_sql = _build_crop_sql_batched("AND l.created_date >= toDate('2026-01-01')")
+    arrival_sql = _leads_branch_sql("2026-01-01")
+
+    assert "GROUP BY key3, zvonki_cdr" in direct_sql
+    for sql in (direct_sql, crop_sql, arrival_sql):
+        assert "'(^|[^a-z0-9])cdr([^a-z0-9]|$)'" in sql
+        assert "'Звонки_CDR'" in sql
 
 
 def test_seo_keeps_crop_seo_and_seo_flow_sources():

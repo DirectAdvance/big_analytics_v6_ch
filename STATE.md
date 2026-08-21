@@ -5,6 +5,15 @@ _2026-08-20, после гибридного пикселя, CRM fallback, BA5�
 
 ## Где мы сейчас
 
+2026-08-21: локально возвращён BA5-bucket `Звонки_CDR`: `тип_заявки` теперь вычисляется по
+`utm_content` через общий `CDR_PATTERN` в direct/crop/arrival ветках, а Direct join группирует лиды
+по `key3, zvonki_cdr`, чтобы CDR не смешивался с обычными заявками. Для применения нужен deploy
+кода и пересборка step3/step13 + PBI-compat хвостом или полный pipeline.
+
+2026-08-21: в PBIP `Отчеты_victory_Powerbi` дополнительно удалены кнопки навигации `фиды/Фиды`,
+которые всё ещё открывали hidden-страницу «Я.Директ_фиды/Фиды». Сами страницы оставлены hidden:
+настоящего Direct feed-report в BA6 нет, текущий `fact_direct_feed_funnel` остаётся площадками РСЯ.
+
 2026-08-20: локально подготовлен фикс `raw_data.leads_all.salon`: `avto_XXXX` теперь резолвится
 через `raw_data.gsheet_autosalony_clients.client_id → salon` при сборке `raw_leads` и в прямой
 пиксельной ветке `step13_arrival`; fallback оставляет старое текстовое название. Пустой extracted
