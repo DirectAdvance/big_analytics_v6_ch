@@ -201,7 +201,7 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 pipeline_powerbi.py"
 | **Заявки (лиды)** | FDW `ad_analytics.leads_all` (CRM-выгрузки) | step0 TRUNCATE+INSERT → step1 | `local_leads_all` → `raw_leads` | `big_analytics_direct` / `_seo` / `full` |
 | **Звонки** | те же `leads_all`, `deal_type='Звонок'` | step1 → step6 inline | `local_leads_all` → `raw_calls` | `big_analytics_full` (`_source_table='calls'`) |
 | **Статусы воронки** | конфиг-таблица `local_crm_statuses` | `config/status_sql.py` | `local_crm_statuses` | CASE-метрики во всех витринах |
-| **Статусы кампаний** | Grid API (куки) | step4 `prefetch_statuses` | `campaign_status` | `big_analytics_full.campaign_status` |
+| **Статусы кампаний** | `reference_data.direct_campaigns` (ClickHouse) | step4 — VIEW `ad_analytics.campaign_status` | `campaign_status` | `big_analytics_full.campaign_status` |
 | **Клики / показы** | те же расходы Директа | step0/step1 | `raw_yandex.Clicks/Impressions` | `big_analytics_full` |
 | **Корректировки ставок** | Direct API v5 (OAuth) | `korrektirovki/run.py` (ночь) | — | `yandex_direct_korrektirovki` (PBI) |
 | **404-ошибки** | Метрика API (OAuth) | `404_errors/404_errors.py` | — | `yandex_direct_404_errors` (PBI) |
@@ -268,7 +268,9 @@ JOIN с `local_domains`:
   со статусом visit/sale, затем более старая).
 - **Нет двойного учёта:** direct ∩ crop_targeting = 0 (UTM-фильтры step3). См. §5.
 - **Маркар-патч:** статус `'Продажа'` доливается из Google Sheets «Маркар Доезды»
-  (`local_gsheet_priezdi_marcar`) в step0 `_patch_marcar_statuses` — CRM не синхронит обратно.
+  (`reference_data.gsheet_priezdi_marcar`) в step1 (`step1_load_raw/step1.py`, маркер
+  `MARCAR_GSHEET_STATUS_2026-08-05`) — CRM не синхронит обратно. В v5 это был step0
+  `_patch_marcar_statuses`; в v6_ch step0 — только ClickHouse-preflight.
 - **fid-атрибуция:** `corrections.py:_patch_fid_attribution()` (после step3, не в step1).
 
 ---
@@ -296,17 +298,23 @@ JOIN с `local_domains`:
 
 **Клики/показы** — `raw_yandex.Clicks/Impressions`, тот же поток что расходы (8.1.A).
 
-**Статусы кампаний (`campaign_status`)** — step4 `prefetch_statuses()`:
-неофициальный **Grid API** Яндекс.Директа с **куками** (`cookies.json`, автообновление
-с glavpotok.ru). 3 потока = 3 manager_login. Маппинг `PRIMARY_STATUS_MAP`
-(`ACTIVE→Активна`, `STOPPED→Остановлена`, `ARCHIVED→Архив` …). Доп. `payment_model`
-(за клики / за конверсии) из `strategy.payForConversion`. Результат → справочник
-`campaign_status` → UPDATE `big_analytics_full.campaign_status` + emoji-префикс в step6.
+**Статусы кампаний (`campaign_status`)** — ⚠️ описание ниже относилось к v5. В v6_ch step4
+(`step4_campaign_status/step4.py::run`) создаёт VIEW `ad_analytics.campaign_status` поверх
+`reference_data.direct_campaigns` — никакого Grid API и куки не задействованы. Маппинг статусов
+живёт в `multiIf` самой вьюхи (`ACCEPTED/ACTIVE|state=ON→Активна`, `SUSPENDED/STOPPED|state=OFF→
+Остановлена`, `ARCHIVED→Архив`). `prefetch_statuses()` там же — заглушка-совместимость для v5-
+оркестраторов, возвращает `None` и ничего не тянет.
+*v5 (историческое):* Grid API с куками `cookies.json`, 3 потока = 3 manager_login, маппинг
+`PRIMARY_STATUS_MAP`, `payment_model` из `strategy.payForConversion`.
 
-**История изменений (`yandex_direct_history`, PBI = `direct_history`)** — step9
-`prefetch_history()`: внутренний **GraphQL API** `direct.yandex.ru` с теми же куками
-(стартует после step4 prefetch — избегает CSRF-конфликта). Инкрементально от
-`MAX(date)+1`. Логины из `local_gsheet_sites` (`status='Контекст активно'`).
+**История изменений (`yandex_direct_history`, PBI = `direct_history`)** — в v6_ch step9
+(`step9_direct_history/step9.py::run`) собирает вьюху из того же `reference_data.direct_campaigns`;
+`prefetch_history()` — такая же заглушка. GraphQL `direct.yandex.ru` и CSRF-порядок относительно
+step4 — v5-история, в v6_ch не применяются.
+
+Единственная живая точка, где v6_ch реально нужны куки, — step139
+(`direct_placement_links/build.py::build()` → `ensure_cookies_alive_or_stop()`), см.
+[`COOKIES.md`](COOKIES.md).
 
 **Корректировки ставок (`yandex_direct_korrektirovki`)** — ночной `korrektirovki/run.py`:
 **официальный Direct API v5** (OAuth `OAUTH_TOKEN_1/2`). Уровни CAMPAIGN+AD_GROUP,

@@ -59,7 +59,8 @@
 
 ## 3. Посевы vs директ (нет двойного учёта)
 
-- Лиды директа (`leads_direct`) и посевов (`crop_targeting`) **не пересекаются**: UTM-фильтры
+- Лиды директа (`_direct_lead_universe_filter` в `step3_build_sources/step3.py`) и посевов
+  (`crop_targeting`) **не пересекаются**: UTM-фильтры
   в step3 исключают посевные `utm_source/medium` (`telegram`/`vk`/`max`/`posev`/`paid_social`)
   из директа. Эмпирически: `direct ∩ crop = 0`.
 - Граница посевов **1 мая 2026**: < мая — Google Sheets, ≥ мая — Telega.in API. Периоды

@@ -87,6 +87,10 @@
 
 ### 🔴 #25 — Victory диск-фул / осиротевший `pgsql_tmp` — ПОВТОРЯЮЩИЙСЯ (инфра, вне наших прав)
 
+**Область.** Это про PostgreSQL v5 на диске Victory. К v6_ch не относится напрямую: v6 хранит
+данные в Yandex Cloud ClickHouse, а Victory для v6 — только код/`~/venv-v6`/логи (`CLAUDE.md`).
+Оставлено как парity-справка о инфраструктурном риске v5-контура.
+
 **Суть.** Каждый краш тяжёлого шага (ENOSPC/OOM) оставляет orphaned temp-файлы в `pgsql_tmp`. Postgres чистит только при рестарте — рестарта нет (нет root) → накапливается (~60 GB на 2026-07-11). Суммарный rebuild-footprint (`raw_yandex` ~9GB + `big_analytics_direct` ~16GB + `big_analytics_full` ~11GB + temp-спиллы) близок к потолку **184GB** диска (77 GB живых БД).
 
 **Что НЕ решает.** `work_mem`/serial/disk-watchdog лишь сдвигают точку падения. TRUNCATE транзиентных = разовые ~9 GB. VACUUM FULL / WAL = тупик. Kill idle-in-transaction = 0 GB. `temp_file_limit` под `bi_analytic` = permission denied (SUSET). Legacy БД `ad_analytics`/`ad_analytics_other` трогать НЕЛЬЗЯ (живые FDW).
@@ -98,6 +102,11 @@
 ---
 
 ### 🔴 #26 — step3/big_analytics_direct: пиковый temp-спилл ~20GB валит прогон при недостатке диска
+
+**Область.** PostgreSQL v5 `step3.py` (`work_mem`, `temp_file_limit`, `STEP3_DISK_WATCHDOG`,
+CTE-имена `leads_arrival_agg`/`base_join`). Не применимо к ClickHouse v6_ch `step3_build_sources/
+step3.py`: там `_build_direct_sql()` — то же имя функции, но ClickHouse-реализация без этих
+PostgreSQL-конструкций и без диска на Victory под данные.
 
 **Суть.** Пик диска в step3 ~**20GB** = heap `big_analytics_direct` (~8–14GB, ~21.7M строк) + temp-спилл (~7–13GB) от одного массивного SQL в `step3.py::_build_direct_sql()`. Глобальный `DISTINCT ON`/дедуп по всем датам сразу → полная внешняя сортировка широкой (~73 колонки) таблицы. `work_mem=4096MB` не помогает sort-узлам. `STEP3_DISK_WATCHDOG` самоотменяет запрос при free<2GB — это ШТАТНАЯ защита, не баг.
 

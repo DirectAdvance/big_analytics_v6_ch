@@ -49,7 +49,7 @@ put_conn(conn)
 
 **VIEW without full step run.** Вьюха пересоздаётся в `ensure_schema()` → `python3 -c "... ensure_schema(conn) ..."` напрямую на Victory без API-прогона step14 (2+ часа). Пример: добавить `"специалист"` в `v_yandex_direct_minus_delta` (маркер SPECIALIST_VIEW_2026-06-19).
 
-**Mutagen НЕ синкает на Victory.** Всегда scp + grep-маркер + md5 Mac==Victory + py_compile ПЕРЕД запуском. Скилл `deploy-victory` (`scripts/deploy_victory.py`).
+**Mutagen НЕ синкает на Victory.** Всегда scp + grep-маркер + md5 Mac==Victory + py_compile ПЕРЕД запуском. Скилл `deploy-victory` (`scripts/deploy_victory.py`) — ⚠️ только для v5: зашит на `work/big_analytics_v5/` → `~/big_analytics_v5`, файлы v6_ch отвергает. Для v6_ch — ручной scp в `~/big_analytics_v6_ch` + `~/venv-v6`, см. `RUNBOOK.md` §3a.
 
 **pipeline.py глушит падение corrections.** `corrections.apply()` исключение ловится как warning ~L482-483 → прогон продолжается молча. «Прогон без ошибки» ≠ «corrections отработали».
 

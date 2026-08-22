@@ -63,11 +63,9 @@
 ---
 
 **Шаг 4 — Статусы кампаний** (`step4_campaign_status`)
-Двухфазная работа:
-- **Фаза A (фон, с шага 0)** — запрашивает статусы кампаний через Yandex Direct Grid API,
-  используя куки с домашнего сервера. Только для активных аккаунтов (за 60 дней).
-- **Фаза B (шаг 4)** — ждёт завершения фазы A, строит таблицу `campaign_status`,
-  патчит колонку `campaign_status` в `big_analytics_direct`.
+В v6 это чистая ClickHouse VIEW, без кук и без Grid API: `prefetch_statuses()` — no-op для
+совместимости (сигнатура унаследована от v5-оркестраторов), `run()` строит
+`ad_analytics.campaign_status` / `campaign_status_v` напрямую из `reference_data.direct_campaigns`.
 
 ---
 
@@ -195,7 +193,9 @@ step 145). Актуальные инварианты и открытые рас�
 - Доступ к ClickHouse Yandex Cloud `rc1b-q7j2ie10fdverqrk.mdb.yandexcloud.net:8443`
   (`raw_data`/`reference_data` — чтение, `ad_analytics` — запись) через `load_db('victory_clickhouse')`
 - Read-only доступ к Victory PostgreSQL `ad_analytics_bi` — только для отзывов (step3)
-- Куки Яндекс.Директ на домашнем сервере: `http://192.168.0.202:8765/cookies`
+- Куки Яндекс.Директ нужны только шагу 139 `direct_placement_links` (Grid API для ссылок площадок);
+  step4/step9 их больше не используют. Автообновление — glavpotok.ru; домашний сервер
+  `http://192.168.0.202:8765/cookies` — устаревший fallback (см. `COOKIES.md`)
 
 ---
 

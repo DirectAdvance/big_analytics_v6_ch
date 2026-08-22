@@ -11,7 +11,9 @@
 > Составлена 2026-07-28 по результатам read-only исследования. Все числа — измерены фактом,
 > источники указаны. Неподтверждённое помечено «не верифицировано».
 >
-> Детальные отчёты исследования: `.claude/sdd/v6-*.md`
+> Детальные отчёты исследования лежат в `.claude/sdd/v6-*.md` **в корне монорепо**
+> (`HomeServer_PythonProject/.claude/sdd/`), не во вложенном `work/big_analytics_v6_ch/.claude/sdd/`
+> — тот пуст. Проверено 2026-08-22: на месте 9 из 10, см. §11.
 
 ---
 
@@ -51,22 +53,30 @@
 
 Ключевое решение Семёна: **итоговые слои — вьюхи, промежуточные таблицы не материализуются.**
 
+⚠️ **Проверено по факту в ClickHouse (`system.tables`, 2026-08-22): имена ниже — это план
+2026-07-28, построено ИНАЧЕ.** Объектов `v_sources`/`v_pixel_score`/`v_arrival` не существует.
+Реально созданы: `ad_analytics.big_analytics_direct/seo/pixel/crop_targeting/reviews/full/full_arrival/unified`
+как отдельные **View** (план §3.1 говорил «не создаются, растворяются в CTE» — тоже разошлось),
+`ad_analytics.big_analytics_pixel_score` — **MergeTree-таблица** (не View), `fact_big_analytics` —
+тоже **MergeTree** (не View, план ожидал VIEW). Соответствие плановых слоёв фактическим объектам:
+
 ```
 raw_data.*  (таблицы, загружаются извне)
     │
-    ├─► ad_analytics.v_sources     VIEW   (step3 + corrections + step6 слиты)
+    ├─► ad_analytics.big_analytics_full   VIEW   (факт. эквивалент планового v_sources; step3 + corrections + step6)
     │        │
-    │        ├─► ad_analytics.v_pixel_score   VIEW   (step11)
+    │        ├─► ad_analytics.big_analytics_pixel_score   MergeTree (факт. эквивалент v_pixel_score; step11)
     │        │        │
-    │        │        └─► ad_analytics.v_arrival   VIEW   (step13)
+    │        │        └─► ad_analytics.big_analytics_full_arrival   VIEW   (факт. эквивалент v_arrival; step13)
     │        │                 │
-    │        │                 └─► ad_analytics.fact_big_analytics   VIEW  (unified + звезда)
+    │        │                 └─► ad_analytics.fact_big_analytics   MergeTree (unified + звезда)
     │        │                          │
     │        │                          └─► pbi_big_analytics_full   VIEW  (для Power BI)
     │        │
-    │        └─► ad_analytics.Dim_*   VIEW   (Campaign, AdGroup, Date, Site, Adjustment, Location)
+    │        └─► ad_analytics.Dim_*   MergeTree/VIEW   (Campaign, AdGroup, Date, Site, Adjustment, Location)
     │
-    └─► ad_analytics.arp   REFRESHABLE MATERIALIZED VIEW  (REFRESH EVERY 1 WEEK)
+    └─► ad_analytics.arp   — не создан (таблица `ad_analytics.raw_new_arp_fact` (MergeTree) существует,
+                             но REFRESHABLE MV для `arp` в реестре нет; см. §5 и PIPELINES.md build_star)
 ```
 
 ### 3.1 Реестр объектов и их типы
@@ -74,9 +84,9 @@ raw_data.*  (таблицы, загружаются извне)
 | Объект | Тип в CH | Обоснование |
 |---|---|---|
 | `raw_data.*` | таблицы | сырьё, приходит извне |
-| `big_analytics_direct / full / seo / pixel / crop / reviews / unified` | **не создаются** | в v5 это UNLOGGED-буферы, 0 строк между прогонами, вьюх над ними нет, единственный потребитель — факт. Растворяются в CTE. |
-| `Dim_Campaign / AdGroup / Date / Site / Adjustment / Location` | `VIEW` | мелкие, пересчёт дёшев |
-| `fact_big_analytics` | `VIEW` | решение Семёна |
+| `big_analytics_direct / full / seo / pixel / crop / reviews / unified / full_arrival` | ⚠️ план: «не создаются»; **факт (проверено `system.tables` 2026-08-22): созданы как `VIEW`** | план предполагал растворение в CTE, построено как именованные вьюхи |
+| `Dim_Campaign / AdGroup / Date / Site / Adjustment / Location` | план `VIEW`; факт — смесь `MergeTree`/`VIEW` (`Dim_*` в основном MergeTree, `bi_Dim_*` — View-обёртки для PBI) | мелкие, пересчёт дёшев |
+| `fact_big_analytics` | план `VIEW`; **факт — `MergeTree`** (проверено `system.tables`) | решение Семёна по плану не реализовано как VIEW |
 | `pbi_big_analytics_full` | `VIEW` | точка подключения Power BI; здесь же резать окно |
 | `arp` (площадки) | `REFRESHABLE MV`, `REFRESH EVERY 1 WEEK` | обновляется раз в неделю, атомарная подмена |
 | `campaign_status` | **таблица** | результат вызова Grid API, в SQL невыразим |
@@ -200,8 +210,9 @@ salon, kind`). Колонка `kind` (`status` / `reason`) обязательн�
 
 Разделы 4.3 и 4.4 составлялись от разбора отдельных шагов и оказались **неполными**.
 Сплошной обход всех шагов (`step0…step13`, `corrections`, `build_star`, `step_cron_night`,
-вспомогательные загрузчики) нашёл **ещё 10 источников**. Полный реестр из 37 позиций
-с `файл:строка` — `.claude/sdd/v6-full-dependency-map.md`.
+вспомогательные загрузчики) нашёл **ещё 10 источников**. Полный реестр из 37 позиций с
+`файл:строка` держался в `.claude/sdd/v6-full-dependency-map.md` — ⚠️ единственный из набора,
+которого сейчас нет на диске, см. §11.
 
 **Итого залить: 17 таблиц** (7 известных + 10 новых).
 
@@ -487,7 +498,8 @@ diff по целевой метрике + подтверждение, что с�
 **Сделано:** только исследование. **Ничего не менялось** — ни в PostgreSQL, ни в ClickHouse,
 ни в коде v5. Все агенты работали read-only. `ad_analytics` по-прежнему пуста (0 таблиц).
 
-**Где лежат доказательства** (детальные отчёты с числами и `файл:строка`):
+**Где лежат доказательства** — детальные отчёты с числами и `файл:строка` в
+`HomeServer_PythonProject/.claude/sdd/` (корень монорепо, НЕ вложенный каталог проекта):
 
 | Файл в `.claude/sdd/` | Содержание |
 |---|---|
@@ -503,8 +515,10 @@ diff по целевой метрике + подтверждение, что с�
 | `v6-full-dependency-map.md` | сплошная сверка источников — **дописывалась на момент паузы** |
 
 **Сплошная сверка источников — завершена**, раздел 4.7 закрыт. Итог: залить 17 таблиц,
-а не 7. Полный реестр из 37 позиций с `файл:строка` —
-`.claude/sdd/v6-full-dependency-map.md`.
+а не 7. Полный реестр из 37 позиций с `файл:строка` держался в
+`.claude/sdd/v6-full-dependency-map.md` — ⚠️ **единственный файл набора, которого нет на диске**
+(проверено 2026-08-22; остальные 9 на месте в корневом `.claude/sdd/`). Результаты (17 таблиц,
+раздел 4.3/4.4 выше) остаются в силе; реестр `файл:строка` при необходимости пересобирать заново.
 
 **Что осталось недоописанным в самой спеке:** раздел 3 (архитектура слоёв) построен вокруг
 основной цепочки факта и не описывает три всплывшие подсистемы — фиды, отзывы и

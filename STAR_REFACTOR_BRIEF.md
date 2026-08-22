@@ -65,7 +65,7 @@ AdGroupName, adgroup_code, "номер группы | название груп�
 3. **Прекратить** материализацию `big_analytics_full` и `big_analytics_unified` (экономия ~10 ГБ).
    - Снять чистку `big_analytics_direct` если она была ради места.
 4. Аналогично для `analytics_report_placement` (`step_cron_night/report_placement/`): лёгкий arp_fact.
-5. Обновить `refresh_powerbi.py` `_ALL_TABLES` (строки ~193-204): заменить big_analytics_full на
+5. Обновить `refresh_powerbi.py` `_ALL_TABLES` (строки 48-59): заменить big_analytics_full на
    лёгкие per-source факты + dim-таблицы. Согласовать имена с моделью PBI (это сделает главный агент в шаге 5).
 
 ### Шаг 6 (запуск + верификация — данные не потеряны)

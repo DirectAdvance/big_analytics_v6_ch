@@ -5,7 +5,7 @@
 > For code structure (who calls what, impact radius) use MCP `code-review-graph`;
 > this index is the fallback when the graph is unavailable.
 
-Files indexed: **328**
+Files indexed: **332**
 
 This is a compact root index. Detailed file maps live in child `INDEX.md` files.
 Read the nearest child index first; use this file only to choose the right area.
@@ -15,23 +15,23 @@ Read the nearest child index first; use this file only to choose the right area.
 | file | KB | purpose |
 |---|---|---|
 | `ATTRIBUTION.md` | 8 | ATTRIBUTION.md — единый авторитет по атрибуции |
-| `BLOCKS.md` | 40 | BLOCKS.md — технические блоки ETL (C–L) + corrections |
+| `BLOCKS.md` | 45 | BLOCKS.md — технические блоки ETL (C–L) + corrections |
 | `CANON.md` | 7 | CANON.md — канон значений `big_analytics_full` |
 | `CLAUDE.md` | 5 | CLAUDE.md — big_analytics_v6_ch |
 | `COLUMNS_big_analytics_full.md` | 11 | COLUMNS_big_analytics_full.md — поколоночный словарь главной витрины |
 | `COOKIES.md` | 7 | COOKIES.md — куки Яндекс.Директ |
 | `DB_AD_ANALYTICS.md` | 19 | DB_AD_ANALYTICS.md — регламент ведения ClickHouse `ad_analytics` |
 | `DB_TABLES.md` | 52 | DB_TABLES.md — legacy PostgreSQL table map |
-| `DOD.md` | 18 | DOD — Definition of Done, big_analytics_v5 |
+| `DOD.md` | 19 | DOD — Definition of Done, big_analytics_v6_ch |
 | `FUNNEL.md` | 12 | FUNNEL.md — воронка заявок (`reference_data.crm_status_mapping`) |
 | `GOLDEN_BASELINE.md` | 33 | GOLDEN BASELINE — эталонные значения v6_ch |
-| `KNOWN_ISSUES.md` | 78 | KNOWN_ISSUES — big_analytics_v6_ch |
+| `KNOWN_ISSUES.md` | 79 | KNOWN_ISSUES — big_analytics_v6_ch |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |
 | `MEMORY_ARCHIVE.md` | 275 | MEMORY.md — ba_pipeline: нетривиальные уроки |
 | `OPTIMIZATION_PLAN.md` | 23 | План оптимизации веса таблиц `ad_analytics` (BA6) |
 | `PBI_REFRESH_OPTIMIZATION_RECOMMENDATIONS_2026-08-18.md` | 9 | PBI_REFRESH_OPTIMIZATION_RECOMMENDATIONS_2026-08-18 |
 | `PBI_SOURCE_AUDIT_2026-08-18.md` | 4 | PBI Source Audit |
-| `PBI_TABLES.md` | 47 | PBI_TABLES.md — Power BI source tables |
+| `PBI_TABLES.md` | 48 | PBI_TABLES.md — Power BI source tables |
 | `PIPELINES.md` | 10 | PIPELINES.md — v6_ch ClickHouse pipelines |
 | `PLAN.md` | 42 | PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse) |
 | `POSEV_LEADS_LOSS_PLAN.md` | 24 | POSEV_LEADS_LOSS_PLAN — системный план ловли и починки потерь посевных ЗАЯВОК |
@@ -49,7 +49,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `SHEET_RECONCILE_METHODOLOGY.md` | 28 | Методика сверки Google-таблиц салонов ↔ витрина (КОНТЕКСТ) |
 | `SPEC.md` | 34 | SPEC — big_analytics v6 на ClickHouse |
 | `STAR_REFACTOR_BRIEF.md` | 14 | ТЗ для director — рефакторинг big_analytics_v5 под звезду (star schema) |
-| `STATE.md` | 23 | big_analytics_v6_ch — статус |
+| `STATE.md` | 29 | big_analytics_v6_ch — статус |
 | `STATE_ARCHIVE.md` | 500 | Сессия 2026-07-15 (oleg_programmer — restore-прогон на откаченном коде) — ⚠️ kval НЕ восстановился |
 | `V5_V6_FUNNEL_BREAKDOWN_2026-08-17.md` | 13 | Расхождение БА5 ↔ БА6 — разбивка по месяцам, источникам и салонам |
 | `V5_V6_RECONCILE_2026-08-10.md` | 12 | Сверка big_analytics_v6_ch с big_analytics_v5 — 2026-08-10 |
@@ -58,12 +58,12 @@ Read the nearest child index first; use this file only to choose the right area.
 | `_warm_campaign_status.py` | 3 | _warm_campaign_status.py — точечный прогрев campaign_status/payment_model БЕЗ step0/step8. |
 | `copy_metrika.py` | 6 | Копирует данные из локального big_analytics.public.metrika |
 | `corrections.py` | 57 | ClickHouse v6 corrections hook — порт правил v5 `corrections.py`. |
-| `cron_run.py` | 4 | CRON_RUNNER_2026-08-16 — обёртка для ежедневного прогона БА6 из cron. |
+| `cron_run.py` | 10 | CRON_RUNNER_2026-08-16 — обёртка для ежедневного прогона БА6 из cron. |
 | `explain_capture.py` | 10 | explain_capture.py — захват EXPLAIN ANALYZE планов тяжёлых шагов. |
 | `pipeline.py` | 12 | ClickHouse orchestrator for big_analytics_v6_ch. |
 | `pipeline_mutex.py` | 5 | pipeline_mutex.py — PIPELINE_MUTEX_2026-07-12 |
 | `refresh_cookies.py` | 8 | refresh_cookies.py — автоматическое обновление cookies.json с эндпоинта glavpotok.ru. |
-| `refresh_powerbi.py` | 20 | refresh_powerbi.py — только обновление отчётов Power BI Service. |
+| `refresh_powerbi.py` | 8 | Selective refresh опубликованного BA6-датасета в Power BI Service. |
 | `spec_fallback.py` | 9 | SPEC_FALLBACK_V3_2026-08-06 — пост-проход по пустому `специалист` в `big_analytics_full`. |
 | `sync_replica_incremental.sh` | 3 | bin/bash |
 | `watch_pipeline.py` | 12 | watch_pipeline.py — хвостит /tmp/fast_pipeline.log, детектирует завершение |
@@ -76,7 +76,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `data_check/` | `data_check/INDEX.md` | 19 | data_check — проверки данных v6_ch |
 | `data_verification/` | `data_verification/INDEX.md` | 10 | data_verification — как проверять данные big_analytics_v5 и какие бывают ошибки |
 | `star_refactor/` | `star_refactor/INDEX.md` | 17 | INDEX — star_refactor |
-| `step0_sync_local/` | `step0_sync_local/INDEX.md` | 6 | step0_sync_local — ClickHouse Preflight |
+| `step0_sync_local/` | `step0_sync_local/INDEX.md` | 7 | step0_sync_local — ClickHouse Preflight |
 | `step11_pixel_score/` | `step11_pixel_score/INDEX.md` | 6 | step11_pixel_score — Pixel Attribution |
 | `step12_proverka_big_analytics/` | `step12_proverka_big_analytics/INDEX.md` | 6 | step12_proverka_big_analytics — ClickHouse quality gate |
 | `step13_arrival/` | `step13_arrival/INDEX.md` | 7 | step13_arrival — CLAUDE.md |
@@ -89,7 +89,7 @@ Read the nearest child index first; use this file only to choose the right area.
 | `step7_finalize/` | `step7_finalize/INDEX.md` | 6 | step7_finalize — ClickHouse Finalize |
 | `step8_stats/` | `step8_stats/INDEX.md` | 9 | step8_stats — Статистика ClickHouse (step8) + отдельные Postgres drift-снимки |
 | `step_cron_night/` | `step_cron_night/INDEX.md` | 20 | CLAUDE.md — step_cron_night v6_ch |
-| `tests/` | `tests/INDEX.md` | 28 | INDEX — tests |
+| `tests/` | `tests/INDEX.md` | 31 | INDEX — tests |
 
 ## areas without child index
 

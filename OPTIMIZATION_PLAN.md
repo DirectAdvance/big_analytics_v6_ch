@@ -298,7 +298,9 @@ pipeline должен показать, трогать ли `Dim_Site`, stage `D
 ## Порядок исполнения и гейты
 
 Маршрут: правки — исполнитель, приёмка — `director` (исполнитель себя не принимает), деплой —
-контракт `/deploy-victory` (scp → md5 → `py_compile` → прогон).
+контракт `/deploy-victory` (scp → md5 → `py_compile` → прогон) — ⚠️ скилл зашит на v5-пути
+(`work/big_analytics_v5/` → `~/big_analytics_v5`); для v6_ch тот же контракт выполняется вручную
+в `~/big_analytics_v6_ch` c `~/venv-v6`, см. `RUNBOOK.md` §3a.
 
 | Шаг | Прогон | Гейт |
 |---|---|---|

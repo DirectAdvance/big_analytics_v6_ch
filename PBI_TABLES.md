@@ -201,9 +201,10 @@ ClickHouse. `type_placement_ru` теперь маппится внутри view;
 > является compatibility view через `Dim_PlacementFeed`.
 >
 > **Authoritative-источник списка** — массив `_ALL_TABLES` в
-> [`refresh_powerbi.py`](refresh_powerbi.py) (строки 193–204). Именно эти таблицы
-> триггерятся на refresh датасета в Power BI Service после прогона пайплайна
-> ([`pipeline_powerbi.py`](pipeline_powerbi.py) → `refresh_powerbi(tables=_ALL_TABLES)`).
+> [`refresh_powerbi.py`](refresh_powerbi.py) (строки 48–59, 25 таблиц). В v6_ch эти таблицы
+> триггерятся на refresh датасета в Power BI Service отдельным подпроцессом `cron_run.py`
+> (`refresh_powerbi.py --no-notify`, запускается после успешного `pipeline.py`) — файла
+> `pipeline_powerbi.py` в этом репозитории нет, он существует только в `big_analytics_v5`.
 > Если список в коде изменится — обновить и этот файл.
 
 **Факты legacy/v5 в БД проверены:** 2026-06-04 (read-only, `ad_analytics_bi` на Victory `103.88.240.90`, роль `bi_analytic`).
@@ -350,10 +351,13 @@ egress Victory ~2 МБ/с; параллелизм 4 потока даёт лиш
 общие для `big_analytics_full` и `analytics_report_placement` (12 ГБ, тот же паттерн).
 После cutover: дроп материализации full/unified (−~10 ГБ на сервере), обновить `_ALL_TABLES`.
 
-**Текущий `_ALL_TABLES` (refresh_powerbi.py ~193-200):** big_analytics_full, Dim_Date,
-Dim_Campaign, Dim_AdGroup, Dim_Site, analytics_report_placement, direct_history,
-check_utm_fuck_direct, yandex_direct_korrektirovki, yandex_direct_404_errors,
-pixel_score, yandex_direct_cookie_analytics_website_pages.
+**`_ALL_TABLES` на момент этого v5-плана (старый PostgreSQL `refresh_powerbi.py`, ~193-200):**
+big_analytics_full, Dim_Date, Dim_Campaign, Dim_AdGroup, Dim_Site, analytics_report_placement,
+direct_history, check_utm_fuck_direct, yandex_direct_korrektirovki, yandex_direct_404_errors,
+pixel_score, yandex_direct_cookie_analytics_website_pages — 12 таблиц. Не путать с текущим
+v6_ch `refresh_powerbi.py:48-59` (25 таблиц, включает `fact_vk_ads`, `fact_adformat_spend`,
+`fact_criterion_spend`, `dim_criterion`, `fact_region_spend`/`_zayavki`, `Dim_PlacementFeed`,
+`fact_direct_feed_funnel`, минус-снапшот, `fact_ml_korrektirovki` — см. §0).
 
 ---
 

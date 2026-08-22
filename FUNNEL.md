@@ -114,9 +114,16 @@ dobro            = reason category approved
 
 ## Проверка маппингов: crm_mappings_check
 
-Модуль `crm_mappings_check/check.py` запускается автоматически после step12. Считает 3 сверки, но
-Telegram-отчёт (с 2026-08-14) шлёт только 2 секции — **UNUSED** остаётся в логе (Семён не хочет шум
-по неиспользуемым маппингам), в Telegram не идёт:
+⚠️ **v6_ch: модуль не подключён к пайплайну.** `crm_mappings_check/check.py` — PostgreSQL/v5-код
+(`run(conn, ...)` на `local_leads_all`/`local_crm_statuses`, свой докстринг говорит "вызывается из
+pipeline.py / fast_pipeline.py"), но в `pipeline.py`/`cron_run.py` v6_ch на него нет ни одного
+вызова (grep 2026-08-22: только сам файл и `tests/test_telegram_notifications.py`). Живые проверки
+в v6_ch — `step3_build_sources/step3.py::check_crm_mapping_coverage()` (source_type без ключа в
+`reference_data.crm_status_mapping` — вызывается ВНУТРИ `step3.run()`, не после step12) и
+`check_code_status_categories()` (fail-fast на статус без категории в `CODE_STATUS_CATEGORY`).
+
+Ниже — описание PostgreSQL-модуля (3 сверки, Telegram-отчёт с 2026-08-14 шлёт только 2 секции —
+**UNUSED** остаётся в логе), не действует для активного ClickHouse-контура:
 1. (лог, не в Telegram) **UNUSED** — маппинги в `reference_data.crm_status_mapping` без записей в leads
 2. **UNMAPPED status** — статусы в `leads.status` без маппинга в `reference_data.crm_status_mapping`/`CODE_STATUS_CATEGORY`
 3. **UNMAPPED reason** — значения в `leads.reason` без маппинга
@@ -158,7 +165,7 @@ GROUP BY lead_record_id
 - `priezd` Маркар включает визитные gsheet-статусы из патча и `sale` через auto-merge
 - После step1 → патченые статусы попадают в `ad_analytics.raw_leads` / `raw_calls`
 
-**Маппинг ID:** `link = 'https://crm.marcar.ru/leads/409449'` → `REGEXP_REPLACE(link, '^.+/', '') = '409449'` = `local_leads_all.source_record_id`
+**Маппинг ID:** `link = 'https://crm.marcar.ru/leads/409449'` → `replaceRegexpOne(link, '^.+/', '') = '409449'` = `leads_all.source_record_id` (`raw_data.leads_all` в v6_ch, не `local_leads_all` — та таблица из v5/PostgreSQL)
 
 **Не патчатся:** ссылки `plex-crm.ru` или любые не `crm.marcar.ru`.
 

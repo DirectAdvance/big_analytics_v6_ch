@@ -1,10 +1,14 @@
-# DOD — Definition of Done, big_analytics_v5
+# DOD — Definition of Done, big_analytics_v6_ch
 
 <!-- v6-scope-banner -->
 > 🧭 **Область в v6_ch (2026-08-15).** Чеклист унаследован от v5/PostgreSQL и по смыслу
 > действует, но команды и объекты читать как ClickHouse: `psql`/`VACUUM`/`EXPLAIN ANALYZE` →
 > MCP `clickhouse-victory` и `config/ch_db.get_client()`; `ad_analytics_bi` → `ad_analytics`;
 > гейт — `data_check/verify_big_analytics.py` (`0=PASS`, `1=FAIL`, `2=crash`).
+> ⚠️ Скилы `ba5-golden-check` и `deploy-victory` (упомянутые ниже как «чем проверяется») жёстко
+> зашиты на `work/big_analytics_v5/`/`~/big_analytics_v5` и v6_ch не обслуживают: golden-гейт
+> запускать напрямую (`.venv/bin/python3 data_check/verify_big_analytics.py`), деплой — вручную
+> по ритуалу `RUNBOOK.md` §3a.
 
 > Задача РЕАЛЬНО готова только когда пройден весь чеклист своего типа И своего источника.
 > «Должно работать» — не DoD. DoD = измеренный факт.
@@ -26,12 +30,15 @@
 | Расход Кудерко: `25 422 774.00 ± 100 ₽` | verify блок 1 PASS; эталон — `GOLDEN_BASELINE.md` |
 | Продажи Кудерко: floor ≥ 54 | verify блок 1 PASS |
 
-**Инструмент «всё за один запуск»:**
+**Инструмент «всё за один запуск» (v6_ch):**
 ```bash
-ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 data_check/verify_big_analytics.py"
+.venv/bin/python3 data_check/verify_big_analytics.py
+# или на Victory:
+ssh victory "cd ~/big_analytics_v6_ch && ~/venv-v6/bin/python3 data_check/verify_big_analytics.py"
 # exit 0 = PASS, 1 = FAIL, 2 = crash
 ```
-Скил: `/ba5-golden-check` — справка по блокам и интерпретации.
+Скил `/ba5-golden-check` — справка по блокам/интерпретации, написан под v5-гейт; блоки/пороги
+v6_ch читать по `GOLDEN_BASELINE.md` этого репозитория, не по числам скила.
 
 ---
 
@@ -71,7 +78,9 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 data_check/verify_big_a
 
 - [ ] **py_compile чистый**: `python3 -m py_compile путь/к/файлу.py` — exit 0, stderr пустой. (Если есть ruff: `ruff check --select E9,F путь/к/файлу.py`.)
 - [ ] **Маркер патча** в коде (строка-комментарий вида `# PATCH_NAME_2026-MM-DD`) — для grep-верификации доезда на Victory.
-- [ ] **Деплой через `deploy-victory`**: `python3 scripts/deploy_victory.py <файл> --marker <маркер>` — md5 Mac==Victory, grep-маркер найден, py_compile remote OK.
+- [ ] **Деплой**: скил `deploy-victory` / `scripts/deploy_victory.py` жёстко зашит под `work/big_analytics_v5/`
+  (`REMOTE_BASE`/`LOCAL_PREFIX`) и v6_ch файлы не принимает — деплоить вручную по ритуалу
+  `RUNBOOK.md` §3a (scp → md5 Mac==Victory → grep-маркер → py_compile на `~/venv-v6`).
 - [ ] **Не запускать прогон до подтверждения доезда** (md5 совпал + маркер найден на Victory).
 - [ ] **После прогона — verify**: `ba5-golden-check` (exit 0). Если verify недоступен (таблицы TRUNCATE-нуты) — golden до cleanup, зафиксировать в STATE.md.
 - [ ] **Соседние шаги не затронуты**: описать какие шаги/поля НЕ трогались (в отчёте oleg_programmer).
@@ -80,25 +89,25 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 data_check/verify_big_a
 
 ---
 
-### 1.3 build_star.py (пересборка звёздной схемы)
+### 1.3 star_refactor/build_star.py (пересборка звёздной схемы)
 
-**Целевая метрика:** `public.fact_big_analytics` строки и суммы совпадают с `big_analytics_full` по расходу/воронке.
+**Целевая метрика:** `ad_analytics.fact_big_analytics` (ClickHouse) строки и суммы совпадают с `big_analytics_full` по расходу/воронке.
 
 **Чеклист:**
 
-- [ ] **py_compile**: `python3 -m py_compile build_star.py` — OK.
+- [ ] **py_compile**: `python3 -m py_compile star_refactor/build_star.py` — OK.
 - [ ] **Деплой через `deploy-victory`** с маркером — md5 Mac==Victory подтверждён ДО запуска.
 - [ ] **verify --full блок 12** PASS (star-сверка: `fact_big_analytics` vs unified).
 - [ ] **verify блок 1 PASS** — расход Кудерко в допуске (star-прогон не должен сдвинуть расход).
-- [ ] **VIEW vs TABLE решение**: если новый объект — VIEW при чистой проекции без JOIN/агрегации (экономия диска, быстрее деплой); TABLE — только при нужде в BRIN/lz4.
-- [ ] **Нет лишних TABLE-копий**: `\dt public.*` на Victory — нет дублей star-таблиц из прошлых итераций.
+- [ ] **VIEW vs TABLE решение**: если новый объект — VIEW при чистой проекции без JOIN/агрегации (экономия диска, быстрее деплой); TABLE — только при нужде в MergeTree/индексах.
+- [ ] **Нет лишних TABLE-копий**: `SHOW TABLES FROM ad_analytics` (ClickHouse) — нет дублей star-таблиц из прошлых итераций.
 - [ ] ⚠️ **НЕ запускать build_star.py с Victory-версией без md5-проверки** (инцидент 2026-06-07: стале-код затёр ручные DB-фиксы).
 
 **Чем проверяется:** `ba5-golden-check --full --no-star` (быстро), затем `--full` (с блоком 12).
 
 ---
 
-### 1.4 corrections.py (apply — правка данных между step3 и step4)
+### 1.4 corrections.py (apply — правка данных; в v6_ch `pipeline.py` идёт после step4 и step3, шаг 31)
 
 **Целевая метрика:** расход Кудерко `25 422 774.00 ± 100 ₽` (rule1 Кудерко — главный флаг работы corrections).
 
@@ -106,8 +115,11 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 data_check/verify_big_a
 
 - [ ] **Механика rule объяснена** — какой rule срабатывает, на каком срезе строк, что меняет.
 - [ ] **py_compile**: `python3 -m py_compile corrections.py` — OK.
-- [ ] **Rollback в `_interim_vacuum`**: убедиться что `vac.rollback()` на месте (KNOWN_ISSUES #14 — без него autocommit ломает транзакцию apply и rule1 не отрабатывает).
-- [ ] **pipeline.py не глушит падение**: corrections.apply() НЕ должен проходить молча при ошибке — проверить лог прогона на `WARNING corrections` (KNOWN_ISSUES: pipeline ловит исключение как warning).
+- [ ] `_interim_vacuum` (PostgreSQL-only fix, KNOWN_ISSUES архив #14) в v6_ch `corrections.py` не
+  существует — ClickHouse не требует VACUUM/rollback-обвязки, пункт снят.
+- [ ] **pipeline.py корректно валит прогон**: в v6_ch `corrections` — обычный шаг `STEPS` (label
+  `corrections`), `run_step()` ловит исключение, пишет `FAIL` в `data_quality_log` и останавливает
+  пайплайн (`failed=True; break`) — падение НЕ проходит молча, в отличие от v5.
 - [ ] **Деплой через `deploy-victory`** + маркер + md5.
 - [ ] **Прогон + verify блок 1 PASS** — расход в допуске (главный индикатор rule1 Кудерко).
 - [ ] **Строки rule1 в логе**: в stdout pipeline.py должна быть строка вида `Rule 1 (Кудерко) = N строк` с N > 90 000 (если меньше — rule1 не отработал).
@@ -131,7 +143,7 @@ ssh victory "cd ~/big_analytics_v5 && ~/venv/bin/python3 data_check/verify_big_a
 - [ ] **Запись применилась**: перечитать файл после правки; при root-owned файлах — проверить права.
 - [ ] **Incremental refresh — ЗАПРЕЩЁН** (по всему проекту). Не предлагать, не включать.
 
-**Чем проверяется:** pbip-editor агент; визуальная проверка в Power BI Desktop после публикации.
+**Чем проверяется:** `pbip_editor` агент; визуальная проверка в Power BI Desktop после публикации.
 
 ---
 
@@ -200,7 +212,8 @@ GROUP BY step ORDER BY last_ok DESC;
 - [ ] `verify_big_analytics.py` exit 0 (все 14 блоков PASS).
 - [ ] Свежесть: `last_ok step8` не старше 24 часов (или объяснение почему старше — by-design).
 - [ ] Нет `pipeline_degraded warning` в `data_quality_log` без объяснения.
-- [ ] Диск Victory `Use% < 85%` (иначе — чистка bloat перед прогоном, `work-ba-check` блок 2).
+- [ ] Диск Victory `Use% < 85%` (иначе — чистка bloat перед прогоном; для v6_ch Victory хранит
+  только код/логи, тяжёлые данные — в Yandex Cloud ClickHouse, см. `CLAUDE.md`).
 
 ---
 
@@ -208,18 +221,19 @@ GROUP BY step ORDER BY last_ok DESC;
 
 Что это: датасет «Victoryanalyst» — Import-режим, обновляется через API-рефреш после прогона.
 
-**Как проверить свежесть:**
+**Как проверить свежесть (v6_ch):**
 `refresh_powerbi()` (`refresh_powerbi.py`) НЕ пишет статус в `data_quality_log` — статус refresh
-виден только в логе прогона (`pipeline_powerbi.py`/`refresh_powerbi.py` stdout, ищи `Completed`/
-`Power BI: requestId`) и в Telegram-алертах при провале. `data_quality_log step='build_unified'`
-проверяется ДО рефреша (гейт в `pipeline_powerbi.py:253-258`) — `status=ok` там подтверждает только,
-что рефреш разрешён стартовать, а НЕ что цифры доехали до датасета. Проверять по логу прогона, не SQL:
+виден только в логе прогона (`refresh_powerbi.py` stdout, ищи `Completed`/`Power BI: requestId`)
+и в Telegram-алертах при провале. Гейт — простой: `cron_run.py::main()` запускает
+`refresh_powerbi.py` только если `pipeline.py` вернул код `0` (нет отдельного
+`data_quality_log step='build_unified'` чек-гейта, как в v5 `pipeline_powerbi.py`). Проверять по
+логу прогона, не SQL:
 ```bash
-ssh victory "tail -n 50 /tmp/pipeline_powerbi*.log | grep -i 'Power BI\|Completed'"
+ssh victory "tail -n 50 ~/big_analytics_v6_ch/logs/cron_*.log | grep -i 'Power BI\|Completed'"
 ```
 
 **DoD-чеклист для задач связанных с PBI:**
-- [ ] В логе прогона `refresh_powerbi.py`/`pipeline_powerbi.py` — `Completed`, без `⚠️`/`🚨` Telegram-алертов.
+- [ ] В логе прогона `refresh_powerbi.py` — `Completed`, без `⚠️`/`🚨` Telegram-алертов.
 - [ ] В Power BI Desktop: последнее обновление датасета совпадает со временем рефреша.
 - [ ] Визуально: значение по Кудерко в отчёте совпадает с golden SQL (расход ≈ 25.4M, продажи ≥ 54).
 - [ ] Отчёт открывается без ошибок «источник данных недоступен».
@@ -232,11 +246,11 @@ ssh victory "tail -n 50 /tmp/pipeline_powerbi*.log | grep -i 'Power BI\|Complete
 |------------|--------------------|--------------------|
 | Атрибуция / пиксель | `ba5-golden-check` блоки 6, 10, 1 | MCP postgres-victory (дробность) |
 | step*.py ETL | `ba5-golden-check` (все блоки) | `deploy-victory` (доезд) |
-| build_star.py | `ba5-golden-check --full` блок 12 | `\dt public.*` (лишние TABLE) |
+| build_star.py | `ba5-golden-check --full` блок 12 | `SHOW TABLES FROM ad_analytics` (лишние TABLE) |
 | corrections.py | `ba5-golden-check` блок 1 | Лог прогона (rule1 строки) |
-| PBIP / Power BI | pbip-editor агент | Визуальная проверка в PBI Desktop |
+| PBIP / Power BI | `pbip_editor` агент | Визуальная проверка в PBI Desktop |
 | Сверка с GSheets | `/crm-reconcile` (reconcile.py) | `SHEET_RECONCILE_METHODOLOGY.md` |
-| Витрина PostgreSQL | `verify_big_analytics.py` | `work-ba-check` (диск, статус) |
+| Витрина PostgreSQL | `verify_big_analytics.py` | диск/логи Victory вручную (`RUNBOOK.md`) |
 | Свежесть PBI | лог прогона `refresh_powerbi.py` (`Completed`) | PBI Desktop последнее обновление |
 
 ---

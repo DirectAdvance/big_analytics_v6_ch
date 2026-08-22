@@ -44,14 +44,15 @@ step3. Не подтверждать наличие этого фильтра б
 Часть SEO-лидов имеет `utm_source='seo'`, `utm_medium='organic'` — без фикса
 они попадают в `big_analytics_direct` вместо `big_analytics_seo`.
 
-В CTE `leads_direct` — исключение:
+В `_direct_lead_universe_filter()` (`step3_build_sources/step3.py`, применяется в `lead_scored`
+внутри `_build_direct_sql`) — исключение (симметрично шире, чем только seo/organic):
 ```sql
-AND NOT (l.utm_source = 'seo' AND l.utm_medium = 'organic')
+AND NOT (ifNull(utm_source, '') = '' OR (utm_source = 'seo' AND utm_medium = 'organic'))
 ```
-В CTE `leads_seo` — включение:
+В `_build_seo_sql()` (та же функция строит `big_analytics_seo`) — включение:
 ```sql
-WHERE (utm_source IS NULL OR utm_source = '')
-   OR (utm_source = 'seo' AND utm_medium = 'organic')
+WHERE (ifNull(utm_source, '') = '')
+   OR (utm_source = 'seo' AND ifNull(utm_medium, '') = 'organic')
 ```
 
 ---
@@ -93,35 +94,28 @@ CTE объединяет `raw_leads` + `raw_calls` через UNION ALL — чт
 
 **Причина:** step1 кладёт звонки в `raw_calls`, не в `raw_leads`. Без UNION ALL такие домены получали NULL.
 
-### Постпроцессинг: заполнение по салону (step4)
+### v6_ch: без UPDATE-постпроцессинга по салону
 
-После UNION ALL — UPDATE: NULL "Название crm" заполняется значением из другой строки того же салона. Закрывает случай когда у домена нет лидов вообще, но у другого домена того же салона CRM есть.
-
-Домены без CRM вообще ("Ай Кар" и др.) — остаются NULL, это ожидаемо.
-
-### Постпроцессинг: заполнение по салону в load_crop_to_big_analytics.py (апрель 2026)
-
-`load_crop_to_big_analytics.py` вставляет строки **после** step4 → backfill step4 уже не запустится для новых строк. Поэтому тот же backfill добавлен в конец `main()` этого скрипта:
-
-```sql
-UPDATE public.big_analytics_full f
-SET "Название crm" = src.crm_name
-FROM (
-    SELECT "салон", MAX("Название crm") AS crm_name
-    FROM public.big_analytics_full
-    WHERE "Название crm" IS NOT NULL
-    GROUP BY "салон"
-) src
-WHERE f."Название crm" IS NULL AND f."салон" = src."салон"
-```
-
-Покрывает ~774 строки Google Sheets посевов. "Ай Кар" остаётся NULL (нет CRM нигде).
+⚠️ **Отличие от v5:** v5 добивал NULL `"Название crm"` UPDATE-бэкфиллом по одноимённому салону
+(в step4, затем повторно в `load_crop_to_big_analytics.py`, которого в v6_ch нет — см. Block I). В
+v6_ch NULL не возникает вовсе: `step3_build_sources/step3.py::_crm_name_expr()` резолвит
+`"Название crm"` через `CRM_NAME_BY_SOURCE_TYPE`-маппинг и в конце `ifNull(nullIf(..., ''), 'Не указана')`
+— домен без известной CRM получает литерал `'Не указана'`, не `NULL`, и не наследует значение от
+другого домена того же салона.
 
 ---
 
-## Block G2: step4 — постпроцессинговые UPDATE (после сборки big_analytics_full)
+## Block G2: постпроцессинговые UPDATE (ЦЕЛИКОМ LEGACY v5/PostgreSQL, весь блок до Block H)
 
-Выполняются в `step6_build_full/step6.py` после UNION ALL, каждый в отдельном `with conn.cursor()` + `conn.commit()`.
+⚠️ **Проверено по коду 2026-08-22: ни одного из UPDATE ниже в v6_ch нет.** `big_analytics_full` —
+ClickHouse **View** (не таблица, `UPDATE`/`CREATE INDEX`/`_tmp_salon_aggs` физически невозможны).
+Реальный v6_ch: `step6_build_full/step6.py` строит calls ОДНИМ инлайн-SELECT в `_calls_select()` —
+`campaign_status` для звонков всегда `NULL` (нет backfill по домену с активной Директ-кампанией),
+`направление` для звонков всегда литерал `'Комплекс'` (не NULL с условным `'Контекст'`), `источник`
+для обычных звонков — `multiIf(gs.status='SEO Flow','SEO Flow', gs.status='SEO','SEO','Контекст')`,
+для посевных — `'Посевы_Звонки'`. `"Название crm"` NULL не возникает (см. правку выше — литерал
+`'Не указана'`). `manager_login`-бэкфилл по салону/домену не портирован. Оставлено как исторический
+контекст v5, не инструкция к действию для v6_ch.
 
 ### campaign_status для звонков
 
@@ -212,59 +206,75 @@ ANALYZE big_analytics_full
 
 ## Block H: менеджер = 'Михаил Яковлев' для домена lotos91.ru
 
-**Файл:** `corrections.py`, функция `_fix_missing_managers()`. **Живой код** — вызывается из
-`corrections.py::apply()` (между step3 и step4), рядом с `_fix_account_domain_backfill`.
+**Файл:** `corrections.py`, константа `_MISSING_MANAGERS`, инлайн-фрагмент помечен комментарием
+`# ── _fix_missing_managers ──` внутри `_stage6_labels()` (это НЕ отдельная вызываемая функция —
+v6_ch порт выражает все правила v5 как SQL-выражения одной пересборки, см. заголовок файла).
+**Живой код** — участвует в `corrections.py::apply()` (после step4 и step3 — порядок в
+`pipeline.py::STEPS`: step4→step3→corrections→step5).
 
-Ручной патч домена, чей `sales_manager` отсутствует в `local_gsheet_sites`:
+Ручной патч домена, чей `менеджер` отсутствует в `local_gsheet_sites`:
 `lotos91.ru` относится к аккаунту `avto_0358` (АвтоЛидер) — тот же менеджер, что и у аккаунта
 `avto_0083` (Лидер).
 
+```python
+_MISSING_MANAGERS = (("lotos91.ru", "Михаил Яковлев"),)
+```
 ```sql
-UPDATE public.big_analytics_direct
-SET менеджер = 'Михаил Яковлев'
-WHERE domain = 'lotos91.ru'
-  AND (менеджер IS NULL OR менеджер = '')
+-- multiIf(domain_key = 'lotos91.ru', 'Михаил Яковлев', s.`менеджер`), применяется только когда
+if(s.`_source_table` = 'direct' AND ifNull(trim(s.`менеджер`), '') = '',
+   multiIf(domain_key = 'lotos91.ru', 'Михаил Яковлев', s.`менеджер`),
+   s.`менеджер`)
 ```
 
-⚠️ **Отдельно (не путать с патчем выше):** таблица `gsheet_vse_klienty`/`local_gsheet_vse_klienty` и
-функция `_patch_vse_klienty_manager()` из `step0_sync_local/step0.py` **удалены из кода** — их больше
-нет ни в `config/settings.py` (список GSHEET-синков), ни в `step0.py`. Основной источник поля
-`менеджер` теперь — `T_GSHEET_AUTOSALONY` (`local_gsheet_autosalony_clients`), у которой колонка
-`менеджер` есть по умолчанию. `step3_build_sources/step3.py` берёт `COALESCE(NULLIF(TRIM(gs.sales_manager),''),
-NULLIF(TRIM(auto.менеджер),''))` через `LEFT JOIN {T_GSHEET_AUTOSALONY} auto ON gs.client_id =
-auto.id_салона` (см. например `step3.py:661-663`). `local_gsheet_vse_klienty` в БД осталась как
-замороженные данные (22 строки, НЕ синкается) — см. `DB_TABLES.md`.
+⚠️ **v6_ch отличие:** `gsheet_vse_klienty`/`local_gsheet_vse_klienty` (PostgreSQL, v5) в ClickHouse-коде
+v6_ch не используется вовсе — ни `step0_sync_local/step0.py` (чистый CH-preflight, никаких
+UPDATE/патчей менеджера), ни `step3_build_sources/step3.py` её не читают. Единственный источник поля
+`менеджер` в v6_ch — `reference_data.gsheet_sites.sales_manager` (`step3.py:1137`, `_gs_pick_expr`),
+единственный оверлей поверх него — ручной патч `_MISSING_MANAGERS`/`lotos91.ru` из Block H выше.
+`local_gsheet_vse_klienty` в Victory PostgreSQL осталась как замороженные данные (22 строки, НЕ
+синкается ни в v5, ни в v6_ch) — см. `DB_TABLES.md`, `SPEC.md` §«Признано ненужным для v6».
 
 ---
 
-## Block H2: патч статусов Маркар из Google Sheets (step0)
+## Block H2: патч статусов Маркар из Google Sheets (v6_ch: step1, не step0)
 
-**Файл:** `step0_sync_local/step0.py`, функция `_patch_marcar_statuses()`.
+**Файл:** `step1_load_raw/step1.py` (маркер `MARCAR_GSHEET_STATUS_2026-08-05`), функции
+`_marcar_priority_expr`, `_marcar_gsheet_subquery`, `_marcar_join_sql`,
+`_marcar_patched_status_expr`. **Отличие от v5:** в v5 это был `UPDATE` по локальной копии
+`local_leads_all` внутри `step0_sync_local/step0.py::_patch_marcar_statuses()`. `raw_data.leads_all`
+в v6_ch — реплика CRM, писать в неё нельзя, поэтому патч сдвинут на шаг вниз и выражен JOIN +
+`multiIf` при сборке `raw_leads`/`raw_calls` (`step0.py` в v6_ch — чистый ClickHouse-preflight,
+никаких UPDATE не делает, см. Block H2 контекст выше).
 
-**Проблема:** Маркар ведёт Google Sheet «Маркар Доезды», где фиксирует факт продажи/визита. В `local_leads_all` у тех же лидов статус остаётся «Корзина» — CRM не синхронизирует обратно.
+**Проблема:** Маркар ведёт Google Sheet «Маркар Доезды» (`reference_data.gsheet_priezdi_marcar`),
+где фиксирует факт продажи/визита. У тех же лидов в CRM статус остаётся «Корзина» — CRM не
+синхронизирует обратно.
 
-**Решение:** после синка в step0 — UPDATE статуса из gsheet в `local_leads_all` по 4 статусам с приоритетом
-`_MARCAR_STATUS_PRIORITY` (`Продажа`=0 > `Дошел в КО`=1 > `Одобрение`=2 > `Приехал`=3); CRM-статус не
-перезаписывается «вниз» по воронке (если уже `'Продажа'`, патч `'Приехал'` не применится):
+**Решение:** статус патчится ВЫРАЖЕНИЕМ (не UPDATE) при построении `raw_leads` (`step1.py:426`) и
+`raw_calls` (`step1.py:530`), по 4 статусам с приоритетом `MARCAR_STATUS_PRIORITY`
+(`Продажа`=0 > `Дошел в КО`=1 > `Одобрение`=2 > `Приехал`=3, статус вне списка = 9999); CRM-статус
+не перезаписывается «вниз» по воронке (строго выше приоритетом — иначе исходный статус остаётся):
 
 ```sql
-UPDATE public.local_leads_all l
-SET status = pm.status
-FROM public.local_gsheet_priezdi_marcar pm
-WHERE pm.link LIKE '%crm.marcar.ru%'
-  AND pm.link ~ '^https?://.+/[0-9]+$'
-  AND pm.status IN ('Продажа', 'Дошел в КО', 'Одобрение', 'Приехал')
-  AND l.source_record_id = REGEXP_REPLACE(pm.link, '^.+/', '')
-  AND l.source_type = 'marcar_crm_excel'
-  AND l.status IS DISTINCT FROM pm.status
+if(
+    l.source_type = 'marcar_crm_excel'
+    AND ifNull(mp.status, '') != ''
+    AND {приоритет(mp.status)} < {приоритет(l.status)},
+    CAST(mp.status, 'Nullable(String)'),
+    l.status
+)
 ```
+(`mp` — `LEFT JOIN` на подзапрос по `reference_data.gsheet_priezdi_marcar`, см.
+`_marcar_gsheet_subquery()`.)
 
-**4 статуса с приоритетом** (не только 'Продажа') — недостающие маппинги `Дошел в КО`/`Одобрение` в
-`local_crm_statuses` добавляет `_ensure_marcar_crm_statuses()` перед патчем.
+**Маппинг ID:** `link` = `https://crm.marcar.ru/leads/409449` → число после `/` =
+`leads_all.source_record_id`. Только ссылки `crm.marcar.ru` (не `plex-crm.ru`), regex
+`^https?://.+/[0-9]+$`.
 
-**Маппинг ID:** `link` = `https://crm.marcar.ru/leads/409449` → число после `/` = `local_leads_all.source_record_id` (TEXT). Только ссылки `crm.marcar.ru` (не plex-crm.ru).
-
-**Порядок вызова в run():** `_patch_crm_statuses` (закомментирован с 2026-05-20, crm_statuses уже верный) → `_patch_marcar_statuses`. Выполняется до step1 → корректные статусы попадают в raw_leads.
+**Категории статусов:** в v5 недостающие маппинги добавляла `_ensure_marcar_crm_statuses()` в
+`local_crm_statuses`; в v6_ch нет прав на запись в `raw_data.*`, поэтому категории заданы кодом —
+`step3_build_sources/step3.py::CODE_STATUS_CATEGORY` (маркер `CODE_STATUS_CATEGORY_2026-08-06`),
+проверяется fail-fast функцией `check_code_status_categories()`.
 
 ---
 
@@ -323,38 +333,49 @@ CASE WHEN status = 'Приедет' THEN 1 ELSE 0 END AS priedet
 
 ## Block I: маркеры строк для отзывов и посевов
 
+⚠️ **v6_ch отличие:** отдельных лоадеров `load_reviews_to_big_analytics.py` /
+`load_crop_to_big_analytics.py` в дереве нет — механика консолидирована прямо в
+`step3_build_sources/step3.py` (отзывы: `_fetch_reviews_rows_from_postgres` + `_insert_reviews_from_postgres`)
+и `step10_crop_targeting/step10.py` (Telegain/Google Sheets посевная ветка `big_analytics_crop_targeting`).
+`big_analytics_crop_targeting` пишется ДВУМЯ ветками с разными маркерами: `step3.py::_build_crop_sql`
+(UTM-классифицированные посевные лиды из `raw_leads`) и `step10.py` (Telegain API + gsheets-аккаунты).
+
 ### manager_login
 
-| Таблица / файл | Значение manager_login |
+| Таблица / писатель | Значение manager_login |
 |----------------|----------------------|
-| `big_analytics_reviews` (step3 `_build_reviews_sql`) | `'отзывы'` |
-| `big_analytics_crop_targeting` (step3 `_build_crop_sql`) | `'посевы'` |
-| `big_analytics_full` (load_reviews_to_big_analytics.py) | `'отзывы'` |
-| `big_analytics_full` (load_crop_to_big_analytics.py) | `'посевы'` |
+| `big_analytics_reviews` (step3 `_fetch_reviews_rows_from_postgres`) | `'отзывы'` |
+| `big_analytics_crop_targeting` (step3 `_build_crop_sql`) | `gs.directologist` (НЕ маркер-литерал) |
+| `big_analytics_crop_targeting` (step10 Telegain/gsheets ветки, step10.py:715/813) | `'посевы'` |
 
-**Зачем:** ранее `manager_login = NULL` → строки неотличимы от обычных. Теперь фильтрация по `manager_login IN ('отзывы','посевы')` работает.
+**Зачем:** фильтрация по `manager_login IN ('отзывы','посевы')` отличает отзывные/посевные строки
+от обычных direct-строк — работает для reviews всегда, для crop_targeting только для строк step10.
 
-### тип_заявки и тип_сайта для пост-пайплайн лоадеров (апрель 2026)
+### тип_заявки и тип_сайта
 
-| Файл | тип_заявки | тип_сайта |
+| Писатель | тип_заявки | тип_сайта |
 |------|-----------|----------|
-| `load_reviews_to_big_analytics.py` | `'отзывы'` | `'отзывы'` |
-| `load_crop_to_big_analytics.py` | `'заявки'` | `'посевы'` |
+| step3 `_fetch_reviews_rows_from_postgres` (reviews) | `'Отзывы'` | `'отзывы'` |
+| step3 `_build_crop_sql` (crop, UTM-ветка) | `_claim_type_expr(...)` (`'Заявка'`/`'Звонки_CDR'`/NULL) | `gs.site_type` |
+| step10.py (crop, Telegain/gsheets ветка) | `'Заявки'` | `gs.site_type`/`gd.site_type` (VK Ads-ветка — NULL) |
 
-Ранее оба поля были `NULL` → строки с расходами не имели типа заявки. `тип_заявки='заявки'` — посевы-заявки учитываются наравне с прямыми. Канал определяется через `направление='посевы'` и `_source_table='crop_targeting'`. Фильтрация посевов: `"тип_сайта" IN ('отзывы','посевы')` или `направление='посевы'`.
+Канал посевов определяется через **`источник`** (`Посевы_*`) и `_source_table IN
+('crop_targeting','tp8','tp9','tp10','social_посевы')`, не через `тип_сайта` и не через
+`направление` — в `направление` значений `Посевы_*` НЕТ (там только Комплекс/Пиксель/Перформ/Отзывы,
+см. [`CANON.md`](CANON.md)).
 
-**Звонки:** `тип_заявки = 'звонки'` (step4 inline SELECT) — `total_cost = NULL` для звонков, это ожидаемо.
+**Звонки:** `тип_заявки = 'Звонки'` (с заглавной; `step6_build_full/step6.py:208` inline SELECT, не step4) — `total_cost = NULL` для звонков, это ожидаемо.
 
-### big_analytics_reviews — дополнительные маркеры 'отзывы'
+### big_analytics_reviews — дополнительные маркеры
 
-В `_build_reviews_sql()` (step3) следующие колонки проставляются как `'отзывы'`:
+В `_fetch_reviews_rows_from_postgres()` (step3) следующие колонки проставляются литералами:
 
 | Колонка | Значение |
 |---------|---------|
 | `"RlAdjustmentId_total"` | `'отзывы'` |
 | `manager_login` | `'отзывы'` |
 | `"Название crm"` | `'отзывы'` |
-| `тип_заявки` | `'отзывы'` |
+| `тип_заявки` | `'Отзывы'` (с заглавной) |
 | `"тип_сайта"` | `'отзывы'` |
 | `"шаблон"` | `'отзывы'` |
 
@@ -362,20 +383,15 @@ CASE WHEN status = 'Приедет' THEN 1 ELSE 0 END AS priedet
 
 ## Block J: Нормализация салонов (corrections.py)
 
-### normalize_salons
+### `_stage5_domain_salon()` — v6_ch эквивалент v5 `normalize_salons`
 
-```python
-normalize_salons(conn, tables=None)
-# tables=None → ['big_analytics_full']  (вызов из pipeline.py после load_reviews/load_crop)
-# tables=COMPONENT_TABLES               (вызов из apply() после step3)
-```
-
-`COMPONENT_TABLES` = `big_analytics_direct`, `big_analytics_seo`, `big_analytics_pixel`, `big_analytics_telegram`, `big_analytics_reviews`, `big_analytics_crop_targeting`.
-
-### Поток нормализации
-
-1. `corrections.apply()` (между step3 и step4) → `normalize_salons(conn, COMPONENT_TABLES)` — нормализует все компонентные таблицы
-2. `pipeline.py` после `load_reviews` + `load_crop` → `normalize_salons(norm_conn)` (default) — нормализует `big_analytics_full`
+⚠️ **v6_ch отличие:** `normalize_salons(conn, tables)` (Python-функция, PostgreSQL `UPDATE` по списку
+`COMPONENT_TABLES`) в этом дереве не существует — ни этой функции, ни константы `COMPONENT_TABLES`.
+Эквивалент — `_stage5_domain_salon()` в `corrections.py`, инлайн-`multiIf`-выражение (стадия S5,
+маркер в шапке файла), применяется ОДНОЙ пересборкой `SOURCE_TABLE = ad_analytics.big_analytics_sources`
+внутри `apply()` (нет отдельного вызова после `load_reviews`/`load_crop` — тех скриптов тоже нет,
+см. Block I). `SALON_ALIASES`/`DOMAIN_SALON_MAP` ниже — актуальные константы, читаются напрямую из
+`corrections.py`.
 
 Таким образом `big_analytics_full` строится step6 уже из нормализованных данных.
 
@@ -401,6 +417,20 @@ normalize_salons(conn, tables=None)
 ---
 
 ## Block K: Звонки и SEO для не-Яндекс (посевы) доменов
+
+⚠️ **v6_ch реализация другая (функции ниже — `_add_crop_calls_sql`/`_add_crop_seo_sql`/
+`_move_tp8_to_crop` — в текущем `step3_build_sources/step3.py` не существуют, проверено grep
+2026-08-22):**
+- **Звонки:** порт живёт в `step6_build_full/step6.py` (маркер `CROP_CALLS_PARITY_2026-08-06`),
+  функция `_calls_select(lo, hi, crop=...)` с предикатом `_POSEV_CALL_DOMAIN_SQL` — крутится
+  напрямую внутри сборки `big_analytics_full`, отдельного INSERT в `big_analytics_crop_targeting`
+  для звонков 19 доменов нет.
+- **SEO:** порт живёт в `step3_build_sources/step3.py::_build_seo_sql()` — лиды 19 доменов
+  ОСТАЮТСЯ в `big_analytics_seo` (не переезжают в `big_analytics_crop_targeting`), но получают
+  `источник='Посевы_SEO'`/`поставщик='Посевы'` через оверрайд по `_CROP_ACCOUNT_DOMAIN_SUBQUERY`.
+
+Таблица `_source_table` значений и остальные детали ниже описывают ПРЕЖНЮЮ (v5) реализацию —
+сверять с кодом, не полагаться на конкретные имена функций.
 
 **Домены-источник:** `gsheets_crop_targeting_account` (19 доменов: Telegram/VK/MAX посевы без Яндекс Директ).
 
@@ -460,45 +490,22 @@ SET направление = 'посевы', _source_table = 'tp8', источн
 
 ---
 
-## Block L2: порядок выполнения шагов и Telegram-отчёт (май 2026)
+## Block L2: порядок выполнения шагов и Telegram-отчёт (май 2026, ЦЕЛИКОМ LEGACY v5/PostgreSQL)
 
-### step8 выполняется последним (deferred)
-
-`step8_stats` вынесен из STEPS-массива в отдельную константу `STEP8_INFO`. Выполняется **после всех дополнительных скриптов**: load_reviews, 404_errors, normalize_salons, cleanup_old_dates.
-
-```python
-STEPS = [(0,...), (1,...), (2,...), (3,...), (5,...), (4,...), (6,...), (7,...), (9,...), (10,...)]
-STEP8_INFO = (8, 'step8_stats', 'step8_stats.step8', 'step8_stats')
-# ... после load_reviews, 404_errors, normalize_salons, cleanup_old_dates:
-if not failed:
-    run_step(8, 'step8_stats.step8', run_id)
-```
-
-**Зачем:** step8 читает `data_quality_log` для формирования Telegram-отчёта. Если step8 в STEPS-массиве — дополнительные шаги (load_reviews и др.) ещё не выполнились → не попадают в отчёт.
-
-### step8 добавляет себя в отчёт (self-tracking)
-
-step8 не может записать своё время в `data_quality_log` перед тем как сформирует отчёт (запись делается после `run_step`). Поэтому добавляет синтетическую запись:
-
-```python
-durations = list(stats.get('step_durations', []))
-durations.append(('step8', time.perf_counter() - t0))
-stats['step_durations'] = durations
-```
-
-### sync_pixel_config логируется в data_quality_log (май 2026)
-
-`sync_pixel_config` ранее не писался в `data_quality_log` — не появлялся в Telegram-отчёте. Добавлен `log_step()` вызов в `pipeline.py`:
-
-```python
-log_step(conn, run_id, 'sync_pixel_config', 'ok', rows_affected=n, duration_sec=elapsed)
-```
-
-### Все шаги в Telegram-отчёте
-
-После исправлений в отчёте появляются шаги: `sync_pixel_config`, `load_reviews`, `404_errors`, `normalize_salons`, `cleanup_old_dates`, `step10`, `step8`.
-
-Метки в `STEP_LABELS` (step8_stats/step8.py): добавлены `'step10'`, `'load_reviews'`, `'404_errors'`, `'normalize_salons'`, `'cleanup_old_dates'`.
+⚠️ **Весь блок ниже описывает старый PostgreSQL `pipeline.py`, а не текущий v6_ch.** Проверено
+2026-08-22: `step8_stats/step8.py` в v6_ch — простой ClickHouse row-count логгер (`TABLES` + `run()`,
+без `STEP_LABELS`, без salon-группировки); `STEP8_INFO`/`load_crop_to_big_analytics.py`/
+`cleanup_old_dates` в активном дереве не встречаются — живут только в
+`archive/postgres_legacy_2026_07_31/` (напр. `fast_pipeline.py:110,630,699`, где `STEP8_INFO`
+называется `FAST_STEP8_INFO`). `STEP_LABELS` не встречается вообще нигде в `.py` — ни в активном
+дереве, ни в архиве: только в этом файле и `step8_stats/README.md:58-59`.
+`step5_build_pixel/sync_pixel_config.py` — файл на месте, но в v6_ch его никто не вызывает
+(ни `pipeline.py::STEPS`, ни соседние модули): ручная утилита, не шаг пайплайна.
+В `pipeline.py::STEPS` (см. [`PIPELINES.md`](PIPELINES.md#steps-map)) step8=8 стоит ПРОСТО ИНЛАЙН в
+общем списке, рядом с verify=900, никакого deferred-механизма через отдельную константу нет.
+Telegram-отчёт в v6_ch формирует `cron_run.py` (`build_message`/`build_steps_section`,
+`notifications/telegram.py::send_html`) поверх `data_quality_log`, а не сам `step8`.
+Оставлено как исторический контекст v5, не инструкция к действию для v6_ch.
 
 ---
 
@@ -535,27 +542,46 @@ _week_start(visit_date)  # понедельник недели: date - timedelta
 
 ## Block G: corrections.py — правила корректировок
 
-Запускается в `pipeline.py` **между шагом 3 и шагом 4**.
-Применяет правила к `public.big_analytics_direct` и `public.big_analytics_crop_targeting`, в конце — нормализацию салонов по всем компонентным таблицам.
+⚠️ **v6_ch:** запускается в `pipeline.py::STEPS` как шаг `corrections` (после step4 и step3, порядок
+step4→step3→corrections→step5). Применяется ОДНОЙ пересборкой `SOURCE_TABLE = ad_analytics.big_analytics_sources`
+(ClickHouse `multiIf`-выражения, не построчный PostgreSQL `UPDATE` по отдельным `public.*`-таблицам).
 
 **Важно:** колонка специалиста называется `"специалист"` (не `директолог`).
 
 ### Правило 1: Кудерко Семен
 
-`SET "специалист" = 'Кудерко Семен'` для строк `"Date" < '2026-04-10'` по списку ~65 аккаунтов.
-Таблицы: `big_analytics_direct` + `big_analytics_crop_targeting`.
+`специалист = 'Кудерко Семен'` для строк `Date < toDate('2026-04-10')` по списку 67 аккаунтов
+(`_KUDERKO_LOGINS` в `corrections.py`).
 
 ### Правило 1б: Сергеев Алексей
 
-`SET "специалист" = 'Сергеев Алексей'` для строк `"Date" < '2026-04-21'` (до 20 апреля включительно).
-Таблицы: `big_analytics_direct` + `big_analytics_crop_targeting`.
+`специалист = 'Сергеев Алексей'` для строк `Date < toDate('2026-04-21')` (до 20 апреля включительно)
+по списку 9 аккаунтов (`_SERGEEV_LOGINS`).
 Аккаунты: `porg-tde4jof6`, `kazan-ca-532199-z761`, `e-20074360`, `porg-wzisnv32`, `porg-rmkn7sz4`, `porg-2xphfcul`, `e-20074359`, `porg-fuko7yzw`, `e-20074361`.
 
-### Правило 1в: Питеркина Дарья (апрель 2026)
+### Правило 1в: Питеркина Дарья
 
-`SET "специалист" = 'Питеркина Дарья'` где `специалист IS NULL` для аккаунта `porg-o2lqtxk5`.
-Таблицы: `big_analytics_direct` + `big_analytics_crop_targeting`.
-Аккаунт `porg-54oakaa3` — пропускаем (нет данных о специалисте).
+⚠️ **Полнее, чем описано ранее** (проверено по коду 2026-08-22): ДВЕ ветки в `specialist_correction_expr`:
+1. `специалист = 'Питеркина Дарья'` для строк `Date < toDate('2026-06-19')` по списку **28 аккаунтов**
+   (`_PITERKINA_LOGINS`, включает `porg-o2lqtxk5`).
+2. Отдельный fallback БЕЗ ограничения по дате: `специалист = 'Питеркина Дарья'` где `специалист` пуст
+   для аккаунта `porg-o2lqtxk5` (`_PITERKINA_LOGIN`).
+
+Аккаунт `porg-54oakaa3` в текущем коде не встречается (не найден в `corrections.py`).
+
+### Правило 1д: Чепелев Никита (не документировано ранее)
+
+`специалист = 'Чепелев Никита'` для строк `Date < toDate('2026-07-17')` по списку 7 аккаунтов
+(`_CHEPELEV_LOGINS`). Матч ТОЛЬКО по `account_login` (маркер `CHEPELEV_LOGIN_ONLY_2026-08-06`),
+не по паре домен+логин — см. комментарий в коде для мотивации.
+
+⚠️ **Правила 2–4 и `_recompute_ag_parts()` ниже описывают старую PostgreSQL-реализацию.** В v6_ch
+эквивалент — `_stage3_adgroup_maps()` в `corrections.py` (S3): 7 `LEFT JOIN reference_data.gsheet_naming`
+по `ag_part1..7`, ClickHouse-выражение внутри пересборки `SOURCE_TABLE`, БЕЗ `ctid`-подзапроса (это
+PostgreSQL-специфичный системный столбец, в ClickHouse не существует) и БЕЗ отдельной
+UNLOGGED-таблицы `_tmp_ag_parts_lookup`. `local_gsheet_naming` (PostgreSQL) → `reference_data.gsheet_naming`
+(ClickHouse). tp6/tp7 → `'MK/TK'` сохранено (см. код `_stage3_adgroup_maps`, строка с комментарием
+про `_recompute_ag_parts`).
 
 ### Правило 2: Исправление AdGroupName (из v3)
 
@@ -593,20 +619,24 @@ Regex из исправленного `AdGroupName` для аккаунтов г
 
 **Обработка tp6/tp7:** строки с `tp IN ('tp6','tp7')` обновляются отдельным UPDATE: `ag_part1..7 = 'MK/TK'`, `verdict = 'ok'`. Это сохраняет поведение v1 (tp6/tp7 не проходят через lookup, даже если `adgroup_code` некорректный).
 
-> **Правило 8 `_rule8_utm_classify`** (классификация пиксель-источников в `'пиксель'`) — см. `CANON.md` → канон «направление».
+> **Правило 8 `_rule8_utm_classify`/`_UTM_PIXEL_SOURCES`** — историческое, в текущем `corrections.py`
+> не встречается (grep 2026-08-22: 0 совпадений). Живой канон пикселя — `'Пиксель'`, нормализуется
+> после step11/step13, см. `CANON.md` → канон «направление».
 
-### SPEC_FALLBACK v2→v3 — каскадное заполнение специалиста (2026-07-03)
+### SPEC_FALLBACK v2→v3 — каскадное заполнение специалиста
 
 **Правило:** пустой `"специалист"` заполняется каскадом: `directologist` → `direction_main` → `'Звонки'`/`'Без специалиста'`.
 
-**v2** (`_rule_fill_specialist_fallback` в `corrections.apply()`): покрывает строки в `COMPONENT_TABLES` на момент выполнения corrections (между step3 и step4).
+**v2** — внутри `_stage6_labels()` в `corrections.py::apply()` (стадия S6, `account_rules` +
+`coalesce(gsp.directologist, gsp.direction_main, ...)`): покрывает `SOURCE_TABLE` на момент
+выполнения corrections (после step4 и step3, до step5) — не видит строки, которые появляются в
+`big_analytics_full` ПОЗЖЕ (calls из step6, пиксель из step11, посевной оверлей из step10).
 
-**v3** (`apply_spec_fallback_v3(conn, tables)` в `corrections.py`): покрывает источники, создаваемые ПОСЛЕ corrections — pixel/calls/crop_targeting/arrival.
-Две точки вызова (маркер `SPEC_FALLBACK_V3_2026-07-03`):
-1. `pipeline.py` / `fast_pipeline.py` — после step11, ДО step13_rebuild: закрывает `big_analytics_full` (calls, pixel, crop_targeting)
-2. `pipeline.py` / `fast_pipeline.py` — после step13_rebuild: закрывает arrival (direct по дате визита, crop, pixel)
-
-Результат: NULL специалист в `fact_big_analytics` = 0 (по 7 820 строкам в прогоне SPEC_FALLBACK_V3_ПРОГОН run_id=82211aeb).
+**v3** — файл `spec_fallback.py` (маркер `SPEC_FALLBACK_V3_2026-08-06`, module-level docstring
+цитирует происхождение из v5 `apply_spec_fallback_v3()`), **ОДНА** точка вызова: шаг `115` в
+`pipeline.py::STEPS`, сразу после step10/step11 и **до** step12/step13 (не после, как было раньше) —
+так что `big_analytics_full_arrival` и звезда строятся уже по заполненной колонке. Матчит по домену,
+БЕЗ окна `launch_date…block_date` (в отличие от `step3._domain_specialist_expr`).
 
 ### VACUUM_WAVE3 + PREFREE_MOVE (2026-07-02)
 
@@ -640,6 +670,9 @@ Cascade-строки: `_source_table='direct'`, `total_cost=NULL`, колонк�
 
 ### PIPELINE_GUARD build_spend_daily (2026-07-03)
 
+⚠️ **v6_ch:** `build_spend_daily.py` живёт только в `archive/postgres_legacy_2026_07_31/step_cron_night/`,
+в активном дереве v6_ch его нет — историческая справка, не текущий код.
+
 **Файл:** `step_cron_night/build_spend_daily.py` (маркер `PIPELINE_GUARD_2026-07-03` × 4).
 
 Guard в начале `main()` — ДО TG-отбивки «стартовал»: сканирует `/proc/*/cmdline` на `pipeline.py` / `fast_pipeline.py` / `pipeline_powerbi.py` (исключает собственный PID). Если жив — ждёт до 30 мин, опрашивает каждые 2 мин. Истёк GUARD_WAIT_MAX_SEC → TG SKIP + `exit 0`. TG «стартовал» и t_total — только после прохождения guard.
@@ -650,7 +683,12 @@ Guard в начале `main()` — ДО TG-отбивки «стартовал»
 
 **config/cookies.py** (маркер `TG_SEND_FAIL_2026-07-03`): `logger.error(...)` добавлен в `send_tg` и `send_tg_cookies_dead` после for-цикла прокси. Ранее молчаливый провал TG теперь виден в логе. *(С 2026-08-14: `send_tg_cookies_dead` удалена, `send_tg` — тонкая обёртка над `notifications/telegram.py::send_html`, тот же `logger.error` behavior — см. COOKIES.md.)*
 
-### Форматирование отчётов step8/step12/verify (2026-07-02)
+### Форматирование отчётов step8/step12/verify (2026-07-02, историческая правка v5)
+
+⚠️ **v6_ch:** `step8_stats/step8.py` сейчас — простой ClickHouse row-count логгер (`TABLES` + `run()`,
+без salon-группировки, без `T_CAMPAIGN_STATUS`). `data_check/verify_big_analytics.py` не содержит
+функции `format_digest` и не выводит ✅/❌-чеклист — `run()` пишет результат напрямую. Запись ниже
+относится к прежней PostgreSQL-версии обоих файлов, для v6_ch не актуальна.
 
 - `step8_stats/step8.py`: салоны группируются по `salon_name` с суммой (один салон = одна строка); источник блока Кампании/UTM переключён на `T_CAMPAIGN_STATUS` (вместо транзиентной `T_DIRECT`); kval-диапазон `[7 000;15 000]` → `[10 000;30 000]`.
 - `data_check/verify_big_analytics.py`: `format_digest` переписан — чеклист 16 блоков с ✅/❌ в столбик; kval_cost `7k/15k` → `10k/30k`.

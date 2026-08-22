@@ -5,10 +5,11 @@
 > вместо `public.big_analytics_full` (v5, таблица) — `ad_analytics.big_analytics_full`
 > (v6, **View** над звездой, 73 колонки). С 2026-08-17 live-канон пикселя:
 > `_source_table='pixel'`, `источник='Пиксель'`, `направление='Пиксель'`; отдельная ветка
-> `Пиксель_атрибуц` выведена из контракта. Значений `telegram`,
-> `social_посевы`, `vk_zero` в v6 нет: строки схлопнуты в `crop_targeting`.
+> `Пиксель_атрибуц` выведена из контракта. Из v6 ушёл только `_source_table='vk_zero'`;
+> `telegram` (863 строки, `step3.py:1387`) и `social_посевы` (827, `:1388`) ЖИВЫ — читает
+> `step10.py:1091,1138` (проверено 2026-08-22).
 
-> Эталонный справочник допустимых значений и инварианты витрины `public.big_analytics_full`.
+> Эталонный справочник допустимых значений и инварианты витрины `ad_analytics.big_analytics_full`.
 > Отдельной lookup-таблицы наминга в проекте НЕТ — значения задаются императивно в SQL
 > (step3 / step5 / step10 / corrections). Этот файл — единственный источник истины по канону.
 > Вынесено из `CLAUDE.md` (lazy-load).
@@ -40,19 +41,22 @@ REGEXP_REPLACE("CampaignName", '__+', '_', 'g')   -- __+ → _
 
 Допустимые значения (рождаются в перечисленных местах):
 
-| направление | Где задаётся |
-|-------------|--------------|
-| `Контекст` | step3 `_build_direct_sql` из `gs.status` (`Контекст активно`) + Block G2 (звонки с директологом) |
-| `Пиксель` | step5/step11/step13 (пиксель-кампании); старое lowercase `пиксель` относится к v5/истории |
-| `посевы` | step3 `_build_crop_sql` + step10 (Google Sheets посевы / Telega.in API) + step3 `_move_tp8_to_crop` (tp8/tp9/tp10 → направление='посевы', маркер TP9_TP10_POSEV_MOVE_2026-06-22) |
-| `SEO` | step3 `_build_seo_sql` |
-| `SEO Flow` | step3 из `gs.status` |
-| `отзывы` | step3 `_build_reviews_sql` + load_reviews |
+⚠️ Проверено по `ad_analytics.big_analytics_full` 2026-08-22: значений всего ЧЕТЫРЕ.
+`Контекст`, `посевы`, `SEO`, `SEO Flow`, `отзывы` — это значения колонки **`источник`**, а не
+`направление`; в v5 таблицы путались, здесь разведены.
+
+| направление | Строк | Где задаётся |
+|-------------|------:|--------------|
+| `Комплекс` | 5 167 845 | step3 `_direct_napravlenie_expr()`: прямой вызов `:1139` и override ветки `direct_cascade` `:1651` + литерал `"Комплекс"` 4-м аргументом `_build_lead_source_sql()`: SEO `:1442`, direct_unmatched `:1686`, direct_zero `:1706` + step10 (`:746` gsheets, `:844` API, `:962` VK Ads) + строки звонков step6 (`:116`, `:120`) |
+| `Пиксель` | 63 846 | step5 / step11 (пиксель-кампании); lowercase `пиксель` — v5/история. Ветка `build_pixel.py:315` умеет отдать `'Перформ'` для `domain LIKE '%pixel_pr'` — сейчас 0 строк |
+| `Перформ` | 28 883 | `corrections.py:830` `perform_direction_expr` (`салон='Перформ РФ'` OR `id_салона='avto_0415'`) + строки VK Ads (`step3.py:1939`) |
+| `Отзывы` | 6 370 | строки отзывов step3 (`_fetch_reviews_rows_from_postgres`) — с ЗАГЛАВНОЙ |
 
 **ЗАПРЕЩЕНО:** техническое имя `utm_source` в колонке «направление» (например `victory_pxl`,
 `victory_vdl` и т.п.). Все пиксель-источники → `'Пиксель'` в BA6 live-витринах. Историческое
-правило `corrections.py` маппило `_UTM_PIXEL_SOURCES` в lowercase `'пиксель'`; активный BA6
-контракт после step11/step13 нормализует итоговую витрину в `'Пиксель'`.
+правило `corrections.py` маппило `_UTM_PIXEL_SOURCES` в lowercase `'пиксель'`. Нормализацию
+`пиксель`/`pixel` → `'Пиксель'` делает НЕ step11/step13, а `star_refactor/build_pbi_compat.py:151-153`
+(`multiIf` по `f.source_key`) — другой объект.
 
 **NULL допустим** только для звонков без директолога (`_source_table='calls'`,
 домен без `directologist` в `local_gsheet_sites` — см. Block G2 в `BLOCKS.md`). Для остальных строк NULL — баг.
@@ -61,23 +65,70 @@ REGEXP_REPLACE("CampaignName", '__+', '_', 'g')   -- __+ → _
 
 ## Канон «источник» — НИКОГДА не NULL
 
-| источник | Где задаётся |
-|----------|--------------|
-| `Контекст` | step3 (direct) |
-| `Пиксель` | step5 / step11 / step13 |
-| `звонки` | step6 inline (call-строки) |
-| `telegram` | step10 (`"Источник"='Telegram'`) + step3 `_move_tp8_to_crop` (tp8, _source_table='tp8') |
-| `Max` | step10 (посевы Max) + step3 `_move_tp8_to_crop` (tp9=Max/VK-ОК через Директ, _source_table='tp9') |
-| `Telegram + Max` | step3 `_move_tp8_to_crop` (tp10=ЕПК, _source_table='tp10') |
-| `VK` | step10 (посевы VK) |
-| `SEO` | step3 `_build_seo_sql` |
-| `контекст` (строчное) | строки отзывов (`_build_reviews_sql`) |
+⚠️ Проверено по `ad_analytics.big_analytics_full` 2026-08-22. Посевные значения носят префикс
+`Посевы_`; голых `telegram` / `Max` / `Telegram + Max` / `звонки` / `VK` в витрине НЕТ.
+
+| источник | Строк | Где задаётся |
+|----------|------:|--------------|
+| `Контекст` | 5 132 194 | step3 `_direct_source_expr()` default (`step3.py:810`) + `_unmatched_source_expr()` (def `:870`): `gs.status='Контекст активно'` (`:878`) и его default (`:881`, ветка `direct_unmatched`) + `direct_zero`-override (`:1712`) + звонки не-посевных доменов (`step6.py:119`) |
+| `Пиксель` | 63 846 | step5 / step11 |
+| `SEO` | 42 001 | step3 `_build_seo_sql` + `gs.status='SEO'` |
+| `Посевы_Telegram` | 17 999 | step3 `_direct_source_expr()` tp8 (`:808`) + posev-repaint (`:877`, `:1712`) + `_crop_source_expr()` (`:1377-1379`, он же default посевов) + step10 `_GS_SOURCE` (`step10.py:56-70`, вызов `:745`) / `_API_SOURCE` (`:71-79`, вызов `:843`) |
+| `Посевы_Звонки` | 4 954 | звонки на посевных доменах — `step6.py:115` |
+| `Посевы_Max` | 3 200 | step3 `_direct_source_expr()` tp9 (`:809`) + `_crop_source_expr()` (`:1373`, `:1376`) + step10 `_GS_SOURCE`/`_API_SOURCE` |
+| `Посевы_SEO` | 1 271 | step3 `:1448-1449` (посевной домен аккаунта / `direction_main='Посевы'`) |
+| `Посевы_VK` | 611 | step3 `_crop_source_expr()` (`:1374-1375`) + step10 `_GS_SOURCE`/`_API_SOURCE` |
+| `VK Ads` | 427 | step3 `_crop_source_expr()` `utm_source='vkads'` (`:1372`) + перформ-ветка (`:1939`) + step10 (`step10.py:961`) |
+| `Посевы_Telegram+Max` | 390 | step3 `_direct_source_expr()` tp10=ЕПК (`:810`) |
+| `SEO Flow` | 51 | `gs.status='SEO Flow'` — step3 `:880`, `:1450`, step6 `:119` |
+
+Строки отзывов кладут `источник='Контекст'` (с заглавной) — отдельного значения не заводят.
+
+Все 2 807 строк `_source_table='crop_targeting'` получают `источник` из step10
+(`_GS_SOURCE`/`_API_SOURCE`): Max 1 227 / Telegram 1 151 / VK 429. ⚠️ `_GS_SOURCE:62`
+пропускает произвольное значение колонки «Источник» гугл-таблицы насквозь — новое написание
+там сразу станет новым значением витрины в обход этого канона.
+
+**Как значение попадает в витрину — это НЕ построчная запись шага.** View берёт
+`ds.источник` из `Dim_Source` и `dsl.направление` из `Dim_Salon`; оба измерения собираются
+`anyLast()` по ключу из `big_analytics_unified` (обе оси атрибуции), а не из факта:
+
+| Колонка | Ключ измерения | Что делает сборка |
+|---|---|---|
+| `источник` | `source_key = lowerUTF8(trim(источник))` (`build_star_extensions.py:144-152`) | `anyLast(источник)` на ключ. ⚠️ Регистр в ключ НЕ входит: `Контекст` и `контекст` схлопнутся в одну строку, и какое написание выиграет — не детерминировано. |
+| `направление` | `salon_key` — ДЕСЯТЬ колонок (`build_star.py:91-102`): салон+город+регион+тип_сайта+шаблон+специалист+проджект+менеджер+id_салона **+ само `направление`**; хэш `_dimension_key_sql` (`:159-163`), штампуется на факт `:226` | `anyLast(направление)` на этот ключ (`:779`). Так как `направление` уже входит в ключ, свёртка может разойтись только регистром — подменить `'Контекст'` на `'Комплекс'` она НЕ может. |
+
+Практическое следствие — **позиционный аргумент может быть мёртвым кодом**. `_build_lead_source_sql()`
+получает `direction_name='Контекст'` для ветки `direct_cascade` (`step3.py:1665`, 4-й позиционный),
+но `overrides` заменяют позиционный аргумент (`:1271-1276`), а `:1651` кладёт туда
+`"направление": _direct_napravlenie_expr("ca.")` → `'Комплекс'`. Поэтому `'Контекст'` в этой ветке
+не доезжает никуда.
+
+Читая вызов `_build_lead_source_sql`, всегда разворачивай `overrides` — в том числе переданные
+переменной (`overrides=_crop_overrides()`, `overrides=overrides`), иначе счёт получится неверным.
+Из 6 вызовов (`:1416`, `:1438`, `:1661`, `:1682`, `:1702`, `:1717`): **`источник` переопределён
+во всех 6**, то есть 3-й позиционный аргумент не значит НИЧЕГО; **`направление` — только в одном**
+(`:1661` через `:1651`), в остальных пяти работает позиционный литерал.
+
+**Почему в списках нет step13.** `fact_big_analytics` держит ДВЕ оси атрибуции: `По дате заявки`
+5 266 944 строк и `По дате визита` 133 132 (`build_star.py:1302`/`:1331` против `:1357`). View
+`big_analytics_full` заканчивается `WHERE f.атрибуция = 'По дате заявки'`, поэтому строки
+`step13_arrival/step13.py` (визитная ось, приезжает через `big_analytics_unified`) в этот канон
+НЕ попадают. Свои значения `источник`/`направление` step13 пишет, но видны они только в
+`big_analytics_full_arrival` / `big_analytics_unified` — не здесь (проверено 2026-08-22:
+заявочная ось даёт 11 `source_key`, визитная 9, новых значений визитная не приносит).
+
+**`_source_table` — другая колонка, не путать с `источник`.** Для строк Директа её задаёт
+step3 `_direct_source_table_expr()` (`step3.py:794`, v6-эквивалент v5 `_move_tp8_to_crop()`):
+tp8→`'tp8'`, tp9→`'tp9'`, tp10→`'tp10'`, остальное→`'direct'`. `направление` и `источник`
+эта функция НЕ трогает.
 
 **ИНВАРИАНТ: `источник IS NOT NULL` для всех строк `big_analytics_full`.**
 
 Ранее ~72 строки посевов имели `источник=NULL` (оператор не заполнил колонку «Источник»
-в Google-таблице посевов). Фикс (июнь 2026) в
-`step10_crop_targeting/load_crop_to_big_analytics.py` — источник резолвится через `COALESCE`:
+в Google-таблице посевов). Фикс (июнь 2026, порт в v6_ch — `step10_crop_targeting/step10.py`,
+константы `_GS_SOURCE`/`_API_SOURCE`; `load_crop_to_big_analytics.py` в этом дереве не существует) —
+источник резолвится через `coalesce`/`multiIf`:
 1. явное значение из лида (`"Источник"`, `Telegram→telegram`);
 2. мода источника из справочника `gsheets_crop_targeting_account` по `utm утвержденная`;
 3. суффикс utm (`_vk`→VK, `_max`→Max);
@@ -96,13 +147,12 @@ SELECT count(*) FROM ad_analytics.big_analytics_full WHERE `источник` IS
 
 **ИНВАРИАНТ: `big_analytics_full."Date" >= '2026-01-01'`.** Строк раньше быть не должно.
 
-- Источник константы: `config/settings.py` → `DATE_FROM = '2026-01-01'`.
-- step1 копирует из источника только с `DATE_FROM`.
-- `cleanup_old_dates` (в `pipeline.py` / `fast_pipeline.py`) удаляет «протёкшие» старые строки:
-  `DELETE FROM public.big_analytics_full WHERE "Date" < DATE_FROM`.
-  Нужно потому, что часть лидов 2025 года может затечь через ретро-обновления.
+- Источник константы для v6_ch: `config/ch_settings.py` → `DATE_FROM = "2026-01-01"` (не `config/settings.py` — та версия для legacy PostgreSQL).
+- step1 (`step1_load_raw/step1.py`) фильтрует `WHERE toDate(...) >= toDate('{DATE_FROM}')` прямо в
+  CREATE TABLE-запросах `raw_leads`/`raw_calls`/`raw_yandex` — отдельного `cleanup_old_dates`/DELETE-шага
+  в v6_ch нет (`fast_pipeline.py` — legacy, не в активном контуре, см. `PIPELINES.md`).
 
 **Проверка инварианта:**
 ```sql
-SELECT count(*) FROM public.big_analytics_full WHERE "Date" < '2026-01-01';  -- ожидается 0
+SELECT count(*) FROM ad_analytics.big_analytics_full WHERE "Date" < '2026-01-01';  -- ожидается 0
 ```
