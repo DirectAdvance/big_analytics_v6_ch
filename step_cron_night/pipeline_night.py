@@ -44,7 +44,7 @@ LEGACY_PG_NOT_IN_NIGHT = {
         "weekly v5 job; CH live-fetch not ported yet"
     ),
     "archive/postgres_legacy_2026_07_31/step_cron_night/report_placement/run.py": (
-        "weekly v5 job; v6 currently builds bi_arp_fact from fact_direct_feed_funnel"
+        "weekly v5 job; v6 builds bi_analytics_report_placement from fact_direct_feed_funnel + raw_leads"
     ),
     "archive/postgres_legacy_2026_07_31/step_cron_night/build_spend_daily.py": (
         "v6 spend builders are root pipeline steps 141-143/1431-1432"

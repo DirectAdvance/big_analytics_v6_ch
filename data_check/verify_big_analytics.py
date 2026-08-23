@@ -71,6 +71,10 @@ PBI_SOURCE_OBJECTS = [
     "yandex_direct_cookie_analytics_website_pages",
     "yandex_direct_korrektirovki",
     "yandex_direct_minus_snapshot",
+    # ARP_LIVE_2026-08-23: живая замена замороженным снимкам БА5 `raw_new_arp_fact` и
+    # `raw_new_search_query_report_master_pbi`. Пустая `bi_*` = FAIL гейта.
+    "analytics_report_placement",
+    "yandex_direct_search_query_report_master",
 ]
 
 # Пустых `bi_*` больше нет by-design: любой ноль в активном PBI-контракте — FAIL.
@@ -125,6 +129,17 @@ WIDE_COMPAT_VIEWS = [
 # сырья, откат не нужен). См. `_kuderko_raw_coverage()` ниже и KNOWN_ISSUES.md #37 — ±1000 при этом
 # ОСТАЁТСЯ, но golden понижается до информационного статуса ТОЛЬКО пока сырьё неполно; как только
 # присутствуют все 67 — golden снова блокирует прогон как жёсткий гейт.
+# ARP_FUNNEL_GATE_2026-08-23. Счётчик строк `bi_analytics_report_placement` задаётся стороной
+# Директа (`fact_direct_feed_funnel`) и остаётся ненулевым, даже если воронка не приклеилась ни к
+# одной строке — проверка `rows > 0` такую регрессию НЕ ловит. Реальный случай: площадка поиска
+# в БА5 звалась `Yandex`, в BA6 — `Яндекс`, из-за чего 33% воронки молча не матчилось.
+# Порог — доля заявок вьюхи от лидов `raw_leads`, годных к матчингу (тот же фильтр, что в
+# `_arp_lead_metrics_sql` + `campaign_id IS NOT NULL`). Замер 2026-08-23: здоровое значение 0.517
+# (помесячно 0.401..0.632), с воспроизведённым багом локали — 0.373. Пол 0.40 ловит баг и лежит
+# ниже худшего наблюдённого месяца.
+ARP_FUNNEL_VIEW = "bi_analytics_report_placement"
+ARP_FUNNEL_RATIO_FLOOR = 0.40
+
 GOLDEN_COST = Decimal("25422774.00")
 GOLDEN_COST_TOL = Decimal("1000.00")
 GOLDEN_SALES_FLOOR = 54
@@ -154,6 +169,24 @@ def _golden_kuderko_sql(source_sql: str) -> str:
           AND f.`атрибуция` = 'По дате заявки'
           AND f.`_source_table` IN ({source_sql})
     """
+
+
+def _arp_funnel_liveness(client) -> tuple[int, int]:
+    """Заявки, доехавшие до `bi_analytics_report_placement`, и лиды, годные к матчингу."""
+    row = client.query(
+        f"""
+        SELECT
+            (SELECT toInt64(ifNull(sum(kol_vo_zayavok), 0))
+             FROM ad_analytics.`{ARP_FUNNEL_VIEW}`) AS view_leads,
+            (SELECT toInt64(count())
+             FROM ad_analytics.raw_leads
+             WHERE ifNull(deal_type, '') != 'Звонок'
+               AND is_copy_for_removal = 0
+               AND campaign_id IS NOT NULL) AS eligible_leads
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows[0]
+    return int(row[0]), int(row[1])
 
 
 def _scalar(client, sql: str):
@@ -285,6 +318,17 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
                 "PBI_VIEW_EMPTY_WHITELISTED: %s пуст, но покрыт PBI_EMPTY_ALLOWED — "
                 "гейт не падает. Проверить, регрессия это или норма.", view
             )
+
+    view_leads, eligible_leads = _arp_funnel_liveness(client)
+    ratio = view_leads / eligible_leads if eligible_leads else 0.0
+    log.info(
+        "arp_funnel_liveness: %s=%d заявок, годных лидов=%d, доля=%.3f (пол %.2f)",
+        ARP_FUNNEL_VIEW, view_leads, eligible_leads, ratio, ARP_FUNNEL_RATIO_FLOOR,
+    )
+    if view_leads == 0:
+        failures.append(f"empty_pbi_funnel:{ARP_FUNNEL_VIEW}")
+    elif ratio < ARP_FUNNEL_RATIO_FLOOR:
+        failures.append(f"pbi_funnel_ratio:{ARP_FUNNEL_VIEW}:{ratio:.3f}<{ARP_FUNNEL_RATIO_FLOOR}")
 
     if not no_star:
         for table in PBI_COMPAT_OBJECTS:

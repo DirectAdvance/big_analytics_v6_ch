@@ -65,3 +65,31 @@ def test_pbi_empty_whitelist_is_empty():
 
     assert allowed == set()
     assert by_design == allowed
+
+
+def test_live_arp_and_search_query_replace_raw_new_snapshots():
+    """ARP_LIVE_2026-08-23: обе PBI-таблицы обязаны быть в контракте, иначе пустая `bi_*` не упадёт."""
+    live_objects = {"analytics_report_placement", "yandex_direct_search_query_report_master"}
+    pbi_source_objects = _literal_list_from_file(
+        ROOT / "star_refactor" / "build_pbi_compat.py",
+        "PBI_SOURCE_OBJECTS",
+    )
+    verify_pbi_source_objects = _literal_list_from_file(
+        ROOT / "data_check" / "verify_big_analytics.py",
+        "PBI_SOURCE_OBJECTS",
+    )
+
+    assert live_objects <= set(pbi_source_objects)
+    assert live_objects <= set(verify_pbi_source_objects)
+
+
+def test_live_pbi_sql_never_reads_raw_new_snapshots():
+    """Контракт BA6: живые `bi_*` читают только raw_data/reference_data/живые ad_analytics-объекты."""
+    import sys
+
+    sys.path.insert(0, str(ROOT))
+    from star_refactor import build_pbi_compat
+
+    for name in ("analytics_report_placement", "yandex_direct_search_query_report_master"):
+        sql = build_pbi_compat.PBI_VIEW_SQL_BUILDERS[name]()
+        assert "raw_new_" not in sql, name

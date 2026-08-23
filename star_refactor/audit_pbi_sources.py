@@ -23,7 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PBI_NAME_ALIASES = {
     "big_analytics_full": ["pbi_big_analytics_full", "bi_pbi_big_analytics_full"],
-    "analytics_report_placement": ["arp_fact", "bi_arp_fact"],
+    # ARP_LIVE_2026-08-23: `arp_fact`/`bi_arp_fact` вычеркнуты из контракта
+    # (`tests/test_pbi_contract_lists.py`), живой объект — `bi_analytics_report_placement`.
+    "analytics_report_placement": ["bi_analytics_report_placement"],
     "analytics_report_feed": ["arf_fact", "bi_arf_fact", "pbi_import_fact_direct_feed_funnel"],
     "analytics_report_criterion": ["arc_fact", "bi_arc_fact"],
     "direct_history": ["yandex_direct_history", "bi_yandex_direct_history"],

@@ -23,6 +23,7 @@ from config.ch_utils import (
 )
 from criterion_spend.cleaning import CRITERION_CLEAN
 from spend.build_direct_spend_staging import STAGING_TABLE
+from step3_build_sources.step3 import _metric_expr
 
 log = logging.getLogger("build_pbi_compat")
 
@@ -90,6 +91,11 @@ PBI_SOURCE_OBJECTS = [
     # двойной кодировки площадок в отчёт не доезжал. Отчёт переведён на этот bi-слой над живой
     # таблицей шага 139; правило «PBI ходит только через bi_*» — DB_AD_ANALYTICS.md §1.3.
     "yandex_direct_tp_placement_links",
+    # ARP_LIVE_2026-08-23: PBI-таблицы `analytics_report_placement`(+`_links`) и
+    # `yandex_direct_search_query_report_master` уходят с замороженных снимков БА5
+    # `raw_new_arp_fact` / `raw_new_search_query_report_master_pbi` на живые `bi_*`.
+    "analytics_report_placement",
+    "yandex_direct_search_query_report_master",
 ]
 
 LEGACY_BI_VIEWS = [
@@ -823,36 +829,202 @@ def build_dim_criterion(client) -> int:
     return count_rows(client, "ad_analytics.Dim_Criterion")
 
 
-def _arp_fact_sql(where_sql: str = "") -> str:
+# ARP_LIVE_2026-08-23. `analytics_report_placement` в Power BI читал замороженный снимок БА5
+# `raw_new_arp_fact` (2026-07-01..2026-08-13, сам не обновляется). Здесь он заменён живой вьюхой
+# над `fact_direct_feed_funnel` + воронка из `raw_leads` по механике БА5
+# (`work/big_analytics_v5/step_cron_night/report_placement/step2_build_analytics.py`):
+#   • площадка лида достаётся из `utm_source` (`s:<...>`), снимается префикс `www.`/`m.`,
+#     затем lower; `none` при непустой кампании → `yandex`;
+#   • ключ матчинга = created_date | campaign_id | group_id (0 для кампаний `tp6`/`tp7`) | площадка;
+#   • этап D БА5 («только заявки», `логин IS NULL`) НЕ воспроизводится: в Power BI он и в БА5 не
+#     доезжал — `public.arp_fact` (`work/big_analytics_v5/star_refactor/build_star.py:936`)
+#     заканчивается `WHERE domain IS NOT NULL`, а такие строки несут `domain = NULL`; в снимке
+#     `raw_new_arp_fact` строк с пустым `логин` = 0. Замер 2026-08-23: ветка добавляла бы
+#     7 772 строки с 89 944 заявками против 45 600 по всей стороне Директа — тройной перекос.
+# ⚠️ Расход здесь — `total_cost` (с НДС и комиссией), канон BA6
+# (`spend/build_direct_spend_staging.py`), поэтому он ВЫШЕ снимка БА5, который нёс `cost` без НДС.
+# Это разница определения метрики, а не дефект — обратно не чинить.
+
+_ARP_WWW_PREFIX_RE = r"'^(www\\.|m\\.)'"
+
+# БА5 на стороне Директа: `re.sub(r'^(www\.|m\.)', '', placement.lower())`.
+# SEARCH_PLACEMENT_LOCALE_2026-08-23: отчёт БА5 тянулся из Директа на английской локали и нёс площадку
+# поиска `Yandex`; `raw_data.yandex_direct_report_rows` в BA6 — на русской, `Яндекс`. Лид со
+# стороны CRM даёт литерал `yandex` (правило `none` + кампания → `yandex`), поэтому без этого
+# маппинга вся поисковая ветка воронки не матчилась: замер на 2026-07-01..2026-08-13 —
+# 11 745 заявок из 35 830 (33%) терялись именно на `яндекс`.
+# LOWER_EXPLICIT_2026-08-23: `Dim_PlacementFeed.placement_feed_key` сегодня уже lower, но это
+# инвариант чужого билдера, а не гарантия — регистр площадки ломает матчинг воронки молча.
+_ARP_PLACEMENT_LOWER = "lowerUTF8(placement_feed_key)"
+_ARP_SEARCH_PLACEMENT_KEY = (
+    f"if({_ARP_PLACEMENT_LOWER} = 'яндекс', 'yandex', {_ARP_PLACEMENT_LOWER})"
+)
+_ARP_DIRECT_PLACEMENT_KEY = f"replaceRegexpOne({_ARP_SEARCH_PLACEMENT_KEY}, {_ARP_WWW_PREFIX_RE}, '')"
+
+# БА5 на стороне лидов: `LOWER(REGEXP_REPLACE(COALESCE(regexp_match(utm_source, ...)[1], utm_source, ''),
+# '^(www\.|m\.)', ''))` — порядок именно такой: сначала снять префикс, потом lower.
+_ARP_LEAD_PLACEMENT_CAPTURE = r"extract(ifNull(utm_source, ''), '(?:^|[^a-z])s:(.+)$')"
+
+_ARP_FUNNEL_COLUMNS = (
+    "kol_vo_zayavok", "korr", "kval", "priezd", "prodazhi", "nekorr",
+    "ne_otvechaet", "nedozvon", "filtr", "priedet", "dohod_do_kredita", "dobro",
+)
+
+
+def _arp_columns(template: str) -> str:
+    return ",\n            ".join(template.format(name=name) for name in _ARP_FUNNEL_COLUMNS)
+
+
+def _arp_lead_metrics_sql() -> str:
+    """Лиды в разрезе БА5-ключа: дата | кампания | группа | площадка + воронка `_metric_expr`."""
     return f"""
         SELECT
-            f.date, f.domain AS `домен`, f.account_login AS `логин`, pf.ad_network_type, pf.placement,
-            f.placement_feed_key AS placement_feed_key,
-            pf.placement AS placement_key, toFloat64(f.cost) AS cost, toInt64(round(f.all_forms)) AS `Все формы`,
-            toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`, toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
-            toInt64(0) AS `CRM: Спам заказ`, toInt64(0) AS `CRM: Заказ отменен`,
-            dc.tp,
-            ds.`специалист` AS `Специалист`, ds.`салон`, ds.`тип_сайта`,
-            now() AS updated_at,
-            toInt64(0) AS kol_vo_zayavok, toInt64(0) AS korr, toInt64(0) AS kval,
-            toInt64(0) AS priezd, toInt64(0) AS prodazhi, toInt64(0) AS nekorr,
-            toInt64(0) AS priedet,
-            concat(toString(f.campaign_id), '|', ifNull(dc.CampaignName, '')) AS `номер кампании|название кампании`,
-            f.campaign_id AS CampaignId, f.ad_group_id AS AdGroupId, toInt64(round(f.clicks)) AS clicks,
-            toInt64(0) AS ne_otvechaet, toInt64(0) AS nedozvon, toInt64(0) AS filtr,
-            toInt64(0) AS dohod_do_kredita, toInt64(0) AS dobro,
-            f.date AS Date, f.domain AS domain, CAST(NULL, 'Nullable(String)') AS `тип_заявки`
-        FROM ad_analytics.fact_direct_feed_funnel f
-        LEFT JOIN ad_analytics.Dim_PlacementFeed pf ON pf.placement_feed_key = f.placement_feed_key
-        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
-        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
-        {where_sql}
+            created_date,
+            campaign_id_raw,
+            ifNull(campaign_id_raw, 0) AS campaign_id,
+            ad_group_id,
+            if(campaign_id_raw IS NOT NULL AND campaign_id_raw != 0 AND placement_base = 'none',
+               'yandex', placement_base) AS placement,
+            {_metric_expr("status", "reason", "source_type", "salon")}
+        FROM
+        (
+            SELECT
+                created_date,
+                campaign_id_raw,
+                ad_group_id,
+                utm_source,
+                lowerUTF8(replaceRegexpOne(
+                    if(notEmpty(placement_capture), placement_capture, utm_source),
+                    {_ARP_WWW_PREFIX_RE}, ''
+                )) AS placement_base,
+                status,
+                reason,
+                source_type,
+                salon
+            FROM
+            (
+                SELECT
+                    assumeNotNull(created_date) AS created_date,
+                    campaign_id AS campaign_id_raw,
+                    if(match(lowerUTF8(ifNull(utm_campaign, '')), 'tp[67]'), 0, ifNull(group_id, 0)) AS ad_group_id,
+                    ifNull(utm_source, '') AS utm_source,
+                    {_ARP_LEAD_PLACEMENT_CAPTURE} AS placement_capture,
+                    status,
+                    reason,
+                    source_type,
+                    salon
+                FROM ad_analytics.raw_leads
+                WHERE created_date >= toDate('{DATE_FROM}')
+                  AND ifNull(deal_type, '') != 'Звонок'
+                  AND is_copy_for_removal = 0
+            )
+        )
     """
 
 
-def build_arp_fact(client) -> int:
-    _replace_view(client, "arp_fact", _arp_fact_sql())
-    return count_rows(client, "ad_analytics.arp_fact")
+def _arp_direct_leads_sql() -> str:
+    """Этап B БА5: воронка, приклеиваемая к строкам Директа по ключу key2."""
+    return f"""
+        SELECT
+            created_date,
+            campaign_id,
+            ad_group_id,
+            placement,
+            toUInt8(1) AS matched,
+            {_arp_columns("toInt64(sum({name})) AS {name}")}
+        FROM ({_arp_lead_metrics_sql()})
+        WHERE campaign_id_raw IS NOT NULL
+        GROUP BY created_date, campaign_id, ad_group_id, placement
+    """
+
+
+def _analytics_report_placement_pbi_sql() -> str:
+    return f"""
+        SELECT
+            f.date AS date,
+            f.domain AS `домен`,
+            f.account_login AS `логин`,
+            pf.ad_network_type AS ad_network_type,
+            pf.placement AS placement,
+            f.placement_feed_key AS placement_feed_key,
+            f.placement_key_norm AS placement_key,
+            toFloat64(f.cost) AS cost,
+            toInt64(round(f.all_forms)) AS `Все формы`,
+            toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`,
+            toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
+            toInt64(0) AS `CRM: Спам заказ`,
+            toInt64(0) AS `CRM: Заказ отменен`,
+            CAST(dc.tp, 'Nullable(String)') AS tp,
+            ds.`специалист` AS `Специалист`,
+            ds.`салон` AS `салон`,
+            ds.`тип_сайта` AS `тип_сайта`,
+            now() AS updated_at,
+            {_arp_columns("toInt64(ifNull(l.{name}, 0)) AS {name}")},
+            CAST(concat(toString(f.campaign_id), '|', ifNull(dc.CampaignName, '')), 'Nullable(String)')
+                AS `номер кампании|название кампании`,
+            CAST(f.campaign_id, 'Nullable(Int64)') AS CampaignId,
+            CAST(f.ad_group_id, 'Nullable(Int64)') AS AdGroupId,
+            toInt64(round(f.clicks)) AS clicks,
+            f.date AS `Date`,
+            f.domain AS domain,
+            if(ifNull(l.matched, 0) = 1, CAST('Заявки', 'Nullable(String)'), CAST(NULL, 'Nullable(String)'))
+                AS `тип_заявки`
+        FROM
+        (
+            SELECT *, {_ARP_DIRECT_PLACEMENT_KEY} AS placement_key_norm
+            FROM ad_analytics.fact_direct_feed_funnel
+        ) f
+        LEFT JOIN ad_analytics.Dim_PlacementFeed pf ON pf.placement_feed_key = f.placement_feed_key
+        LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
+        LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
+        LEFT JOIN ({_arp_direct_leads_sql()}) l
+               ON l.created_date = f.date
+              AND l.campaign_id = f.campaign_id
+              AND l.ad_group_id = f.ad_group_id
+              AND l.placement = f.placement_key_norm
+        """
+
+
+def _search_query_report_master_pbi_sql() -> str:
+    """Живой агрегат `yd_search_query_report_master` без `query`/`criterion` — зерно снимка БА5."""
+    return """
+        SELECT
+            loaded_at,
+            date_from,
+            date_to,
+            client_login,
+            criterion_type,
+            targeting_category,
+            brand_options,
+            campaign_id,
+            ad_group_id,
+            toInt64(sum(impressions)) AS impressions,
+            toInt64(sum(clicks)) AS clicks,
+            sum(cost) AS cost,
+            toInt64(sum(goal_all_forms)) AS goal_all_forms,
+            toInt64(sum(goal_crm_order_paid)) AS goal_crm_order_paid
+        FROM
+        (
+            SELECT
+                toDate(loaded_at) AS loaded_at,
+                date_from,
+                date_to,
+                client_login,
+                CAST(criterion_type, 'String') AS criterion_type,
+                CAST(targeting_category, 'String') AS targeting_category,
+                CAST(brand_options, 'String') AS brand_options,
+                toInt64(campaign_id) AS campaign_id,
+                toInt64(ad_group_id) AS ad_group_id,
+                impressions,
+                clicks,
+                cost,
+                goal_all_forms,
+                goal_crm_order_paid
+            FROM ad_analytics.yd_search_query_report_master
+        )
+        GROUP BY loaded_at, date_from, date_to, client_login, criterion_type,
+                 targeting_category, brand_options, campaign_id, ad_group_id
+    """
 
 
 def create_light_aliases(client) -> dict[str, int]:
@@ -1618,6 +1790,8 @@ PBI_VIEW_SQL_BUILDERS = {
     "yandex_direct_ads_texts": _direct_ads_texts_pbi_sql,
     "yandex_direct_type_placement_report_master": _direct_type_placement_pbi_sql,
     "direct_autorules_posevy_placement_links": _direct_autorules_posevy_placement_links_sql,
+    "analytics_report_placement": _analytics_report_placement_pbi_sql,
+    "yandex_direct_search_query_report_master": _search_query_report_master_pbi_sql,
 }
 
 
