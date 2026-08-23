@@ -3,6 +3,26 @@ from pathlib import Path
 import cron_run
 
 
+def test_main_skips_powerbi_refresh_when_flag_is_off(tmp_path, monkeypatch):
+    monkeypatch.delenv("BA6_POWERBI_REFRESH", raising=False)
+    monkeypatch.setattr(cron_run, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(cron_run, "rotate_logs", lambda: None)
+
+    def fake_run_pipeline(log_path):
+        log_path.write_text("10:00:00 [INFO] verify_big_analytics: PASS\n", encoding="utf-8")
+        return 0
+
+    refresh_calls = []
+    monkeypatch.setattr(cron_run, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(cron_run, "run_powerbi_refresh", lambda log_path: refresh_calls.append(log_path) or 1)
+    monkeypatch.setattr(cron_run, "send_html", lambda *a, **kw: True)
+
+    rc = cron_run.main()
+
+    assert refresh_calls == []
+    assert rc == 0
+
+
 def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_path, monkeypatch):
     monkeypatch.setattr(cron_run, "LOG_DIR", Path(tmp_path))
     previous = tmp_path / "cron_20260820_100000.log"
@@ -40,7 +60,7 @@ def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_
             "10:01:06 INFO full_funnel_priezd_lt_prodazhi=0",
             "10:01:06 INFO kuderko_raw_coverage: present_any_day=67 present_pre_cutoff=67 total=67 (cutoff=2026-04-10)",
             "10:01:06 INFO golden_kuderko cost=25422774.00 delta=+0.00 sales=57 floor=54",
-            "10:01:06 INFO PASS",
+            "10:01:06 [INFO] verify_big_analytics: PASS",
         ]),
         encoding="utf-8",
     )
@@ -53,3 +73,13 @@ def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_
     assert "raw Кудерко: 67/67, до cutoff 67/67" in message
     assert "1 step1_load_raw.step1" in message
     assert "1м02с" in message
+    assert "verify: PASS" in message
+
+
+def test_verify_pass_does_not_match_fail_line():
+    assert cron_run.RE_VERIFY_PASS.search(
+        "10:01:06 [ERROR] verify_big_analytics: FAIL: full_before_2026=3"
+    ) is None
+    assert cron_run.RE_VERIFY_PASS.search(
+        "10:01:06 [INFO] verify_big_analytics: PASS"
+    ) is not None

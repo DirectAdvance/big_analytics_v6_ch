@@ -8,12 +8,17 @@
 Запуск (cron ставит flock снаружи, как у остальных джобов Victory):
     ~/venv-v6/bin/python3 ~/big_analytics_v6_ch/cron_run.py
 
-Ничего не считает сам: только запускает `pipeline.py`, разбирает его лог и отправляет итог.
-Код возврата равен коду возврата пайплайна.
+Ничего не считает сам: запускает `pipeline.py`, разбирает лог и отправляет итог.
+Power BI refresh — опциональный шаг ПОСЛЕ успешного pipeline, выключен по умолчанию: BA6 PBIP
+ещё не опубликован в Power BI Service (только BA5-датасет "Большая аналитика_v00"), см.
+STATE.md 2026-08-21. Включается переменной окружения `BA6_POWERBI_REFRESH=1`; без неё
+`refresh_powerbi.py` не запускается и не может повлиять ни на код возврата, ни на заголовок
+сообщения.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -61,6 +66,7 @@ RE_CRON_LOG_DATE = re.compile(r"cron_(\d{8})_\d{6}\.log$")
 RE_KUDERKO_COVERAGE = re.compile(
     r"kuderko_raw_coverage: present_any_day=(\d+) present_pre_cutoff=(\d+) total=(\d+)"
 )
+RE_VERIFY_PASS = re.compile(r"verify_big_analytics:\s*PASS\s*$", re.M)
 
 
 def rotate_logs():
@@ -74,6 +80,16 @@ def run_pipeline(log_path: Path) -> int:
     with log_path.open("w", encoding="utf-8") as fh:
         proc = subprocess.run(
             [sys.executable, "-u", str(BASE / "pipeline.py")],
+            stdout=fh, stderr=subprocess.STDOUT, cwd=str(BASE),
+        )
+    return proc.returncode
+
+
+def run_powerbi_refresh(log_path: Path) -> int:
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write("\n=== Power BI BA6 refresh ===\n")
+        proc = subprocess.run(
+            [sys.executable, "-u", str(BASE / "refresh_powerbi.py"), "--no-notify"],
             stdout=fh, stderr=subprocess.STDOUT, cwd=str(BASE),
         )
     return proc.returncode
@@ -197,18 +213,30 @@ def build_steps_section(text: str) -> list[str]:
     return ["", "<b>время по шагам</b>", f"<code>{escape(chr(10).join(lines))}</code>"]
 
 
-def build_message(rc: int, log_path: Path, minutes: int) -> str:
+def build_message(
+    rc: int,
+    log_path: Path,
+    minutes: int,
+    powerbi_rc: int | None = None,
+) -> str:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
 
     run_id = RE_RUN_ID.search(text)
     golden = RE_GOLDEN.search(text)
-    verify_pass = bool(re.search(r"^\S+ INFO PASS$", text, re.M)) or " INFO PASS" in text
+    verify_pass = bool(RE_VERIFY_PASS.search(text))
     counts = parse_counts(text)
     prev_log = previous_cron_log(log_path)
     prev_counts = parse_counts(prev_log.read_text(encoding="utf-8", errors="replace")) if prev_log else None
 
-    head = "✅ <b>БА6: прогон OK</b>" if rc == 0 else "🔴 <b>БА6: прогон УПАЛ</b>"
+    if rc != 0:
+        head = "🔴 <b>БА6: pipeline УПАЛ</b>"
+    elif powerbi_rc:
+        head = "🔴 <b>БА6: pipeline OK, Power BI УПАЛ</b>"
+    elif powerbi_rc == 0:
+        head = "✅ <b>БА6: pipeline + Power BI OK</b>"
+    else:
+        head = "✅ <b>БА6: прогон OK</b>"
     rows = [
         head,
         f"{datetime.now(EKB).strftime('%d.%m %H:%M')} Екб · {minutes} мин",
@@ -221,7 +249,7 @@ def build_message(rc: int, log_path: Path, minutes: int) -> str:
     rows.extend(build_golden_section(text, golden))
     rows.extend(build_steps_section(text))
 
-    if rc != 0:
+    if rc != 0 or powerbi_rc:
         failed = RE_FAIL_STEP.findall(text)
         if failed:
             rows.append(f"упал шаг: <b>{', '.join(failed)}</b>")
@@ -238,10 +266,15 @@ def main() -> int:
     log_path = LOG_DIR / f"cron_{stamp}.log"
 
     started = time.time()
-    rc = run_pipeline(log_path)
+    pipeline_rc = run_pipeline(log_path)
+    powerbi_rc = (
+        run_powerbi_refresh(log_path)
+        if pipeline_rc == 0 and os.environ.get("BA6_POWERBI_REFRESH") == "1"
+        else None
+    )
     minutes = int((time.time() - started) / 60)
 
-    message = build_message(rc, log_path, minutes)
+    message = build_message(pipeline_rc, log_path, minutes, powerbi_rc)
     delivered = send_html(
         message, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
         proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=30,
@@ -249,7 +282,7 @@ def main() -> int:
     if not delivered:
         # Не глотаем молча: иначе провал прогона И провал уведомления выглядят одинаково.
         print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
-    return rc
+    return pipeline_rc or powerbi_rc or 0
 
 
 if __name__ == "__main__":
