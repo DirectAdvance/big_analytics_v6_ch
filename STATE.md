@@ -1,14 +1,18 @@
 # big_analytics_v6_ch — статус
 
-2026-08-24: BA6/PBIP audit по таблицам Power BI закрыт локально. `refresh_powerbi.py` расширен с
+2026-08-24: BA6/PBIP audit по таблицам Power BI закрыт и проверен refresh. `refresh_powerbi.py` расширен с
 25 до 40 import-таблиц: теперь `_ALL_TABLES` совпадает со всеми импортными таблицами текущей
 admin semantic model; calculated/DAX остались только `Dim_Distance` и `Модель атрибуции`.
 Служебная `Users` удалена из PBIP semantic model как неиспользуемая. Старое UI-слово
 `Я.Директ_фиды`/`Фиды` заменено на `Я.Директ_площадки РСЯ`/`Площадки РСЯ`; внутреннее имя
 `fact_direct_feed_funnel` не переименовывалось, потому что это compatibility layer. Проверки:
 `py_compile refresh_powerbi.py` OK, JSON PBIP OK, `Users`/`Фиды` grep = 0, импортные таблицы
-модели 40 == refresh-таблицы 40. Не сделано: деплой BA6 refresh script на Victory, публикация PBIP,
-Power BI refresh.
+модели 40 == refresh-таблицы 40. Деплой BA6 на Victory: `refresh_powerbi.py`/`PBI_TABLES.md`/
+`STATE.md` доставлены через scp, md5 Mac==Victory, remote `py_compile refresh_powerbi.py` OK.
+Первый запуск refresh на Victory не дошёл до Power BI из-за DNS `api.powerbi.com` SERVFAIL; тот же
+refresh запущен локально с Мака, BA6 datasource подтверждён (`extension`), selective refresh 40
+таблиц завершился `Completed` в 2026-08-24 21:48:52 Екб. Не сделано: публикация PBIP в Power BI
+Service — в этом репозитории она по README делается вручную через Power BI Desktop.
 
 2026-08-24: BA6 коммит `d47bdb7` (`fix: ограничить BI справочники auto нишей`) доставлен на
 Victory вручную по scp в `~/big_analytics_v6_ch`; md5 Mac==Victory по 7 файлам, remote
