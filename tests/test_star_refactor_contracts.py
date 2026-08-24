@@ -133,11 +133,29 @@ def test_dim_site_uses_ba5_empty_crm_label():
     assert "FROM raw_data.leads_all" in sql
     assert "is_copy_for_removal = 0" in sql
     assert "if(ifNull(rc.crm_name, '') = '', 'Не указана', rc.crm_name)" in sql
-    assert "u.crm_name) = 'PLEX', 'Плекс'" in sql
-    assert "u.crm_name) = 'MarCar CRM', 'Маркар'" in sql
-    assert "u.crm_name) = 'MEGA CRM', 'Мега'" in sql
-    assert "u.crm_name) = 'GenzesCRM', 'Генезис'" in sql
+    # REVIEWS_LABEL_HIDE 2026-08-24: выражение обёрнуто в nullIf(..., 'отзывы'),
+    # сама каноникализация BA5-имён при этом обязана остаться на месте.
+    assert "nullIf(u.crm_name, 'отзывы')) = 'PLEX', 'Плекс'" in sql
+    assert "nullIf(u.crm_name, 'отзывы')) = 'MarCar CRM', 'Маркар'" in sql
+    assert "nullIf(u.crm_name, 'отзывы')) = 'MEGA CRM', 'Мега'" in sql
+    assert "nullIf(u.crm_name, 'отзывы')) = 'GenzesCRM', 'Генезис'" in sql
     assert "CAST(ifNull(crm_name, ''), 'String') AS `Название crm`" not in sql
+
+
+def test_dim_site_hides_reviews_literal_from_slicers():
+    """Ветка отзывов (step3.py) пишет литерал 'отзывы' в четыре поля сразу.
+
+    В Dim_Site он гасится в трёх из них, чтобы в Power BI не появлялись оси,
+    дублирующие `направление` = 'Отзывы'. В факте литерал остаётся — его
+    читает sales_attribution/build.py.
+    """
+    sql = build_star.DIM_DDL["Dim_Site"]
+
+    assert "if(u.site_type = 'отзывы', '', u.site_type) AS `тип_сайта`" in sql
+    assert "if(u.template = 'отзывы', '', u.template) AS `шаблон`" in sql
+    assert "nullIf(u.crm_name, 'отзывы')" in sql
+    # направление НЕ гасится: это единственная законная ось отзывов
+    assert "u.direction AS `направление`" in sql
 
 
 def test_dim_crm_status_uses_ba5_empty_crm_label():
