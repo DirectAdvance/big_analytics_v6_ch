@@ -2,12 +2,12 @@
 
 | PBI table | CH object | engine | rows | disk | cols | attr cols | key/index note | recommendation |
 |---|---|---|---:|---:|---:|---:|---|---|
-| `big_analytics_full` | `pbi_big_analytics_full` | View | view | view | 42 | 7 | view source=pbi_import_big_analytics_full | OK: view over physical import |
-| `big_analytics_full_arrival` | `big_analytics_full_arrival` | View | view | view | 73 | 11 | view source=fact_big_analytics | star/materialize candidate: source fact_big_analytics |
+| `big_analytics_full` | `pbi_big_analytics_full` | View | view | view | 44 | 7 | view source=pbi_import_big_analytics_full | OK: view over physical import |
 | `Dim_Date` | `bi_Dim_Date` | View | view | view | 8 | 0 | view source=Dim_Date | OK: projection view over Dim_Date |
 | `Dim_Campaign` | `bi_Dim_Campaign` | View | view | view | 14 | 3 | view source=yandex_direct_korrektirovki | OK: projection view over yandex_direct_korrektirovki |
 | `Dim_AdGroup` | `bi_Dim_AdGroup` | View | view | view | 15 | 2 | view source=Dim_AdGroup | OK: projection view over Dim_AdGroup |
 | `Dim_Site` | `bi_Dim_Site` | View | view | view | 16 | 7 | view source=Dim_Site | star/materialize candidate: source Dim_Site |
+| `Dim_City_Tier` | `bi_Dim_City_Tier` | View | view | view | 5 | 1 | view source=Dim_City_Tier | OK: projection view over Dim_City_Tier |
 | `fact_vk_ads` | `bi_fact_vk_ads` | View | view | view | 19 | 4 | view source=fact_vk_ads | OK: projection view over fact_vk_ads |
 | `direct_history` | `yandex_direct_history` | View | view | view | 12 | 1 | view source=? | review: complex view may recalc on refresh |
 | `check_utm_fuck_direct` | `bi_check_utm_fuck_direct` | View | view | view | 9 | 0 | view source=check_utm_fuck_direct | OK: projection view over check_utm_fuck_direct |

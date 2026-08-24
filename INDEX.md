@@ -15,24 +15,24 @@ Read the nearest child index first; use this file only to choose the right area.
 | file | KB | purpose |
 |---|---|---|
 | `ATTRIBUTION.md` | 8 | ATTRIBUTION.md — единый авторитет по атрибуции |
-| `BLOCKS.md` | 45 | BLOCKS.md — технические блоки ETL (C–L) + corrections |
-| `CANON.md` | 7 | CANON.md — канон значений `big_analytics_full` |
+| `BLOCKS.md` | 47 | BLOCKS.md — технические блоки ETL (C–L) + corrections |
+| `CANON.md` | 14 | CANON.md — канон значений `big_analytics_full` |
 | `CLAUDE.md` | 5 | CLAUDE.md — big_analytics_v6_ch |
 | `COLUMNS_big_analytics_full.md` | 11 | COLUMNS_big_analytics_full.md — поколоночный словарь главной витрины |
 | `COOKIES.md` | 7 | COOKIES.md — куки Яндекс.Директ |
 | `DB_AD_ANALYTICS.md` | 19 | DB_AD_ANALYTICS.md — регламент ведения ClickHouse `ad_analytics` |
 | `DB_TABLES.md` | 52 | DB_TABLES.md — legacy PostgreSQL table map |
 | `DOD.md` | 19 | DOD — Definition of Done, big_analytics_v6_ch |
-| `FUNNEL.md` | 12 | FUNNEL.md — воронка заявок (`reference_data.crm_status_mapping`) |
+| `FUNNEL.md` | 13 | FUNNEL.md — воронка заявок (`reference_data.crm_status_mapping`) |
 | `GOLDEN_BASELINE.md` | 33 | GOLDEN BASELINE — эталонные значения v6_ch |
 | `KNOWN_ISSUES.md` | 79 | KNOWN_ISSUES — big_analytics_v6_ch |
 | `MEMORY.md` | 17 | MEMORY.md — big_analytics_v5 (condensed patterns) |
 | `MEMORY_ARCHIVE.md` | 275 | MEMORY.md — ba_pipeline: нетривиальные уроки |
-| `OPTIMIZATION_PLAN.md` | 23 | План оптимизации веса таблиц `ad_analytics` (BA6) |
+| `OPTIMIZATION_PLAN.md` | 24 | План оптимизации веса таблиц `ad_analytics` (BA6) |
 | `PBI_REFRESH_OPTIMIZATION_RECOMMENDATIONS_2026-08-18.md` | 9 | PBI_REFRESH_OPTIMIZATION_RECOMMENDATIONS_2026-08-18 |
 | `PBI_SOURCE_AUDIT_2026-08-18.md` | 4 | PBI Source Audit |
 | `PBI_TABLES.md` | 48 | PBI_TABLES.md — Power BI source tables |
-| `PIPELINES.md` | 10 | PIPELINES.md — v6_ch ClickHouse pipelines |
+| `PIPELINES.md` | 11 | PIPELINES.md — v6_ch ClickHouse pipelines |
 | `PLAN.md` | 42 | PLAN.md — big_analytics_v6_ch (миграция пайплайна на ClickHouse) |
 | `POSEV_LEADS_LOSS_PLAN.md` | 24 | POSEV_LEADS_LOSS_PLAN — системный план ловли и починки потерь посевных ЗАЯВОК |
 | `POSEV_LOSSES_PLAYBOOK.md` | 45 | POSEV_LOSSES_PLAYBOOK — направление «посевы» big_analytics_v5 |
@@ -47,9 +47,9 @@ Read the nearest child index first; use this file only to choose the right area.
 | `SHEET_RECONCILE.md` | 10 | Сверка с гугл-таблицей «посевы» — FINDINGS + METHODOLOGY |
 | `SHEET_RECONCILE_FINDINGS.md` | 55 | Сверка Google-таблиц салонов ↔ public.fact_big_analytics (контекст) |
 | `SHEET_RECONCILE_METHODOLOGY.md` | 28 | Методика сверки Google-таблиц салонов ↔ витрина (КОНТЕКСТ) |
-| `SPEC.md` | 34 | SPEC — big_analytics v6 на ClickHouse |
+| `SPEC.md` | 36 | SPEC — big_analytics v6 на ClickHouse |
 | `STAR_REFACTOR_BRIEF.md` | 14 | ТЗ для director — рефакторинг big_analytics_v5 под звезду (star schema) |
-| `STATE.md` | 29 | big_analytics_v6_ch — статус |
+| `STATE.md` | 30 | big_analytics_v6_ch — статус |
 | `STATE_ARCHIVE.md` | 500 | Сессия 2026-07-15 (oleg_programmer — restore-прогон на откаченном коде) — ⚠️ kval НЕ восстановился |
 | `V5_V6_FUNNEL_BREAKDOWN_2026-08-17.md` | 13 | Расхождение БА5 ↔ БА6 — разбивка по месяцам, источникам и салонам |
 | `V5_V6_RECONCILE_2026-08-10.md` | 12 | Сверка big_analytics_v6_ch с big_analytics_v5 — 2026-08-10 |

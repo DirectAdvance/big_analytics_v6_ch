@@ -314,9 +314,10 @@ QCPL=spent/квал, CPV=spent/визиты, CPS=spent/продажи.
 
 ## Как Power BI забирает данные (механика refresh)
 
-1. `pipeline_powerbi.py` → пересборка `big_analytics_*` (`pipeline.main()`).
-2. `refresh_powerbi(tables=_ALL_TABLES)` → OAuth client_credentials в Azure AD,
-   `TakeOver` датасета, PATCH PostgreSQL-credentials, POST `/refreshes` с объектами
+1. `cron_run.py` запускает `refresh_powerbi.py` только после успешного `pipeline.py`; отдельного
+   `pipeline_powerbi.py` в активном v6-контуре нет.
+2. `refresh_powerbi.py` → OAuth client_credentials в Azure AD, проверка datasource датасета
+   (BA5/PostgreSQL блокируется до POST), selective transactional POST `/refreshes` с объектами
    `[{table: t} for t in _ALL_TABLES]`, затем polling статуса (до 60 мин).
 3. Режим всех таблиц в модели — **Import** (не DirectQuery), без incremental refresh policy.
 4. Конфиг PBI Service (`workspace_id`, `dataset_id`, `client_id/secret`, `tenant_id`) —
@@ -324,8 +325,8 @@ QCPL=spent/квал, CPV=spent/визиты, CPS=spent/продажи.
    **Никогда не хардкодить.**
 
 Локальная модель/отчёт (PBIP): `Documents/креативы виктори/.../Большая аналитика_v00.SemanticModel`
-+ `Большая аналитика_v00.Report` (живая file-based модель; облачный датасет — `Большая аналитика_v00`
-в воркспейсе `Victory Analytics`).
++ `Большая аналитика_v00.Report` (живая file-based модель); облачный Service dataset на 2026-08-24 —
+`Большая аналитика_admin` в воркспейсе `Victory Analytics`.
 
 ---
 

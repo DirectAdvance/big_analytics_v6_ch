@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
-"""
-refresh_powerbi.py — только обновление отчётов Power BI Service.
-
-Запуск:
-    ~/venv/bin/python3 refresh_powerbi.py
-"""
+"""Selective refresh опубликованного BA6-датасета в Power BI Service."""
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 import time
@@ -16,443 +10,230 @@ from pathlib import Path
 
 import requests
 
-_ROOT = Path(__file__).resolve().parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 
-# ── Loader discovery: работает и на Mac (корень репо), и на Victory (home) ────
-# FIX-LOADER-DISCOVERY-2026-06-15
-_SECRET_DIR: Path | None = None
-for _p in Path(__file__).resolve().parents:
-    if (_p / '.secret' / 'loader.py').exists():
-        _SECRET_DIR = _p / '.secret'
-        break
-if _SECRET_DIR is None:
-    raise RuntimeError(
-        'refresh_powerbi: .secret/loader.py не найден ни в одном из родительских каталогов. '
-        'Запускай из корня репо (Mac) или из ~/big_analytics_v5 (Victory).'
-    )
-if str(_SECRET_DIR) not in sys.path:
-    sys.path.insert(0, str(_SECRET_DIR))
+SECRET_DIR = next(
+    (parent / ".secret" for parent in Path(__file__).resolve().parents
+     if (parent / ".secret" / "loader.py").exists()),
+    None,
+)
+if SECRET_DIR is None:
+    raise RuntimeError("refresh_powerbi: .secret/loader.py не найден")
+sys.path.insert(0, str(SECRET_DIR))
 
-from loader import load_powerbi, load_db  # type: ignore  # noqa: E402
-
-from config.tokens import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_PROXY_VARIANTS  # noqa: E402
+from loader import load_powerbi  # type: ignore  # noqa: E402
+from config.tokens import (  # noqa: E402
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
+    TELEGRAM_PROXY_VARIANTS,
+)
 from notifications.telegram import TelegramMessage, TelegramSection, send_notification  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
-_NULL_GATEWAY_ID = '00000000-0000-0000-0000-000000000000'
-
-# Канонический хост Victory для облачного датасета Power BI.
-# Голый IP 103.88.240.90 падает по «remote certificate invalid» (CN сертификата
-# Let's Encrypt = analytics-marketing.ru), а внутренний Parallels-IP 10.211.55.2
-# (наследуется при публикации модели из Desktop) недостижим из облачного шлюза.
-# Поэтому ребайнд всегда на доменное имя. database всегда ad_analytics_bi.
-CANONICAL_PG_HOST = 'analytics-marketing.ru'
-CANONICAL_PG_DATABASE = 'ad_analytics_bi'
+POLL_INTERVAL_SECONDS = 60
+POLL_TIMEOUT_SECONDS = 3600
 
 
-# TG_DIRECT_FIRST_2026-06-15: local SOCKS proxies on Mac are often down, and for
-# Power BI refresh that is not a refresh error — so direct goes first, proxies
-# are fallback (the reverse of the proxy-first order most other senders use).
-_TG_PROXY_CHAIN = [None] + [p for p in TELEGRAM_PROXY_VARIANTS if p is not None]
+class PowerBIRefreshError(RuntimeError):
+    pass
 
 
-def _notify(message: TelegramMessage) -> None:
-    """The one sender: `notifications.telegram.send_notification` (proxy order
-    above is this file's business rule, passed in — not duplicated transport)."""
-    if not send_notification(message, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
-                             proxy_variants=_TG_PROXY_CHAIN):
-        logger.warning('Telegram send failed after %d attempts', len(_TG_PROXY_CHAIN))
+_ALL_TABLES = [
+    "big_analytics_full",
+    "Dim_Date", "Dim_Campaign", "Dim_AdGroup", "Dim_Site", "Dim_City_Tier",
+    "fact_vk_ads", "direct_history", "check_utm_fuck_direct",
+    "yandex_direct_korrektirovki", "yandex_direct_404_errors",
+    "pixel_score", "yandex_direct_cookie_analytics_website_pages",
+    "fact_adformat_spend", "fact_criterion_spend", "fact_criterion_zayavki",
+    "dim_criterion", "fact_region_spend", "fact_region_zayavki", "Dim_Location",
+    "Dim_PlacementFeed", "fact_direct_feed_funnel",
+    "yandex_direct_minus_snapshot", "v_yandex_direct_minus_delta",
+    "fact_ml_korrektirovki",
+]
 
 
-def build_poll_timeout_message() -> TelegramMessage:
+def build_run_failed_message() -> TelegramMessage:
     return TelegramMessage(
-        title='⚠️ Power BI: не удалось получить статус обновления (таймаут опроса)')
-
-
-def build_refresh_done_message(elapsed_seconds: int) -> TelegramMessage:
-    return TelegramMessage(
-        title=f'✅ Power BI: обновление завершено ({elapsed_seconds // 60} мин {elapsed_seconds % 60} сек)')
+        title="🔴 refresh_powerbi: остановлен ошибкой",
+        summary="Подробности — в логе refresh_powerbi на Victory.",
+    )
 
 
 def build_refresh_failed_message(status: str, request_id: str) -> TelegramMessage:
-    """Status + requestId are actionable; the vendor's free-form error text is
-    not — it stays out of Telegram and lives with the traceback (logged in full
-    by the caller via `logger.error` right before this is built)."""
     return TelegramMessage(
-        title=f'❌ Power BI: обновление завершилось со статусом {status}',
-        sections=[TelegramSection('Детали', rows=[
-            ('requestId', request_id or '—'),
-            ('Полный текст ошибки', 'в логе refresh_powerbi на Victory'),
+        title=f"❌ Power BI: обновление завершилось со статусом {status}",
+        sections=[TelegramSection("Детали", rows=[
+            ("requestId", request_id or "—"),
+            ("Полный текст ошибки", "в логе refresh_powerbi на Victory"),
         ])],
     )
 
 
-def build_wait_timeout_message() -> TelegramMessage:
-    return TelegramMessage(title='⚠️ Power BI: таймаут ожидания обновления (60 мин)')
-
-
-def build_run_failed_message() -> TelegramMessage:
-    """VERDICT_FIRST_FACT_ONLY_2026-08-14: fact only, never the exception
-    text/traceback — `logger.error` right before the call site logs it."""
+def build_refresh_done_message(elapsed_seconds: int) -> TelegramMessage:
     return TelegramMessage(
-        title='🔴 refresh_powerbi: остановлен ошибкой',
-        summary='Подробности — в логе refresh_powerbi на Victory.',
+        title=f"✅ Power BI: обновление завершено "
+              f"({elapsed_seconds // 60} мин {elapsed_seconds % 60} сек)"
     )
 
 
-def _load_powerbi_config() -> dict:
-    # FIX-LOADER-DISCOVERY-2026-06-15: больше не tokens.json, читаем из .env через load_powerbi()
-    return load_powerbi()
+def build_poll_timeout_message() -> TelegramMessage:
+    return TelegramMessage(
+        title="⚠️ Power BI: не удалось получить статус обновления (таймаут опроса)"
+    )
 
 
-def _get_powerbi_token(pbi: dict) -> str:
-    logger.info('Power BI: получение токена ...')
-    resp = requests.post(
-        f"https://login.microsoftonline.com/{pbi['tenant_id']}/oauth2/v2.0/token",
+def _notify(message: TelegramMessage) -> None:
+    proxy_chain = [None, *(proxy for proxy in TELEGRAM_PROXY_VARIANTS if proxy)]
+    if not send_notification(
+        message,
+        bot_token=TELEGRAM_BOT_TOKEN,
+        chat_id=TELEGRAM_CHAT_ID,
+        proxy_variants=proxy_chain,
+    ):
+        logger.warning("Power BI: Telegram не доставлен")
+
+
+def _token(config: dict) -> str:
+    response = requests.post(
+        f"https://login.microsoftonline.com/{config['tenant_id']}/oauth2/v2.0/token",
         data={
-            'grant_type': 'client_credentials',
-            'client_id': pbi['client_id'],
-            'client_secret': pbi['client_secret'],
-            'scope': 'https://analysis.windows.net/powerbi/api/.default',
+            "grant_type": "client_credentials",
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
+            "scope": "https://analysis.windows.net/powerbi/api/.default",
         },
         timeout=30,
     )
-    resp.raise_for_status()
-    return resp.json()['access_token']
+    response.raise_for_status()
+    return response.json()["access_token"]
 
 
-def _load_pg_credentials() -> tuple[str, str]:
-    # FIX-LOADER-DISCOVERY-2026-06-15: используем load_db через уже найденный _SECRET_DIR
-    db = load_db('victory')
-    return db['user'], db['password']
+def _api_base(config: dict) -> str:
+    return (
+        f"https://api.powerbi.com/v1.0/myorg/groups/{config['workspace_id']}"
+        f"/datasets/{config['dataset_id']}"
+    )
 
 
-def _take_over_dataset(pbi: dict, token: str) -> None:
-    """Захватить владение датасетом (нужно для UpdateDatasources и PATCH credentials)."""
-    workspace_id = pbi['workspace_id']
-    dataset_id = pbi['dataset_id']
-    try:
-        to_resp = requests.post(
-            f'https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}'
-            f'/datasets/{dataset_id}/Default.TakeOver',
-            headers={'Authorization': f'Bearer {token}'},
-            timeout=30,
+def _assert_ba6_datasource(api_base: str, headers: dict[str, str]) -> None:
+    response = requests.get(f"{api_base}/datasources", headers=headers, timeout=30)
+    response.raise_for_status()
+    datasource_types = {
+        str(source.get("datasourceType", "")).lower()
+        for source in response.json().get("value", [])
+    }
+    if not datasource_types:
+        raise PowerBIRefreshError("у датасета Power BI не найден источник данных")
+    if "postgresql" in datasource_types:
+        raise PowerBIRefreshError(
+            "настроенный датасет всё ещё BA5/PostgreSQL; сначала опубликуй BA6/ClickHouse"
         )
-        if to_resp.status_code == 200:
-            logger.info('Power BI: TakeOver выполнен успешно')
-        else:
-            logger.warning('Power BI: TakeOver вернул %d — %s',
-                           to_resp.status_code, to_resp.text[:200])
-    except Exception as e:
-        logger.warning('Power BI: TakeOver ошибка: %s', e)
+    logger.info("Power BI: источник BA6 подтверждён: %s", sorted(datasource_types))
 
 
-def _get_pg_datasources(pbi: dict, token: str) -> list[dict]:
-    """Возвращает список PostgreSQL-датасорсов датасета (GET /datasources)."""
-    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-    workspace_id = pbi['workspace_id']
-    dataset_id = pbi['dataset_id']
-    ds_url = (
-        f'https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}'
-        f'/datasets/{dataset_id}/datasources'
-    )
-    r = requests.get(ds_url, headers=headers, timeout=30)
-    r.raise_for_status()
-    return [ds for ds in r.json().get('value', []) if ds.get('datasourceType', '').lower() == 'postgresql']
+def _refresh_status(response: requests.Response) -> str:
+    payload = response.json()
+    if "status" in payload:
+        return str(payload["status"])
+    items = payload.get("value", [])
+    return str(items[0].get("status", "")) if items else ""
 
 
-def _ensure_datasource_host(pbi: dict, token: str) -> bool:
-    """Идемпотентно чинит host-mismatch облачного датасета (KNOWN_ISSUES #15).
+def refresh_powerbi() -> int:
+    config = load_powerbi()
+    token = _token(config)
+    headers = {"Authorization": f"Bearer {token}"}
+    api_base = _api_base(config)
 
-    При публикации модели из Power BI Desktop облачный датасет наследует хост
-    публикующей машины (например Parallels-IP 10.211.55.2, localhost или голый
-    103.88.240.90) — недостижимый/невалидный по SSL из облачного шлюза → credential
-    PATCH 400 (MashupDataAccessError) → refresh Failed (DMTS_DatasourceHasNoCredentialError).
+    _assert_ba6_datasource(api_base, headers)
 
-    Эта функция получает datasources датасета и, если у PostgreSQL-датасорса
-    server != CANONICAL_PG_HOST, ребайндит его через Default.UpdateDatasources
-    (server → analytics-marketing.ru, database остаётся ad_analytics_bi). Если хост
-    уже канонический — no-op (только лог). Вызывать ВСЕГДА ПЕРЕД credentials/refresh
-    (rebind меняет datasourceId, поэтому credentials привязываются уже после него).
+    latest_url = f"{api_base}/refreshes?$top=1"
+    latest = requests.get(latest_url, headers=headers, timeout=30)
+    latest.raise_for_status()
+    if _refresh_status(latest) == "Unknown":
+        raise PowerBIRefreshError(
+            "предыдущий refresh ещё выполняется; свежие данные pipeline не опубликованы"
+        )
 
-    ВАЖНО: datasourceSelector.connectionDetails должен быть dict-объектом, НЕ
-    JSON-строкой — иначе API вернёт 400 BadRequest «Invalid value».
-
-    Возвращает True если rebind был выполнен (нужно перечитать datasources перед
-    PATCH credentials), False если rebind не потребовался.
-    """
-    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-    workspace_id = pbi['workspace_id']
-    dataset_id = pbi['dataset_id']
-
-    try:
-        pg_sources = _get_pg_datasources(pbi, token)
-    except Exception as e:
-        logger.warning('Power BI host-rebind: не удалось получить datasources: %s', e)
-        return False
-
-    if not pg_sources:
-        logger.info('Power BI host-rebind: PostgreSQL datasources не найдены — пропуск')
-        return False
-
-    rebind_details = []
-    for ds in pg_sources:
-        conn = ds.get('connectionDetails', {}) or {}
-        cur_server = conn.get('server', '')
-        cur_db = conn.get('database', '') or CANONICAL_PG_DATABASE
-        if cur_server == CANONICAL_PG_HOST:
-            logger.info('Power BI host-rebind: host OK (server=%s)', cur_server)
-            continue
-        logger.info('Power BI host-rebind: rebind %s -> %s', cur_server or '<empty>', CANONICAL_PG_HOST)
-        # ВАЖНО: connectionDetails в datasourceSelector — dict, не json.dumps(dict).
-        # API ожидает объект; строка даёт 400 "Invalid value target=connectionDetails".
-        # FIX-REBIND-CONNDETAILS-2026-06-14
-        rebind_details.append({
-            'datasourceSelector': {
-                'datasourceType': 'PostgreSql',
-                'connectionDetails': {'server': cur_server, 'database': cur_db},
-            },
-            'connectionDetails': {
-                'server': CANONICAL_PG_HOST,
-                'database': CANONICAL_PG_DATABASE,
-            },
-        })
-
-    if not rebind_details:
-        return False
-
-    update_url = (
-        f'https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}'
-        f'/datasets/{dataset_id}/Default.UpdateDatasources'
-    )
-    body = json.dumps({'updateDetails': rebind_details}).encode()
-    try:
-        ur = requests.post(update_url, data=body, headers=headers, timeout=60)
-        if ur.status_code in (200, 202):
-            logger.info('Power BI host-rebind: UpdateDatasources OK (HTTP %d) — %d источник(ов) -> %s',
-                        ur.status_code, len(rebind_details), CANONICAL_PG_HOST)
-            return True
-        else:
-            logger.warning('Power BI host-rebind: UpdateDatasources вернул %d — %s',
-                           ur.status_code, ur.text[:300])
-            return False
-    except Exception as e:
-        logger.warning('Power BI host-rebind: ошибка UpdateDatasources: %s', e)
-        return False
-
-
-def _ensure_powerbi_datasource_credentials(pbi: dict, token: str) -> None:
-    try:
-        pg_user, pg_pass = _load_pg_credentials()
-    except Exception as e:
-        logger.warning('Power BI credentials setup: не удалось загрузить pg credentials: %s', e)
-        return
-
-    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-    workspace_id = pbi['workspace_id']
-    dataset_id = pbi['dataset_id']
-
-    ds_url = (
-        f'https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}'
-        f'/datasets/{dataset_id}/datasources'
-    )
-    try:
-        r = requests.get(ds_url, headers=headers, timeout=30)
-        r.raise_for_status()
-        datasources = r.json().get('value', [])
-    except Exception as e:
-        logger.warning('Power BI credentials setup: не удалось получить datasources: %s', e)
-        return
-
-    pg_sources = [ds for ds in datasources if ds.get('datasourceType', '').lower() == 'postgresql']
-    if not pg_sources:
-        logger.info('Power BI credentials setup: PostgreSQL datasources не найдены — пропуск')
-        return
-
-    logger.info('Power BI credentials setup: найдено %d PostgreSQL datasource(s)', len(pg_sources))
-
-    credential_body = json.dumps({
-        'credentialDetails': {
-            'credentialType': 'Basic',
-            'credentials': json.dumps({
-                'credentialData': [
-                    {'name': 'username', 'value': pg_user},
-                    {'name': 'password', 'value': pg_pass},
-                ]
-            }),
-            'encryptedConnection': 'NotEncrypted',
-            'encryptionAlgorithm': 'None',
-            'privacyLevel': 'Organizational',
-            'useEndUserOAuth2Credentials': False,
-        }
-    })
-
-    for ds in pg_sources:
-        gateway_id = ds.get('gatewayId', _NULL_GATEWAY_ID)
-        datasource_id = ds.get('datasourceId', '')
-        if not datasource_id:
-            logger.warning('Power BI credentials setup: datasource без datasourceId, пропуск')
-            continue
-
-        if not gateway_id or gateway_id == _NULL_GATEWAY_ID:
-            patch_url = (
-                f'https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}'
-                f'/datasets/{dataset_id}/datasources/{datasource_id}'
-            )
-            endpoint_type = 'cloud'
-        else:
-            patch_url = (
-                f'https://api.powerbi.com/v1.0/myorg/gateways/{gateway_id}'
-                f'/datasources/{datasource_id}'
-            )
-            endpoint_type = 'gateway'
-
-        logger.info('Power BI credentials setup: PATCH %s datasource %s ...',
-                    endpoint_type, datasource_id[:8] + '...')
-        try:
-            pr = requests.patch(patch_url, data=credential_body, headers=headers, timeout=30)
-            if pr.status_code in (200, 204):
-                logger.info('Power BI credentials setup: credentials установлены (HTTP %d)', pr.status_code)
-            else:
-                logger.warning('Power BI credentials setup: PATCH вернул %d — %s',
-                               pr.status_code, pr.text[:300])
-        except Exception as e:
-            logger.warning('Power BI credentials setup: ошибка PATCH: %s', e)
-
-
-_ALL_TABLES = [
-    'big_analytics_full', 'big_analytics_full_arrival',
-    'Dim_Date', 'Dim_Campaign', 'Dim_AdGroup', 'Dim_Site',
-    'fact_vk_ads',                  # VK Ads датамарт (star build_vk_ads_fact, VK_ADS_FACT_2026-07-10) — parity с PBI_TABLES
-    'direct_history', 'check_utm_fuck_direct',
-    'yandex_direct_korrektirovki', 'yandex_direct_404_errors',
-    'pixel_score', 'yandex_direct_cookie_analytics_website_pages',
-    # DATAMARTS_LIVE_TABS_2026-07-14: датамарты живых вкладок Формат/Ключи/расстояние/Фиды.
-    # Без них облачные копии *_spend оставались ПУСТЫМИ (вкладки «Формат»/«Ключевые слова» пустые),
-    # т.к. refresh обновляет только объекты из _ALL_TABLES. Dim_Distance НЕ включаем (calculated).
-    'fact_adformat_spend',                      # «Формат» (расход по ad_format)
-    'fact_criterion_spend', 'fact_criterion_zayavki',   # «Ключевые слова» (расход + воронка по критерию)
-    'dim_criterion',                                    # справочник критериев
-    'fact_region_spend', 'fact_region_zayavki', 'Dim_Location',  # «расстояние»/область
-    'Dim_PlacementFeed', 'fact_direct_feed_funnel',  # «Фиды»
-    # MINUS_TABLES_2026-07-18: «Я.Директ проверки → Количество минус слов».
-    # Обе присутствуют в опубликованном датасете (проверено executeQueries 18.07),
-    # обе — mode: import над PG (delta — VIEW на стороне PG, для PBI обычная таблица).
-    'yandex_direct_minus_snapshot', 'v_yandex_direct_minus_delta',
-    # ML_KORREKTIROVKI_PBI_2026-07-31: таблица есть в admin_ch SemanticModel,
-    # поэтому selective refresh должен обновлять её вместе с остальными PBI-объектами.
-    'fact_ml_korrektirovki',
-]
-
-
-def refresh_powerbi(tables: list[str] | None = None) -> None:
-    pbi = _load_powerbi_config()
-    token = _get_powerbi_token(pbi)
-
-    logger.info('Power BI: захват владения датасетом (TakeOver) ...')
-    _take_over_dataset(pbi=pbi, token=token)
-
-    logger.info('Power BI: проверка/ребайнд хоста датасорса ...')
-    rebind_done = _ensure_datasource_host(pbi=pbi, token=token)
-    if rebind_done:
-        # После UpdateDatasources PBI пересоздаёт datasource с новым dsId.
-        # Даём сервису 5 секунд на propagation перед GET datasources в credentials.
-        logger.info('Power BI: rebind выполнен — пауза 5 сек перед credentials ...')
-        time.sleep(5)
-
-    logger.info('Power BI: установка datasource credentials ...')
-    _ensure_powerbi_datasource_credentials(pbi=pbi, token=token)
-
-    if tables is not None:
-        body = json.dumps({
-            'type': 'full',
-            'notifyOption': 'NoNotification',
-            'objects': [{'table': t} for t in tables],
-        }).encode()
-        headers_refresh = {
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json',
-        }
-        logger.info('Power BI: обновление %d таблиц: %s', len(tables), tables)
-    else:
-        body = None
-        headers_refresh = {'Authorization': f'Bearer {token}'}
-        logger.info('Power BI: полное обновление всех таблиц ...')
-
-    logger.info('Power BI: триггер обновления датасета ...')
-    refresh_resp = requests.post(
-        f"https://api.powerbi.com/v1.0/myorg/groups/{pbi['workspace_id']}"
-        f"/datasets/{pbi['dataset_id']}/refreshes",
-        headers=headers_refresh,
-        data=body,
+    logger.info("Power BI: запускаю selective refresh BA6 (%d таблиц)", len(_ALL_TABLES))
+    response = requests.post(
+        f"{api_base}/refreshes",
+        headers={**headers, "Content-Type": "application/json"},
+        json={
+            "type": "full",
+            "commitMode": "transactional",
+            "maxParallelism": 1,
+            "retryCount": 0,
+            "notifyOption": "NoNotification",
+            "objects": [{"table": table} for table in _ALL_TABLES],
+        },
         timeout=30,
     )
-    if refresh_resp.status_code in (200, 202):
-        logger.info('Power BI: обновление запущено (HTTP %d)', refresh_resp.status_code)
-    else:
-        logger.error('Power BI: ошибка %d — %s', refresh_resp.status_code, refresh_resp.text)
-        raise RuntimeError(f'Power BI refresh failed: {refresh_resp.status_code}')
+    if response.status_code not in (200, 202):
+        raise PowerBIRefreshError(
+            f"триггер refresh вернул HTTP {response.status_code}: {response.text[:500]}"
+        )
 
-    status_url = (
-        f"https://api.powerbi.com/v1.0/myorg/groups/{pbi['workspace_id']}"
-        f"/datasets/{pbi['dataset_id']}/refreshes?$top=1"
-    )
-    headers = {'Authorization': f'Bearer {token}'}
-    poll_interval = 60
-    poll_timeout = 3600
-
-    logger.info('Power BI: ждём завершения (таймаут %d мин) ...', poll_timeout // 60)
-    start = time.time()
-    while True:
-        time.sleep(poll_interval)
+    location = response.headers.get("Location", "")
+    status_url = location or latest_url
+    started = time.monotonic()
+    while time.monotonic() - started <= POLL_TIMEOUT_SECONDS:
         try:
-            r = requests.get(status_url, headers=headers, timeout=30)
-            r.raise_for_status()
-            items = r.json().get('value', [])
-        except Exception as e:
-            logger.warning('Power BI: ошибка опроса статуса: %s', e)
-            if time.time() - start > poll_timeout:
-                _notify(build_poll_timeout_message())
-                return
+            status_response = requests.get(status_url, headers=headers, timeout=30)
+            status_response.raise_for_status()
+            status = _refresh_status(status_response)
+        except requests.HTTPError as error:
+            status_code = error.response.status_code if error.response is not None else 0
+            if status_code not in {408, 429, 500, 502, 503, 504}:
+                raise
+            logger.warning("Power BI: временная ошибка polling HTTP %d", status_code)
+            time.sleep(POLL_INTERVAL_SECONDS)
             continue
-
-        if not items:
+        except (requests.ConnectionError, requests.Timeout, ValueError) as error:
+            logger.warning("Power BI: временная ошибка polling: %s", error)
+            time.sleep(POLL_INTERVAL_SECONDS)
             continue
-
-        status = items[0].get('status', '')
-        logger.info('Power BI: статус = %s', status)
-
-        if status == 'Completed':
-            elapsed = int(time.time() - start)
-            _notify(build_refresh_done_message(elapsed))
-            return
-        if status in ('Failed', 'Cancelled', 'Disabled'):
-            error = items[0].get('serviceExceptionJson', '')
-            request_id = items[0].get('requestId', '')
+        logger.info("Power BI: статус=%s", status or "неизвестен")
+        if status == "Completed":
+            return int(time.monotonic() - started)
+        if status in {"Failed", "Cancelled", "Disabled"}:
+            payload = status_response.json()
+            details = payload if "status" in payload else (payload.get("value") or [{}])[0]
+            request_id = details.get("requestId", "")
+            service_error = details.get("serviceExceptionJson", "")
             logger.error(
-                'Power BI: обновление завершилось со статусом %s (requestId=%s): %s',
-                status, request_id, error or '<нет serviceExceptionJson>',
+                "Power BI: refresh %s (requestId=%s): %s",
+                status,
+                request_id or "—",
+                service_error or "нет serviceExceptionJson",
             )
-            _notify(build_refresh_failed_message(status, request_id))
-            raise RuntimeError(f'Power BI refresh {status}')
+            raise PowerBIRefreshError(
+                f"refresh завершился со статусом {status} (requestId={request_id or '—'})"
+            )
+        time.sleep(POLL_INTERVAL_SECONDS)
+    raise PowerBIRefreshError("таймаут ожидания refresh (60 минут)")
 
-        if time.time() - start > poll_timeout:
-            _notify(build_wait_timeout_message())
-            return
 
-
-if __name__ == '__main__':
+def main(notify: bool = True) -> int:
     try:
-        refresh_powerbi(tables=_ALL_TABLES)
-    except Exception as e:
-        logger.error('refresh_powerbi завершился с ошибкой: %s', e, exc_info=True)
-        _notify(build_run_failed_message())
-        sys.exit(1)
+        elapsed = refresh_powerbi()
+    except Exception as error:
+        logger.error("Power BI BA6 refresh остановлен: %s", error, exc_info=True)
+        if notify:
+            _notify(build_run_failed_message())
+        return 1
+
+    if notify:
+        _notify(build_refresh_done_message(elapsed))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(notify="--no-notify" not in sys.argv[1:]))

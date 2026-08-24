@@ -131,7 +131,7 @@ md5 Mac == md5 Victory → grep маркера патча → `py_compile` на 
 | `verify_big_analytics` FAIL | Читать точный блок FAIL в логе, затем сверить `KNOWN_ISSUES.md` и `GOLDEN_BASELINE.md`. |
 | `data_check/compare/run.py` FAIL | Сохранить stdout/json в `logs/`, разложить по totals и drilldown; обновить отчёт сверки. |
 | `MEMORY_LIMIT_EXCEEDED` на `Dim_AdGroup` | Известный риск star step 145; не ретраить вслепую, сначала смотреть `STATE.md`/`KNOWN_ISSUES.md`. |
-| Power BI refresh нужен | `refresh_powerbi.py` существует, но v6 publishing/refresh проверять отдельно по `PBI_TABLES.md`; не запускать v5 `pipeline_powerbi.py`. |
+| Power BI refresh нужен | `refresh_powerbi.py`; утренний `cron_run.py` запускает его только после успешного pipeline. Настроенный Service dataset: `Большая аналитика_admin` / ClickHouse `Extension`; если `POWERBI_DATASET_ID` снова укажет на BA5 PostgreSQL, guard остановит запуск до POST. |
 
 ## 7. Документы после инцидента или сверки
 

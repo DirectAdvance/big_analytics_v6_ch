@@ -5,6 +5,30 @@ _2026-08-20, после гибридного пикселя, CRM fallback, BA5�
 
 ## Где мы сейчас
 
+2026-08-24: BA6 Power BI refresh включён на опубликованный ClickHouse-датасет. Локальный и Victory
+`POWERBI_DATASET_ID` переведены с BA5 `Большая аналитика_v00` на `Большая аналитика_admin`;
+`refresh_powerbi.py` доставлен на Victory (`md5=efa2ba734867824075683a4698396186`,
+backup `refresh_powerbi.py.bak.20260824_065535`), local+remote `py_compile` OK.
+Live Power BI API на Victory: datasource `Extension`, `_assert_ba6_datasource` = PASS,
+последний selective refresh 25 таблиц = `Completed` (`endTime=2026-08-24T06:15:39.957Z`).
+`cron_run.py` уже совпадал Mac==Victory; следующий cron ещё не проверялся.
+
+2026-08-23: закрыто отставание Victory по reference-data refactor. На Victory перед копированием
+сохранён backup `/home/semen_vi/ba6_v6_ch_pre_reference_data_sync_20260823_103536.tgz`, затем
+точечно доставлены 13 runtime-файлов из локального состояния `a6f959d+`: `corrections.py`,
+`spec_fallback.py`, builders spend, step4/9/14, `korrektirovki/run.py`,
+`metrika_raw_builders.py`, `yandex_direct_checking_report/report.py` и связанные config/migration.
+SHA-256 Mac==Victory по всем 13, remote `py_compile` OK, `data_check/verify_big_analytics.py` на
+Victory = PASS. Остаточный code drift на тот момент: `refresh_powerbi.py` был отдельной Power BI
+gate-задачей, закрытой 2026-08-24; remote-only `__codex_tmp_ba6_parity/*` и
+`step5_build_pixel/check_pixel_table.py` остались как мусор/старый диагностический файл.
+
+2026-08-21: локально подготовлен BA6 Power BI refresh после утреннего cron. `cron_run.py`
+запускает `refresh_powerbi.py` только после успешного `pipeline.py`; refresh делает selective
+transactional POST, ждёт финальный статус и блокирует PostgreSQL datasource до запуска.
+На тот момент Power BI API показывал настроенный `Большая аналитика_v00` с PostgreSql (BA5), поэтому
+деплой был отложен; состояние закрыто 2026-08-24 переводом на `Большая аналитика_admin`.
+
 2026-08-21: BA6 вернул срез `тир_месяца`/`Dim_City_Tier` в PBIP admin+user и live
 ClickHouse. `step0_sync_local/load_city_tier.py` грузит Google Sheet в
 `ad_analytics.gsheet_city_tier`, `star_refactor/build_pbi_compat.py` добавляет
@@ -275,9 +299,15 @@ copy-строк в `raw_leads/raw_calls/raw_perform_leads` = 0. Compare v5→v6 
 - **Инстанс ClickHouse — 2 vCPU / 8.33 ГБ**, серверный потолок 7.49 ГБ, запрос ограничен 2 ГБ
   (`SAFE_QUERY_SETTINGS`), `max_threads=2`. На месячных окнах step3 падает по памяти — неделя
   это потолок ширины.
-- **Дневной прогон в кроне с 16.08:** `0 2 * * *` UTC = 07:00 Екб, через обёртку `cron_run.py`
-  (сам `pipeline.py` в Telegram не пишет ничего). **Ночной прогон в кроне с 17.08:**
+- **Дневной прогон в кроне с 16.08:** `0 4 * * *` UTC = 09:00 Екб, через обёртку `cron_run.py`
+  (сам `pipeline.py` в Telegram не пишет ничего). Сдвинут с `0 2` 24.08: старт попадал в окно
+  загрузки `raw_data.yandex_direct_report_rows` 04:30–06:42 МСК и вчерашний расход приезжал
+  на ~30% — подробности и цифры в `PIPELINES.md`. **Ночной прогон в кроне с 17.08:**
   `10 18 * * *` UTC = 23:10 Екб, через `step_cron_night/pipeline_night.py`.
+- **Гейт на полноту свежего дня — `full_last_day_incomplete` в `verify_big_analytics.py`**
+  (24.08). FAIL, если `sum(total_cost)` за `today()-1` меньше 0.6 медианы семи предыдущих дней.
+  Порог откалиброван бэктестом 16.07–23.08: здоровые ratio 0.784–1.236, сломанный 23.08 = 0.300.
+  До него ни одна проверка не смотрела на полноту последнего дня, и недолив расхода PASS-ил.
 - **Код на Victory сверен с HEAD 16.08: 143/143 совпали.** Ничто не синкает его туда автоматически
   (Mutagen ходит на LXC 101) — дрейф копится молча: Victory отставал на три ETL-коммита от 13–14.08
   (`status_sql`, `corrections`, `step6`). Сверка md5 — `RUNBOOK.md` §3a, гонять перед доверием к прогону.
