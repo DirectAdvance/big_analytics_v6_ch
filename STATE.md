@@ -1,5 +1,80 @@
 # big_analytics_v6_ch — статус
 
+2026-08-24 (2nd rework, director second pass, 3 Important + 5 Minor): все закрыты, код не
+задеплоен/не закоммичен, ждёт review director.
+IMPORTANT #1 — `step0_sync_local/step0.py::_check_reviews_freshness` больше не бросает
+RuntimeError на устаревших reviews (было: 11+ дней → падает весь дневной pipeline, cron
+никто не поставил). Теперь возвращает `(stale_days, warning)`, warning идёт в `details`
+(Telegram/data_quality_log), exists+non-empty гейт остался жёстким (`_check_objects` в
+`run()`, до вызова freshness). Заодно F4: `max(Date)` → `maxOrNull(Date)` (та же
+non-nullable-column ловушка, что была в fetch_direct_stats defect B) — пустая таблица
+больше не читается как "~20000 дней устарело". Живой прогон на одноразовой
+`ad_analytics.zz_ponytail_freshness_proof` (удалена): 8д → warning=None, 11д →
+warning с "stale", пустая таблица → жёсткий raise "has no rows" — все три показаны.
+IMPORTANT #2 — `fetch_direct_stats.py::_check_swap_safe` (новая функция, вызывается перед
+`swap_shadow`): отказывает в swap при `ok_count==0` ИЛИ когда `count()`/`sum(Cost)` shadow
+падает ниже `live * SWAP_MIN_RETENTION_RATIO=0.95` (обоснование допуска — в комментарии у
+константы, от реальных чисел таблицы 6284/88/SAFETY_DAYS=7). При отказе shadow дропается,
+raise, как и у остальных failure-путей. Живой прогон на одноразовой
+`ad_analytics.zz_ponytail_stats_proof(2)` (обе удалены): forced ok_count=0 → refuse + shadow
+dropped + live rows unchanged (100); forced empty-payload (TSV только с заголовком) →
+refuse ("shadow rows=76 < floor=95") + live unchanged; позитивный контроль (реальный мелкий
+инкремент) → swap проходит нормально. tests/test_direct_account_reviews.py + 4 теста (zero
+ok, empty payload, small-drop-within-tolerance, empty-table raise).
+IMPORTANT #3 — `backfill_from_postgres.py` переписан: `--force` обязателен на непустой
+target (иначе RuntimeError), TRUNCATE заменён на shadow+`EXCHANGE TABLES`
+(`swap_shadow`, тот же примитив, что в load_reviews.py), accounts-таблица
+(`yandex_direct_account_reviews`) вообще убрана из скрипта — он больше её не трогает
+(раньше backfill заодно перетирал Sheets-managed справочник PG-снимком, это и случилось
+2026-08-24 при recovery). Живой прогон на одноразовой `ad_analytics.zz_ponytail_backfill_proof`
+(удалена, реальный PG-источник только читался): без `--force` на непустой таблице → refuse,
+target unchanged (1 row); с `--force` → shadow+swap, target=6284 (реальные PG-данные);
+`yandex_direct_account_reviews` до/после = 274/274 (не тронута).
+Minor: F4 (см. выше, freshness). F5 — `step_cron_night/direct_account_reviews/CLAUDE.md`
+переписан честно: снят миф "дубли из Sheets"/"argMax детерминированно берёт максимум id"
+без объяснения лимитации porg-j47mlyp5, убрана устаревшая "273 аккаунта" (backfill больше
+не трогает accounts, так что там больше нет счётчика для рассинхрона). F6 —
+`step3_build_sources/step3.py::_build_reviews_sql` docstring исправлен: оба периода
+porg-j47mlyp5 — ОДНА кампания (`CampaignId 710372643`, `uniqExact(CampaignId)=1`), пауза
+2026-06-20..08-11 и возобновление, а не "разные кампании", как было написано раньше; вывод
+(нужна колонка периода валидности, бизнес-решение, join не трогать) не менялся. F7 —
+в `test_sync_reviews_stats_write_failure_aborts_without_swap` добавлен assert: каждый
+`ALTER TABLE ... DELETE` бьёт в `{STATS_TABLE_FULL}_new`, ни разу в live `STATS_TABLE_FULL`.
+Итог: `python3 -m pytest tests/ -q` = 227 passed / 1 skipped (было 223/1, +4 новых теста).
+Прод-таблицы после всех проверок сверены и НЕ менялись: `yandex_direct_reports_reviews`
+6284/88/1344281.23/2026-01-01..2026-08-16, `yandex_direct_account_reviews` 274/272 — байт-в-
+байт совпадают с числами в начале задачи. Ни одна одноразовая proof-таблица не осталась
+(проверено `system.tables LIKE 'zz_ponytail%'` = пусто). **Не сделано**: деплой на Victory,
+коммит, живой коллектор не запускался — ждёт review `director`.
+
+2026-08-24: восстановлен и переработан `step_cron_night/direct_account_reviews/fetch_direct_stats.py`
+после инцидента потери данных (PID 32096, ручной kill на 109/272 аккаунте, лог
+`logs/manual_reviews_step107_20260824_132850.log`). **Restore**: `backfill_from_postgres.py`
+вернул `ad_analytics.yandex_direct_reports_reviews` к 6284 строкам / 88 логинов /
+sum(Cost)=1344281.23 / 2026-01-01..2026-08-16 — сверено запросом после прогона, точное
+совпадение с PG source of truth (`yandex_direct_raw.*` на Victory). Backfill заодно перетёр
+`yandex_direct_account_reviews` до 273/272 (PG-снимок) — восстановлен обратно до 274/272
+повторным `load_reviews.sync_reviews_accounts()` из живого Google Sheets (тот ряд, который
+Семён просил не "восстанавливать" бэкфилом). **Три дефекта исправлены** (root cause —
+`fetch_direct_stats.py` module docstring, блок ATOMICITY): A — `Date` шёл в insert как `str`,
+теперь `_to_date()` конвертирует в `datetime.date` до любой записи, невалидный/отсутствующий
+`Date` бросает `ValueError` громко. B — `max(Date)` по логину без строк отдавал ClickHouse
+default `1970-01-01` (не NULL, колонка non-nullable) → `date_from` считался от эпохи
+(`1969-12-25`); заменено на `maxOrNull(Date)` + явный пол `FULL_DATE_FROM=2026-01-01`.
+C (главный) — `delete_and_insert` больше не трогает live-таблицу: `sync_reviews_stats` пишет
+в shadow-копию (`{STATS_TABLE}_new`), swap в live через `swap_shadow`/`EXCHANGE TABLES`
+только если ВСЕ логины записались чисто; любая ошибка = shadow дропается, live не тронут.
+Добавлен `FAILURE_THRESHOLD=3` — ран прерывается досрочно, а не молотит по всем 272 логинам.
+Доказано на одноразовой ClickHouse-таблице (`ad_analytics.zz_ponytail_reviews_proof`,
+создана/удалена в рамках проверки, prod не трогала): форсированный TypeError не меняет
+таблицу, успешный путь пишет `datetime.date`, threshold обрывает ран на 3-м логине из 5,
+после — таблица подтверждённо удалена. `tests/test_direct_account_reviews.py` +10 тестов
+(A/B/C), suite 223 passed / 1 skipped (было 213/1). **Не сделано**: живой коллектор
+(`run.py` / night step 107) НЕ запускался повторно на проде — ждёт отдельного одобрения
+Семёна после ревью `director`. Код не задеплоен на Victory (это Yandex Cloud managed
+ClickHouse, деплоя как такового нет — `config/ch_db.py` ходит туда напрямую с Мака), не
+закоммичен по условию задачи.
+
 _2026-08-20, после гибридного пикселя, CRM fallback, BA5↔BA6 сверок и принятия BA6-ядра.
 История — `git log -p STATE.md`._
 

@@ -45,11 +45,29 @@ def test_perform_vk_has_dedicated_source_branch() -> None:
 
 
 def test_reviews_without_site_get_stable_domain() -> None:
-    source = inspect.getsource(step3._fetch_reviews_rows_from_postgres)
+    # REVIEWS_CH_NATIVE_2026-08-24: reviews raw moved from a Victory PostgreSQL bridge
+    # (`_fetch_reviews_rows_from_postgres`) to CH-native `ad_analytics.yandex_direct_*_reviews`
+    # tables built by `step_cron_night/direct_account_reviews/`. The synthetic-domain rule
+    # itself is unchanged (same fallback: site if known, else a stable per-login domain) —
+    # only the SQL dialect moved from PostgreSQL `||`/`REPLACE` to ClickHouse `concat`/`replaceAll`.
+    domain_expr = step3._reviews_domain_expr("r.login", "a.`сайт`")
+    built_sql = step3._build_reviews_sql("big_analytics_sources_new")
 
-    assert "AS review_domain" in source
-    assert "'reviews-' || REPLACE(LOWER(TRIM(COALESCE(r.login, 'unknown'))), '_', '-') || '.local'" in source
-    assert "COALESCE(r.login, '') || '|' || COALESCE(r.review_domain, '')" in source
+    assert "concat('reviews-', replaceAll(lower(trim(ifNull(r.login, 'unknown'))), '_', '-'), '.local')" in domain_expr
+    assert f"{domain_expr} AS domain" in built_sql
+    assert f"concat(ifNull(r.login, ''), '|', {domain_expr}) AS `аккаунт|сайт`" in built_sql
+
+
+def test_reviews_account_dedupe_uses_stable_key() -> None:
+    # REVIEWS_DEDUPE_FANOUT_FIX_2026-08-24: `yandex_direct_account_reviews.аккаунт` is not
+    # unique (Sheets data entry duplicates) — the join must pick one row deterministically by
+    # id, not fan out 1:N into the stats join.
+    source = inspect.getsource(step3._build_reviews_sql)
+
+    assert "argMax(`город`, id)" in source
+    assert "argMax(`салон`, id)" in source
+    assert "argMax(`сайт`, id)" in source
+    assert "GROUP BY `аккаунт`" in source
 
 
 def test_perform_api_uses_live_crm_status_mapping() -> None:

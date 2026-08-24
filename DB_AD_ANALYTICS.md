@@ -99,6 +99,7 @@
 |---|---|---|
 | `cron_run.py` → `pipeline.py` | **ежедневно `0 4 * * *` UTC = 09:00 Екб**, крон Victory | шаги 0-148: срезы сырья, промежуточные витрины, звезда, `pbi_*`, `bi_*` |
 | `step_cron_night/pipeline_night.py` | **ежедневно `10 18 * * *` UTC = 23:10 Екб**, крон Victory с `/tmp/ba6_night.lock` | шаги 101-106, 114: `metrika_yandex`, `check_utm`, `check_utm_fuck_direct`, `yandex_direct_korrektirovki`, `yandex_direct_404_errors`, `fact_ml_korrektirovki`, `yandex_direct_minus_snapshot` |
+| `step_cron_night/pipeline_night.py --only-step 107` | **еженедельно**, отдельная крон-строка (см. `step_cron_night/README.md`) | шаг 107 (weekly, вне ежедневного набора — `WEEKLY_DEFAULT_STEPS`): `yandex_direct_account_reviews`, `yandex_direct_reports_reviews` |
 
 **Ночной контур БА6 поставлен в крон 2026-08-17.** Окно выбрано до БА5 night (`0 21 * * *`) и
 далеко от дневных БА5 (`0 2 * * *`) и БА6 (`0 4 * * *`). Проверенный ручной прогон на Victory: PASS за 14м15с,
@@ -128,6 +129,7 @@
 | 146 | `star_refactor.build_pbi_compat` | все `bi_*`, `pbi_*`, `pbi_import_*` |
 | 147, 148 | `spend.cleanup_*`, `star_refactor.cleanup_wide_intermediates` | удаляют `*_staging` и широкие промежуточные |
 | 14 | `step14_minus_snapshot.step14` | `yandex_direct_minus_snapshot`, `v_yandex_direct_minus_delta` |
+| night 107 | `step_cron_night.direct_account_reviews.run` (weekly) | `yandex_direct_account_reviews`, `yandex_direct_reports_reviews` |
 
 **Не обновляется автоматически** (замер 2026-08-17, данные не писались с 31.07):
 `gsheets_crop_targeting_account`, `..._leads`, `..._pravilo_utm`, `local_pixel_config`,

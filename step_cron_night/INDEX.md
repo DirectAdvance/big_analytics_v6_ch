@@ -5,7 +5,7 @@
 > For code structure (who calls what, impact radius) use MCP `code-review-graph`;
 > this index is the fallback when the graph is unavailable.
 
-Files indexed: **19**
+Files indexed: **25**
 
 ## project root
 
@@ -27,6 +27,18 @@ Files indexed: **19**
 | `CLAUDE.md` | 7 | CLAUDE.md — 404_errors |
 | `README.md` | 1 | 404_errors — v6 ClickHouse |
 | `recheck_404.py` | 6 | Recheck URLs from ClickHouse yandex_direct_404_errors with real HTTP codes. |
+
+## `direct_account_reviews/`
+
+| file | KB | purpose |
+|---|---|---|
+| `CLAUDE.md` | 3 | direct_account_reviews — v6 ClickHouse (weekly) |
+| `README.md` | 1 | direct_account_reviews — v6 ClickHouse (weekly) |
+| `__init__.py` | 1 |  |
+| `backfill_from_postgres.py` | 3 | One-off: seed ClickHouse ad_analytics.yandex_direct_{account,reports}_reviews from Victory PG. |
+| `fetch_direct_stats.py` | 8 | Yandex Direct Reports API v5 -> ad_analytics.yandex_direct_reports_reviews (ClickHouse). |
+| `load_reviews.py` | 4 | Google Sheets "Power BI" A:E -> ad_analytics.yandex_direct_account_reviews (ClickHouse). |
+| `run.py` | 1 | v6_ch weekly direct_account_reviews collector: Google Sheets + Direct Reports API v5. |
 
 ## `korrektirovki/`
 

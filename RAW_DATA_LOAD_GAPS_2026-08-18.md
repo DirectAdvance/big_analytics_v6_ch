@@ -21,7 +21,7 @@
 | P0 | ARP / placements с CRM-воронкой | страницы PBI `analytics_report_placement*` как в BA5 | есть spend/Direct goals в `yandex_direct_report_rows`, но нет v5 CRM-воронки по placement |
 | P1 | Минус-фразы снапшотом | убрать сетевой OAuth-вызов из night BA6 | BA6 собирает сам, истории пока мало |
 | P1 | Accounts human/cyborgs | маленький справочник PBI | временная копия есть только как `ad_analytics.raw_new_human_cyborgs` |
-| P1 | Отзывы Direct | убрать последний PostgreSQL-read из step3 | в `raw_data` нет `yandex_direct_reports_reviews` |
+| ✅ CLOSED 2026-08-24 | Отзывы Direct | убрать последний PostgreSQL-read из step3 | BA6 собирает сам (weekly night step 107), просить `raw_data` больше не нужно — см. §P1 ниже |
 | P2 | PagesReport placement links | убрать cookie/Grid-вызов из BA6 | BA6 строит сам; нужно только если у `raw_data` есть cookie-инфраструктура |
 
 ## Что уже есть и не нужно просить повторно
@@ -179,22 +179,23 @@ raw_data.direct_accounts_human_cyborgs
 
 Если исходное имя колонок нужно сохранить из BA5: `аккаунты`, `humancyborgs`.
 
-## P1. Отзывы Direct
+## ✅ P1. Отзывы Direct — CLOSED 2026-08-24
 
-Последняя живая PostgreSQL-зависимость BA6: step3 читает
-`yandex_direct_raw.yandex_direct_reports_reviews` с Victory PG. В `raw_data` таблицы
-`yandex_direct_reports_reviews` нет.
+Была последняя живая PostgreSQL-зависимость BA6: step3 читал
+`yandex_direct_raw.yandex_direct_reports_reviews` с Victory PG на каждом прогоне. Просьба к
+`raw_data` больше не нужна — BA6 обзавёлся собственным weekly-сборщиком вместо ожидания upstream
+loader'а:
 
-Просьба завести:
-
-```sql
-raw_data.yandex_direct_reports_reviews
-    -- минимум: те же колонки, что в Victory PG yandex_direct_raw.yandex_direct_reports_reviews
-    loaded_at DateTime64(6)
-```
-
-Точный список колонок нужно снять с Victory PG перед реализацией. Для заявки сейчас важен сам факт:
-без этого BA6 не будет полностью отвязан от PostgreSQL.
+- `step_cron_night/direct_account_reviews/load_reviews.py` — Google Sheets "Power BI" A:E →
+  `ad_analytics.yandex_direct_account_reviews`.
+- `step_cron_night/direct_account_reviews/fetch_direct_stats.py` — Yandex Direct Reports API v5 →
+  `ad_analytics.yandex_direct_reports_reviews`, инкрементно по аккаунту.
+- Ночной шаг 107 (weekly, не в ежедневном наборе), дневной step3 читает обе таблицы каждый
+  прогон (`step3_build_sources/step3.py::_build_reviews_sql`), без `psycopg2`.
+- История 2026-01-01..2026-08-16 перенесена одноразовым `backfill_from_postgres.py` из
+  замороженной Victory PG (273 аккаунта, 6 284 строки, sum(Cost)=1 344 281.23).
+- Заодно исправлен fan-out в справочнике (`аккаунт` не уникален) — дедуп через
+  `argMax(колонка, id) GROUP BY аккаунт`, минус 86 строк / 10 810.62 ₽ дублей.
 
 ## P2. PagesReport placement links
 

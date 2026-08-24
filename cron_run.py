@@ -67,6 +67,14 @@ RE_KUDERKO_COVERAGE = re.compile(
     r"kuderko_raw_coverage: present_any_day=(\d+) present_pre_cutoff=(\d+) total=(\d+)"
 )
 RE_VERIFY_PASS = re.compile(r"verify_big_analytics:\s*PASS\s*$", re.M)
+# Steps report soft problems via a `WARNING=...` tail on their "Шаг N OK" details line
+# (step0_sync_local/step0.py::_check_reviews_freshness is the first user) instead of raising —
+# a raise would take down the whole daily pipeline for a source that is 0.12% of
+# big_analytics_full. parse_counts/build_final_section never look at `details` text, only at
+# `key=int` pairs in it, so on a green run this warning used to reach nowhere but the log file
+# (BA6 pattern #43: traded a loud failure for an invisible one). Matched per-line so multiple
+# steps warning in one run all show up.
+RE_STEP_WARNING = re.compile(r"WARNING=(.+)$", re.M)
 
 
 def rotate_logs():
@@ -213,6 +221,15 @@ def build_steps_section(text: str) -> list[str]:
     return ["", "<b>время по шагам</b>", f"<code>{escape(chr(10).join(lines))}</code>"]
 
 
+def build_warnings_section(text: str) -> list[str]:
+    warnings = RE_STEP_WARNING.findall(text)
+    if not warnings:
+        return []
+    rows = ["", "<b>⚠️ предупреждения шагов</b>"]
+    rows.extend(f"<code>{escape(w)}</code>" for w in warnings)
+    return rows
+
+
 def build_message(
     rc: int,
     log_path: Path,
@@ -244,6 +261,7 @@ def build_message(
     if run_id:
         rows.append(f"run_id <code>{run_id.group(1)}</code>")
     rows.append("verify: PASS" if verify_pass else "verify: <b>нет PASS</b>")
+    rows.extend(build_warnings_section(text))
     rows.extend(build_raw_section(counts, prev_counts))
     rows.extend(build_final_section(counts))
     rows.extend(build_golden_section(text, golden))

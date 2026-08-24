@@ -76,6 +76,49 @@ def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_
     assert "verify: PASS" in message
 
 
+def test_build_message_surfaces_step_warning_on_green_run(tmp_path):
+    """F9 (director rework 2026-08-24): a stale-reviews WARNING on an otherwise-successful
+    step0 line must reach the rendered Telegram text, not just the log file."""
+    log = tmp_path / "cron_20260824_190000.log"
+    log.write_text(
+        "\n".join([
+            "10:00:00 INFO run_id=abc123",
+            "10:00:01 INFO Шаг 0: step0_sync_local.step0",
+            "10:00:02 INFO Шаг 0 OK за 1.2 сек: raw_yandex=1, reviews_stale_days=11, "
+            "WARNING=yandex_direct_reports_reviews stale — max(Date)=2026-08-01 is 11d old "
+            "(limit 10d); weekly direct_account_reviews collector (night step 107) likely "
+            "skipped or not yet scheduled",
+            "10:00:03 [INFO] verify_big_analytics: PASS",
+        ]),
+        encoding="utf-8",
+    )
+
+    message = cron_run.build_message(0, log, 1)
+
+    assert "✅ <b>БА6: прогон OK</b>" in message
+    assert "предупреждения шагов" in message
+    assert "yandex_direct_reports_reviews stale" in message
+    assert "night step 107" in message
+
+
+def test_build_message_fresh_reviews_has_no_warnings_section(tmp_path):
+    log = tmp_path / "cron_20260824_190000.log"
+    log.write_text(
+        "\n".join([
+            "10:00:00 INFO run_id=abc123",
+            "10:00:01 INFO Шаг 0: step0_sync_local.step0",
+            "10:00:02 INFO Шаг 0 OK за 1.2 сек: raw_yandex=1, reviews_stale_days=2",
+            "10:00:03 [INFO] verify_big_analytics: PASS",
+        ]),
+        encoding="utf-8",
+    )
+
+    message = cron_run.build_message(0, log, 1)
+
+    assert "✅ <b>БА6: прогон OK</b>" in message
+    assert "предупреждения шагов" not in message
+
+
 def test_verify_pass_does_not_match_fail_line():
     assert cron_run.RE_VERIFY_PASS.search(
         "10:01:06 [ERROR] verify_big_analytics: FAIL: full_before_2026=3"

@@ -131,17 +131,28 @@ pipeline Power BI не запускается. Refresh защищён от ст�
 | 104 | `step_cron_night.404_errors.404_errors` | `night_404_errors` |
 | 105 | `step_cron_night.404_errors.recheck_404` | `night_recheck_404` |
 | 106 | `step_cron_night.build_ml_korrektirovki_night` | `night_ml_korrektirovki` |
+| 107 | `step_cron_night.direct_account_reviews.run` | `night_direct_account_reviews` (weekly, `--only-step 107`) |
 | 114 | `step14_minus_snapshot.step14` | `night_minus_snapshot` |
 
 Legacy PG jobs `report_placement`, old `build_spend_daily` и `revoke_metrika_grants` лежат
 в `archive/postgres_legacy_2026_07_31/` и не входят в активный v6 night, пока не портированы
 на `raw_data`/`ad_analytics`.
 
-🔌 **`direct_account_reviews` — исключение: мост в PostgreSQL живой.** Дневной step3
-(`step3_build_sources/step3.py:1746`, `_fetch_reviews_rows_from_postgres`) ходит на Victory
-PostgreSQL за `yandex_direct_raw.yandex_direct_reports_reviews` + `yandex_direct_account_reviews`,
-потому что отзывов в `raw_data` нет. Это единственная зависимость v6 от PG в рабочем контуре.
-Даёт `_source_table='direct_account_reviews'` — 4 996 строк / 1 041 642.40 ₽, совпадает с v5.
+✅ **`direct_account_reviews` — с 2026-08-24 полностью на ClickHouse, PostgreSQL-мост закрыт.**
+Раньше дневной step3 (`_fetch_reviews_rows_from_postgres`) на КАЖДОМ прогоне ходил на Victory
+PostgreSQL за `yandex_direct_raw.yandex_direct_reports_reviews` +
+`yandex_direct_account_reviews` — единственная оставшаяся зависимость v6 от PG в рабочем
+контуре. Теперь сбор сырья — weekly ночной шаг 107 выше
+(`step_cron_night/direct_account_reviews/`, Sheets + Direct Reports API v5 →
+`ad_analytics.yandex_direct_account_reviews` / `yandex_direct_reports_reviews`), а дневной step3
+(`step3_build_sources/step3.py::_build_reviews_sql`) читает эти CH-таблицы каждый прогон — без
+`psycopg2`, без сети на Victory PG. Заодно закрыт джойн-fan-out: `yandex_direct_account_reviews`
+не гарантирует уникальность `аккаунт` (дубль-строка из Sheets), дедуп теперь через
+`argMax(колонка, id) ... GROUP BY аккаунт` (детерминированный выбор по максимальному `id`, не
+бизнес-правило). Даёт `_source_table='direct_account_reviews'` — 6 284 строки /
+1 344 281.23 ₽ (2026-01-01..2026-08-16), это на 86 строк / 10 810.62 ₽ МЕНЬШЕ прежних
+6 370 / 1 355 091.85 ₽ — та самая fan-out-дельта, а не потеря данных
+(`RAW_DATA_LOAD_GAPS_2026-08-18.md` P1 закрыт).
 
 ⚠️ **Не портированы вообще (нет источника в `raw_data`), из-за чего в v6 не собираются
 соответствующие страницы Power BI:** `report_placement` (`analytics_report_placement`) и

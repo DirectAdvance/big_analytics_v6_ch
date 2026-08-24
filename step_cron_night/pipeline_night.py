@@ -36,13 +36,20 @@ NIGHT_STEPS = [
     (104, "step_cron_night.404_errors.404_errors", "night_404_errors"),
     (105, "step_cron_night.404_errors.recheck_404", "night_recheck_404"),
     (106, "step_cron_night.build_ml_korrektirovki_night", "night_ml_korrektirovki"),
+    # WEEKLY, not nightly — see WEEKLY_DEFAULT_STEPS below (mirrors pipeline.py's
+    # NIGHTLY_DEFAULT_STEPS/--include-nightly): excluded from the plain nightly run,
+    # cron reaches it with `--only-step 107` on its own weekly line.
+    (107, "step_cron_night.direct_account_reviews.run", "night_direct_account_reviews"),
     (114, "step14_minus_snapshot.step14", "night_minus_snapshot"),
 ]
 
+# Steps in NIGHT_STEPS that are weekly, not nightly. Excluded from a plain (no-flag)
+# `pipeline_night.py` run, same as `pipeline.py`'s NIGHTLY_DEFAULT_STEPS/--include-nightly.
+# `--only-step` bypasses this filter, so cron can target a weekly step directly without
+# also re-running the whole nightly set.
+WEEKLY_DEFAULT_STEPS = {107}
+
 LEGACY_PG_NOT_IN_NIGHT = {
-    "archive/postgres_legacy_2026_07_31/step_cron_night/direct_account_reviews/pipeline.py": (
-        "weekly v5 job; CH live-fetch not ported yet"
-    ),
     "archive/postgres_legacy_2026_07_31/step_cron_night/report_placement/run.py": (
         "weekly v5 job; v6 builds bi_analytics_report_placement from fact_direct_feed_funnel + raw_leads"
     ),
@@ -71,10 +78,12 @@ def _fmt_dur(seconds: float) -> str:
     return f"{m}м {s}с"
 
 
-def _selected_steps(only_step: int | None) -> list[tuple[int, str, str]]:
-    if only_step is None:
+def _selected_steps(only_step: int | None, include_weekly: bool = False) -> list[tuple[int, str, str]]:
+    if only_step is not None:
+        return [item for item in NIGHT_STEPS if item[0] == only_step]
+    if include_weekly:
         return NIGHT_STEPS
-    return [item for item in NIGHT_STEPS if item[0] == only_step]
+    return [item for item in NIGHT_STEPS if item[0] not in WEEKLY_DEFAULT_STEPS]
 
 
 def run_step(client, run_id: str, step_num: int, module_path: str, label: str, send_tg: bool) -> tuple[bool, float, str]:
@@ -116,17 +125,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only-step", type=int)
     parser.add_argument("--no-tg", action="store_true")
     parser.add_argument("--list-steps", action="store_true")
+    parser.add_argument(
+        "--include-weekly",
+        action="store_true",
+        help="Include weekly-only steps (e.g. direct_account_reviews) in a plain run. "
+        "Cron normally reaches a weekly step with --only-step instead.",
+    )
     args = parser.parse_args(argv)
 
     if args.list_steps:
         for step_num, module_path, label in NIGHT_STEPS:
-            print(f"{step_num}\t{label}\t{module_path}")
+            weekly = " (weekly)" if step_num in WEEKLY_DEFAULT_STEPS else ""
+            print(f"{step_num}\t{label}\t{module_path}{weekly}")
         print("legacy_pg_not_in_night:")
         for path, reason in LEGACY_PG_NOT_IN_NIGHT.items():
             print(f"- {path}: {reason}")
         return 0
 
-    steps = _selected_steps(args.only_step)
+    if not args.include_weekly and args.only_step is None:
+        logger.info("weekly-default steps excluded: %s", sorted(WEEKLY_DEFAULT_STEPS))
+
+    steps = _selected_steps(args.only_step, args.include_weekly)
     if not steps:
         raise SystemExit(f"Night step not found: {args.only_step}")
 

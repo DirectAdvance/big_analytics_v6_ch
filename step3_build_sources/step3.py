@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config.ch_db import get_client, load_db
-from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, replace_view, swap_shadow
+from config.ch_db import get_client
+from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, q, replace_view, swap_shadow
 from config.settings import CDR_PATTERN
 from step1_load_raw.step1 import MARCAR_SOURCE_TYPE, MARCAR_STATUS_PRIORITY
 
@@ -1793,146 +1793,190 @@ def recreate_source_views(client) -> None:
     )
 
 
-def _fetch_reviews_rows_from_postgres(columns: list[str]) -> list[tuple]:
-    """Small BA5 parity bridge: weekly reviews raw still lives in Victory PostgreSQL."""
-    try:
-        import psycopg2
-        import psycopg2.extras
-    except ImportError as exc:  # pragma: no cover - environment guard
-        raise RuntimeError("psycopg2 is required to import direct_account_reviews") from exc
+def _reviews_domain_expr(login_expr: str, site_expr: str) -> str:
+    """Site if known, else a stable synthetic per-login domain — byte-identical rule to the
+    retired PostgreSQL bridge (`'reviews-' || REPLACE(...)`), just CH `concat`/`replaceAll`."""
+    synthetic = f"concat('reviews-', replaceAll(lower(trim(ifNull({login_expr}, 'unknown'))), '_', '-'), '.local')"
+    return f"coalesce(nullIf({site_expr}, ''), {synthetic})"
 
-    pg = load_db("victory")
-    query = """
-        WITH gs AS (
-            SELECT
-                LOWER(TRIM(salon)) AS salon_key,
-                MAX(project_manager) FILTER (WHERE NULLIF(TRIM(project_manager), '') IS NOT NULL) AS project_manager,
-                MAX(client_id) FILTER (WHERE NULLIF(TRIM(client_id), '') IS NOT NULL) AS client_id,
-                MAX(sales_manager) FILTER (WHERE NULLIF(TRIM(sales_manager), '') IS NOT NULL) AS sales_manager
-            FROM public.local_gsheet_sites
-            WHERE NULLIF(TRIM(salon), '') IS NOT NULL
-            GROUP BY LOWER(TRIM(salon))
-        ),
-        reviews AS (
-            SELECT
-                r.*,
-                COALESCE(
-                    NULLIF(TRIM(d.сайт), ''),
-                    'reviews-' || REPLACE(LOWER(TRIM(COALESCE(r.login, 'unknown'))), '_', '-') || '.local'
-                ) AS review_domain,
-                d.салон,
-                d.город
-            FROM yandex_direct_raw.yandex_direct_reports_reviews r
-            LEFT JOIN yandex_direct_raw.yandex_direct_account_reviews d ON d.аккаунт = r.login
-            WHERE r."Date" >= DATE '2026-01-01'
-        )
-        SELECT
-            ''::text AS key3,
-            r."Date"::date AS "Date",
-            CASE EXTRACT(ISODOW FROM r."Date")
-                WHEN 1 THEN '1_Понедельник' WHEN 2 THEN '2_Вторник' WHEN 3 THEN '3_Среда'
-                WHEN 4 THEN '4_Четверг'    WHEN 5 THEN '5_Пятница'  WHEN 6 THEN '6_Суббота'
-                WHEN 7 THEN '7_Воскресенье'
-            END::text AS "День недели",
-            DATE_TRUNC('week', r."Date")::date AS week_start,
-            COALESCE(r."CampaignId", 0)::bigint AS "CampaignId",
-            r."CampaignName"::text AS "CampaignName",
-            COALESCE(r."AdGroupId", 0)::bigint AS "AdGroupId",
-            r."AdGroupName"::text AS "AdGroupName",
-            CASE r."AdNetworkType" WHEN 'SEARCH' THEN 'Отзывы' ELSE r."AdNetworkType" END::text AS "AdNetworkType",
-            r."Device"::text AS "Device",
-            COALESCE(r."Impressions", 0)::numeric AS "Impressions",
-            COALESCE(r."Clicks", 0)::numeric AS "Clicks",
-            COALESCE(r."Cost", 0)::numeric AS total_cost,
-            r.review_domain::text AS domain,
-            COALESCE(r."RlAdjustmentId", 0)::bigint AS "RlAdjustmentId",
-            'отзывы'::text AS "RlAdjustmentId_total",
-            NULL::text AS campaign_code,
-            ''::text AS tp,
-            ''::text AS cpc_cpa,
-            ''::text AS site_quiz,
-            NULL::text AS adgroup_code,
-            COALESCE(r.login, '')::text AS account_login,
-            'отзывы'::text AS manager_login,
-            ''::text AS ag_part1,
-            ''::text AS ag_part2,
-            ''::text AS ag_part3,
-            ''::text AS ag_part4,
-            ''::text AS ag_part5,
-            ''::text AS ag_part6,
-            ''::text AS ag_part7,
-            ''::text AS "марки авто",
-            'отзывы'::text AS "Название crm",
-            'Отзывы'::text AS "тип_заявки",
-            0::numeric AS kol_vo_zayavok,
-            0::numeric AS korr,
-            0::numeric AS kval,
-            0::numeric AS priezd,
-            0::numeric AS prodazhi,
-            0::numeric AS nekorr,
-            0::numeric AS ne_otvechaet,
-            0::numeric AS filtr,
-            0::numeric AS nedozvon,
-            0::numeric AS priedet,
-            0::bigint AS dohod_do_kredita,
-            0::bigint AS dobro,
-            NULL::text AS "статус",
-            'Караваев Михаил'::text AS "специалист",
-            'отзывы'::text AS "тип_сайта",
-            'отзывы'::text AS "шаблон",
-            r.салон::text AS "салон",
-            r.город::text AS "город",
-            NULL::text AS "регион",
-            'Авто'::text AS direction,
-            NULL::text AS "неверный_кодер_new",
-            NULL::text AS fid,
-            NULLIF(TRIM(gs.project_manager), '')::text AS "проджект",
-            NULLIF(TRIM(gs.client_id), '')::text AS "id_салона",
-            NULLIF(TRIM(gs.sales_manager), '')::text AS "менеджер",
-            'Контекст'::text AS "источник",
-            'Отзывы'::text AS "направление",
-            COALESCE(r."CampaignId"::text, '') || '|' || COALESCE(r."CampaignName", '') AS "номер кампании | название кампании",
-            COALESCE(r."AdGroupId"::text, '') || '|' || COALESCE(r."AdGroupName", '') AS "номер группы | название группы",
-            NULL::integer AS "План заявки",
-            NULL::integer AS "План приезда",
-            COALESCE(r.login, '') || '|' || COALESCE(r.review_domain, '') AS "аккаунт|сайт",
-            NULL::bigint AS priezd_arrival_date,
-            NULL::bigint AS prodazhi_arrival_date,
-            'Яндекс'::text AS "поставщик",
-            'direct_account_reviews'::text AS _source_table,
-            NULL::text AS cascade_level,
-            NULL::text AS campaign_status,
-            NULL::text AS payment_model
-        FROM reviews r
-        LEFT JOIN gs ON gs.salon_key = LOWER(TRIM(r.салон))
-        ORDER BY r."Date", r.login, r."CampaignId", r."AdGroupId"
+
+def _build_reviews_sql(target_table: str) -> str:
+    """CH-native replacement for the retired PostgreSQL bridge
+    (`yandex_direct_raw.*` on Victory PG). Source is now
+    `ad_analytics.yandex_direct_reports_reviews` / `yandex_direct_account_reviews`,
+    both filled weekly by `step_cron_night/direct_account_reviews/run.py`.
+
+    REVIEWS_DEDUPE_FANOUT_FIX_2026-08-24: `аккаунт` in yandex_direct_account_reviews is not
+    unique, and the old PG bridge's plain `LEFT JOIN ... ON d.аккаунт = r.login` duplicated
+    every stat row for a repeated account (e.g. porg-rw7i2sgf, 86 rows / 10810.62 RUB, id
+    26/258 — a genuine Sheets data-entry duplicate, both rows carry the identical `сайт`).
+    `argMax(col, id)` below deterministically picks one row per account, collapsing any
+    fan-out to 1:1 — safe for a genuine duplicate.
+
+    KNOWN LIMITATION — porg-j47mlyp5 (id 259/274) is a *different* case argMax cannot
+    represent correctly: its two rows carry a DIFFERENT `сайт` (car-review.site vs
+    avto-world-obzor.site). `yandex_direct_reports_reviews` shows this login's stats fall
+    into two disjoint periods (2026-06-04..06-19, then 2026-08-12..08-16) — but both periods
+    are the SAME campaign (`CampaignId 710372643`, "Заказ на Автостайл №56478834",
+    `uniqExact(CampaignId)=1` across the whole login), one campaign paused 2026-06-20..08-11
+    and resumed, not two different campaigns as an earlier version of this comment claimed.
+    That only confirms the two `сайт` values are genuinely tied to different time windows on
+    the SAME account, not to different campaigns — the underlying problem stands: `сайт`
+    changed over time for this account. `yandex_direct_account_reviews` has NO date/validity
+    column (only id,
+    город, салон, аккаунт, сайт, агентский аккаунт), so a time-varying site cannot be
+    expressed here at all; `argMax(col, id)` just picks whichever row has the highest `id`
+    (incidental sheet-row order, not a designed "latest wins" rule) and silently
+    mis-attributes `domain`/`аккаунт|сайт` for the other period's rows. `parse_records`
+    (load_reviews.py) logs a warning for this case so it stays visible. Fixing it for real
+    needs a validity-period column in the reference sheet — a business decision, not made
+    here; do not change the join to "fix" this without that decision.
     """
-    conn = None
-    try:
-        conn = psycopg2.connect(
-            host=pg["host"],
-            port=pg["port"],
-            dbname=pg["database"],
-            user=pg["user"],
-            password=pg["password"],
-            connect_timeout=20,
+    domain_expr = _reviews_domain_expr("r.login", "a.`сайт`")
+    return f"""
+CREATE TABLE ad_analytics.{target_table}
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(`Date`)
+ORDER BY (`Date`, ifNull(`CampaignId`, 0), ifNull(key3, ''))
+AS
+WITH
+accounts AS
+(
+    SELECT
+        `аккаунт` AS account,
+        argMax(`город`, id) AS `город`,
+        argMax(`салон`, id) AS `салон`,
+        argMax(`сайт`, id) AS `сайт`
+    FROM ad_analytics.yandex_direct_account_reviews
+    GROUP BY `аккаунт`
+),
+gs AS
+(
+    SELECT
+        lower(trim(salon)) AS salon_key,
+        argMax(project_manager, _loaded_at) AS project_manager,
+        argMax(client_id, _loaded_at) AS client_id,
+        argMax(sales_manager, _loaded_at) AS sales_manager
+    FROM reference_data.gsheet_sites
+    WHERE ifNull(trim(salon), '') != ''
+    GROUP BY lower(trim(salon))
+)
+SELECT
+    '' AS key3,
+    r.`Date` AS `Date`,
+    {_weekday_expr("r.`Date`")} AS `День недели`,
+    toStartOfWeek(r.`Date`, 1) AS week_start,
+    ifNull(r.`CampaignId`, 0) AS `CampaignId`,
+    r.`CampaignName` AS `CampaignName`,
+    ifNull(r.`AdGroupId`, 0) AS `AdGroupId`,
+    r.`AdGroupName` AS `AdGroupName`,
+    if(r.`AdNetworkType` = 'SEARCH', 'Отзывы', r.`AdNetworkType`) AS `AdNetworkType`,
+    r.`Device` AS `Device`,
+    toDecimal64(ifNull(r.`Impressions`, 0), 6) AS `Impressions`,
+    toDecimal64(ifNull(r.`Clicks`, 0), 6) AS `Clicks`,
+    toDecimal64(ifNull(r.`Cost`, 0), 6) AS total_cost,
+    {domain_expr} AS domain,
+    ifNull(r.`RlAdjustmentId`, 0) AS `RlAdjustmentId`,
+    'отзывы' AS `RlAdjustmentId_total`,
+    CAST(NULL, 'Nullable(String)') AS campaign_code,
+    '' AS tp,
+    '' AS cpc_cpa,
+    '' AS site_quiz,
+    CAST(NULL, 'Nullable(String)') AS adgroup_code,
+    ifNull(r.login, '') AS account_login,
+    'отзывы' AS manager_login,
+    '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4,
+    '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
+    '' AS `марки авто`,
+    'отзывы' AS `Название crm`,
+    'Отзывы' AS `тип_заявки`,
+    toDecimal64(0, 6) AS kol_vo_zayavok,
+    toDecimal64(0, 6) AS korr,
+    toDecimal64(0, 6) AS kval,
+    toDecimal64(0, 6) AS priezd,
+    toDecimal64(0, 6) AS prodazhi,
+    toDecimal64(0, 6) AS nekorr,
+    toDecimal64(0, 6) AS ne_otvechaet,
+    toDecimal64(0, 6) AS filtr,
+    toDecimal64(0, 6) AS nedozvon,
+    toDecimal64(0, 6) AS priedet,
+    0 AS dohod_do_kredita,
+    0 AS dobro,
+    CAST(NULL, 'Nullable(String)') AS `статус`,
+    'Караваев Михаил' AS `специалист`,
+    'отзывы' AS `тип_сайта`,
+    'отзывы' AS `шаблон`,
+    a.`салон` AS `салон`,
+    a.`город` AS `город`,
+    CAST(NULL, 'Nullable(String)') AS `регион`,
+    'Авто' AS direction,
+    CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
+    CAST(NULL, 'Nullable(String)') AS fid,
+    nullIf(trim(gs.project_manager), '') AS `проджект`,
+    nullIf(trim(gs.client_id), '') AS `id_салона`,
+    nullIf(trim(gs.sales_manager), '') AS `менеджер`,
+    'Контекст' AS `источник`,
+    'Отзывы' AS `направление`,
+    concat(toString(ifNull(r.`CampaignId`, 0)), '|', ifNull(r.`CampaignName`, '')) AS `номер кампании | название кампании`,
+    concat(toString(ifNull(r.`AdGroupId`, 0)), '|', ifNull(r.`AdGroupName`, '')) AS `номер группы | название группы`,
+    CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
+    CAST(NULL, 'Nullable(Int32)') AS `План приезда`,
+    concat(ifNull(r.login, ''), '|', {domain_expr}) AS `аккаунт|сайт`,
+    CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
+    CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
+    'Яндекс' AS `поставщик`,
+    'direct_account_reviews' AS _source_table,
+    CAST(NULL, 'Nullable(String)') AS cascade_level,
+    CAST(NULL, 'Nullable(String)') AS campaign_status,
+    CAST(NULL, 'Nullable(String)') AS payment_model
+FROM ad_analytics.yandex_direct_reports_reviews r
+LEFT JOIN accounts a ON a.account = r.login
+LEFT JOIN gs ON gs.salon_key = lower(trim(ifNull(a.`салон`, '')))
+"""
+
+
+def _insert_reviews_rows(client, target_table: str) -> int:
+    """Inserts into the shared source-store shadow (already holds direct/crop/... rows from
+    earlier in step3).
+
+    ROW_COUNT_BLIND_TO_FANOUT_FIX_2026-08-24: counting only the source table
+    (`yandex_direct_reports_reviews`) tells you its SIZE, not how many rows the insert
+    actually wrote — that's exactly how the original fan-out bug (see `_build_reviews_sql`
+    docstring) went unnoticed: the log kept printing the source count while
+    `big_analytics_full` silently inflated. So count `target_table` rows for this insert
+    (`_source_table = 'direct_account_reviews'`, same pattern as
+    `_insert_perform_vk_from_raw_leads`) and FAIL LOUDLY if it diverges from the source
+    count — the two are supposed to be 1:1 (`accounts`/`gs` in `_build_reviews_sql` are
+    both deduped to one row per key before the LEFT JOIN).
+    """
+    select_sql = _select_from_create(_build_reviews_sql(target_table.rsplit(".", 1)[-1]))
+    client = _command_with_retry(
+        client,
+        f"INSERT INTO {target_table}\n{select_sql}",
+        label="reviews insert",
+        settings=STEP3_QUERY_SETTINGS,
+    )
+    inserted = int(
+        client.query(
+            f"SELECT count() FROM {target_table} WHERE _source_table = 'direct_account_reviews'",
+            settings=STEP3_QUERY_SETTINGS,
+        ).result_rows[0][0]
+    )
+    source_rows = int(
+        client.query(
+            "SELECT count() FROM ad_analytics.yandex_direct_reports_reviews",
+            settings=STEP3_QUERY_SETTINGS,
+        ).result_rows[0][0]
+    )
+    if inserted != source_rows:
+        raise RuntimeError(
+            f"reviews dedupe fan-out regression: inserted {inserted:,} rows into "
+            f"{target_table} but source ad_analytics.yandex_direct_reports_reviews has "
+            f"{source_rows:,} rows. argMax(col, id) GROUP BY `аккаунт` in the `accounts` "
+            "CTE (or `gs` GROUP BY salon_key) is no longer deduping 1:1 — the LEFT JOIN "
+            "in _build_reviews_sql is fanning out again."
         )
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(query)
-        rows = cur.fetchall()
-        return [tuple(row[col] for col in columns) for row in rows]
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-def _insert_reviews_from_postgres(client, target_table: str) -> int:
-    columns = column_names(client, "ad_analytics", target_table.rsplit(".", 1)[-1])
-    rows = _fetch_reviews_rows_from_postgres(columns)
-    if not rows:
-        return 0
-    client.insert(target_table, rows, column_names=columns)
-    return len(rows)
+    return inserted
 
 
 def _perform_vk_insert_sql(target_table: str) -> str:
@@ -2120,9 +2164,9 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     logger.info("  vk_perform inserted за %.1f сек: %s rows", time.perf_counter() - t_perform_vk, f"{perform_vk_rows:,}")
 
     t_reviews = time.perf_counter()
-    reviews_rows = _insert_reviews_from_postgres(client, shadow)
+    reviews_rows = _insert_reviews_rows(client, shadow)
     parts.append(f"reviews={reviews_rows:,}")
-    logger.info("  reviews inserted from PostgreSQL за %.1f сек: %s rows", time.perf_counter() - t_reviews, f"{reviews_rows:,}")
+    logger.info("  reviews inserted за %.1f сек: %s rows", time.perf_counter() - t_reviews, f"{reviews_rows:,}")
 
     _swap_shadow(client, SOURCE_STORE)
     recreate_source_views(client)
