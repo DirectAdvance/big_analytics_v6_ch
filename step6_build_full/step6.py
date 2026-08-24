@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow
-from corrections import specialist_correction_expr
+from corrections import calls_specialist_correction_expr
 from step3_build_sources.step3 import SOURCE_STORE, _domain_specialist_expr, _gs_account_cte, _metric_expr, _weekday_expr
 
 logger = logging.getLogger("pipeline.step6")
@@ -109,7 +109,12 @@ def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
     `direction_main='Посевы'`; VK-Авто домены сохраняют BA5-приоритет VK > посевы.
     """
     metrics = _metric_expr("c.status", "c.reason", "c.source_type", "gs.salon")
-    specialist_expr = specialist_correction_expr("c.created_date", "gs.login_key", _domain_specialist_expr("gs"))
+    specialist_expr = calls_specialist_correction_expr(
+        "c.created_date",
+        "gs.login_key",
+        _domain_specialist_expr("gs"),
+        "ga.directologist",
+    )
     if crop:
         domain_filter = _POSEV_CALL_DOMAIN_SQL
         istochnik_sql = "'Посевы_Звонки'"
@@ -236,6 +241,7 @@ SELECT
     CAST(NULL, 'Nullable(String)') AS payment_model
 FROM ad_analytics.raw_calls c
 LEFT JOIN gs_domain_best gs ON gs.domain_key = lower(trim(ifNull(c.domain, ''))) AND gs.match_date = c.created_date
+LEFT JOIN gs_account ga ON ga.login_key = lower(trim(ifNull(gs.login_key, '')))
 LEFT JOIN crm_by_domain crm ON crm.domain_key = lower(trim(ifNull(c.domain, '')))
 WHERE c.created_date >= toDate('{lo}')
   AND c.created_date < toDate('{hi}')

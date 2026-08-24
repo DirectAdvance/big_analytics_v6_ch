@@ -112,7 +112,9 @@ Power BI.
 **`Dim_City_Tier`** — live-измерение для PBI-среза `тир_месяца`: `city_tier_key`, `город`,
 `тир_месяца`, `тир_месяца_backfill`, `тир_текущий`. Строится из `ad_analytics.gsheet_city_tier`.
 **`Dim_Site`** — атрибуты переименованы с английского на русский (`city`→`город`, `salon`→`салон`,
-`directologist`→`специалист` и т.д.); реально нет только `client_id` и `niche`.
+`directologist`→`специалист` и т.д.); реально нет только `client_id` и `niche`. Справочник
+`reference_data.gsheet_sites` используется для PBI только по `niche='Авто'`: остальные ниши не
+должны попадать в `Dim_Site`, `bi_Dim_Campaign` и `bi_analytics_report_placement`.
 **`Dim_AdGroup`** — нет `ag_part1_name` в физической таблице, есть в `bi_Dim_AdGroup`.
 
 **`fact_region_spend` / `fact_adformat_spend` / `fact_criterion_spend`** — в физических таблицах нет

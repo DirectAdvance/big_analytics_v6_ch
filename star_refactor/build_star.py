@@ -490,6 +490,7 @@ DIM_DDL = {
                             ifNull(crm, '') AS crm_name
                         FROM reference_data.gsheet_sites
                         WHERE ifNull(domain, '') != ''
+                          AND niche = 'Авто'
                     )
                     GROUP BY site_key
                 ) d
@@ -1315,6 +1316,7 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
                 anyLast(directologist) AS `специалист`
             FROM reference_data.gsheet_sites
             WHERE ifNull(salon, '') != ''
+              AND niche = 'Авто'
             GROUP BY salon_key
         )
         SELECT

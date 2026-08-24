@@ -33,9 +33,10 @@ tp10 / seo / crop_targeting / direct_unmatched / direct_zero). Скоуп каж
 моменту corrections уже переехали в crop через `_move_tp8_to_crop`),
 `big_analytics_crop_targeting` → `tp8/tp9/tp10/crop_targeting`.
 
-НЕ покрыто (и в v5 покрыто отдельными вызовами уже ПОСЛЕ `apply()`):
-звонки (`big_analytics_calls`, step6), пиксельная атрибуция (step11) и
-стоимостной оверлей посевов (step10) — эти строки появляются позже пересборки.
+НЕ покрыто самой пересборкой `apply()` (и в v5 покрыто отдельными вызовами уже
+ПОСЛЕ `apply()`): звонки (`big_analytics_calls`, step6), пиксельная атрибуция
+(step11) и стоимостной оверлей посевов (step10) — эти строки появляются позже
+пересборки. Step6 использует выражения специалиста из этого модуля напрямую.
 """
 
 from __future__ import annotations
@@ -183,6 +184,38 @@ def specialist_correction_expr(
     )
     branches.append(specialist_expr)
     return f"multiIf({', '.join(branches)})"
+
+
+def calls_specialist_correction_expr(
+    date_expr: str,
+    account_expr: str,
+    domain_specialist_expr: str,
+    account_specialist_expr: str,
+) -> str:
+    """Specialist expression for request-date calls.
+
+    Calls are matched by domain, so deleted domains can carry an obsolete
+    directologist after an account transfer. For account-date rules, keep the
+    old owner before cutoff; after cutoff, use a different account-level owner
+    when present, otherwise leave the call without a specialist instead of
+    returning the stale domain owner.
+    """
+    account_key = f"lowerUTF8(trim(ifNull({account_expr}, '')))"
+    domain_specialist_key = f"lowerUTF8(trim(ifNull({domain_specialist_expr}, '')))"
+    account_specialist = f"nullIf(trim(ifNull({account_specialist_expr}, '')), '')"
+    stale_branches: list[str] = []
+    for name, date_barrier, logins in SPECIALIST_DATE_RULES:
+        replacement = (
+            f"if({account_specialist} IS NOT NULL AND {account_specialist} != {_lit(name)}, "
+            f"{account_specialist}, CAST(NULL, 'Nullable(String)'))"
+        )
+        stale_branches.append(
+            f"{date_expr} >= toDate('{date_barrier}') "
+            f"AND ({account_key} IN ({_sql_list(logins)})) "
+            f"AND {domain_specialist_key} = lowerUTF8({_lit(name)}), {replacement}"
+        )
+    stale_branches.append(specialist_correction_expr(date_expr, account_expr, domain_specialist_expr))
+    return f"multiIf({', '.join(stale_branches)})"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -158,6 +158,19 @@ def test_dim_site_hides_reviews_literal_from_slicers():
     assert "u.direction AS `направление`" in sql
 
 
+def test_pbi_site_and_service_dimensions_use_only_auto_gsheet_rows():
+    dim_site_sql = build_star.DIM_DDL["Dim_Site"]
+    pbi_sql = build_pbi_compat._dim_campaign_pbi_sql()
+    arp_sql = build_pbi_compat._analytics_report_placement_pbi_sql()
+
+    assert "FROM reference_data.gsheet_sites\n                        WHERE ifNull(domain, '') != ''\n                          AND niche = 'Авто'" in dim_site_sql
+    assert "AND niche = 'Авто'" in build_star._vk_ads_sql("", "", "", "", "")
+    assert "WITH auto_accounts AS" in pbi_sql
+    assert "AND lower(ifNull(ulogin, '')) IN (SELECT account_login FROM auto_accounts)" in pbi_sql
+    assert "AND lower(ifNull(login, '')) IN (SELECT account_login FROM auto_accounts)" in pbi_sql
+    assert "WHERE ifNull(ds.domain, '') != ''" in arp_sql
+
+
 def test_dim_crm_status_uses_ba5_empty_crm_label():
     sql = build_star.DIM_DDL["Dim_CRMStatus"]
 

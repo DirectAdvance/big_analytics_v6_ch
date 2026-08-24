@@ -1000,6 +1000,7 @@ def _analytics_report_placement_pbi_sql() -> str:
               AND l.campaign_id = f.campaign_id
               AND l.ad_group_id = f.ad_group_id
               AND l.placement = f.placement_key_norm
+        WHERE ifNull(ds.domain, '') != ''
         """
 
 
@@ -1055,6 +1056,7 @@ def create_light_aliases(client) -> dict[str, int]:
                     anyLast(directologist) AS directologist
                 FROM reference_data.gsheet_sites
                 WHERE ifNull(login_key, '') != ''
+                  AND niche = 'Авто'
                 GROUP BY login_key
             )
             SELECT
@@ -1332,7 +1334,13 @@ def _dim_source_pbi_sql() -> str:
 
 def _dim_campaign_pbi_sql() -> str:
     return """
-        WITH service_campaigns AS (
+        WITH auto_accounts AS (
+            SELECT DISTINCT lower(ifNull(login_key, '')) AS account_login
+            FROM reference_data.gsheet_sites
+            WHERE ifNull(login_key, '') != ''
+              AND niche = 'Авто'
+        ),
+        service_campaigns AS (
             SELECT
                 assumeNotNull(campaign_id) AS CampaignId,
                 anyLastIf(campaign_name, campaign_name IS NOT NULL AND campaign_name != '') AS CampaignName,
@@ -1349,6 +1357,7 @@ def _dim_campaign_pbi_sql() -> str:
                 FROM ad_analytics.yandex_direct_korrektirovki
                 WHERE campaign_id IS NOT NULL
                   AND campaign_id != 0
+                  AND lower(ifNull(ulogin, '')) IN (SELECT account_login FROM auto_accounts)
                 UNION ALL
                 SELECT
                     campaign_id,
@@ -1358,6 +1367,7 @@ def _dim_campaign_pbi_sql() -> str:
                     `специалист` AS specialist
                 FROM ad_analytics.yandex_direct_minus_snapshot
                 WHERE campaign_id != 0
+                  AND lower(ifNull(login, '')) IN (SELECT account_login FROM auto_accounts)
                 UNION ALL
                 SELECT
                     campaign_id,
@@ -1368,6 +1378,7 @@ def _dim_campaign_pbi_sql() -> str:
                 FROM ad_analytics.yandex_direct_history
                 WHERE campaign_id IS NOT NULL
                   AND campaign_id != 0
+                  AND lower(ifNull(login, '')) IN (SELECT account_login FROM auto_accounts)
             )
             GROUP BY CampaignId
         )
@@ -1759,6 +1770,8 @@ def _direct_autorules_posevy_placement_links_sql() -> str:
         LEFT JOIN (
             SELECT login_key, any(coalesce(city, '')) AS city
             FROM reference_data.gsheet_sites
+            WHERE ifNull(login_key, '') != ''
+              AND niche = 'Авто'
             GROUP BY login_key
         ) AS g ON g.login_key = r.client_login
         WHERE coalesce(l.placement_link, '') != ''

@@ -60,7 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow, table_exists
-from corrections import _invariants, _specialist_cte
+from corrections import _invariants, _specialist_cte, calls_specialist_correction_expr
 from step11_pixel_score.step11 import _create_empty_from_full
 
 logger = logging.getLogger("pipeline.spec_fallback")
@@ -78,12 +78,40 @@ def _is_calls_expr(alias: str = "s") -> str:
     return f"(ifNull({alias}.campaign_code, '') = 'звонки' OR {alias}.`_source_table` = 'calls')"
 
 
-def _fallback_expr(alias: str = "s", gs: str = "gsp") -> str:
+def _account_specialist_cte() -> str:
+    return """
+gs_account_specialist AS
+(
+    SELECT
+        lowerUTF8(trim(ifNull(login_key, ''))) AS login_key,
+        anyLast(directologist) AS directologist
+    FROM reference_data.gsheet_sites
+    WHERE ifNull(login_key, '') != ''
+    GROUP BY login_key
+)
+"""
+
+
+def _directologist_fallback_expr(alias: str = "s", gs: str = "gsp", ga: str = "gsa") -> str:
+    calls_specialist = calls_specialist_correction_expr(
+        f"{alias}.`Date`",
+        f"{alias}.account_login",
+        f"{gs}.directologist",
+        f"{ga}.directologist",
+    )
+    return (
+        f"if({_is_calls_expr(alias)}, "
+        f"nullIf(trim(ifNull({calls_specialist}, '')), ''), "
+        f"nullIf(trim(ifNull({gs}.directologist, '')), ''))"
+    )
+
+
+def _fallback_expr(alias: str = "s", gs: str = "gsp", ga: str = "gsa") -> str:
     """Каскад v5 `apply_spec_fallback_v3`. Пустое значение → gsheet → канал → дефолт."""
     return (
         f"if({_empty_spec(alias)}, "
         "coalesce("
-        f"nullIf(trim(ifNull({gs}.directologist, '')), ''), "
+        f"{_directologist_fallback_expr(alias, gs, ga)}, "
         f"nullIf(trim(ifNull({gs}.direction_main, '')), ''), "
         f"if({_is_calls_expr(alias)}, 'Звонки', 'Без специалиста')), "
         f"{alias}.`специалист`)"
@@ -94,10 +122,11 @@ def _tier_report(client, table: str) -> str:
     """Куда именно уедут пустые строки — по ступеням каскада (в лог, до правки)."""
     rows = client.query(
         f"""
-        WITH {_specialist_cte().strip()}
+        WITH {_specialist_cte().strip()},
+        {_account_specialist_cte().strip()}
         SELECT
             multiIf(
-                trim(ifNull(gsp.directologist, '')) != '', '1_directologist',
+                {_directologist_fallback_expr('s')} != '', '1_directologist',
                 trim(ifNull(gsp.direction_main, '')) != '', '2_direction_main',
                 {_is_calls_expr('s')}, '3_Звонки',
                 '4_Без специалиста'
@@ -107,6 +136,7 @@ def _tier_report(client, table: str) -> str:
             round(sum(s.prodazhi), 4) AS prodazhi
         FROM {table} s
         LEFT JOIN gs_specialist gsp ON gsp.domain_key = lowerUTF8(trim(ifNull(s.domain, '')))
+        LEFT JOIN gs_account_specialist gsa ON gsa.login_key = lowerUTF8(trim(ifNull(s.account_login, '')))
         WHERE {_empty_spec('s')}
         GROUP BY tier
         ORDER BY tier
@@ -123,10 +153,12 @@ def _rebuild(client) -> None:
         client.command(
             f"""
             INSERT INTO {SHADOW} ({cols_sql})
-            WITH {_specialist_cte().strip()}
+            WITH {_specialist_cte().strip()},
+            {_account_specialist_cte().strip()}
             SELECT s.* REPLACE ({_fallback_expr()} AS `специалист`)
             FROM {TARGET} s
             LEFT JOIN gs_specialist gsp ON gsp.domain_key = lowerUTF8(trim(ifNull(s.domain, '')))
+            LEFT JOIN gs_account_specialist gsa ON gsa.login_key = lowerUTF8(trim(ifNull(s.account_login, '')))
             WHERE s.`Date` >= toDate('{lo}') AND s.`Date` < toDate('{hi}')
             """,
             settings=SAFE_QUERY_SETTINGS,
