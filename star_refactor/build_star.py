@@ -320,6 +320,13 @@ DIM_DDL = {
         # 2 (domains the directory does not cover at all) is untouched -- it
         # already sourced these 3 columns from fact, so it was never part of the
         # A/B/C bug.
+        # REVIEWS_LABEL_HIDE 2026-08-24 (Семён): ветка отзывов (step3.py:1888-1910)
+        # пишет литерал 'отзывы' в тип_сайта/шаблон/Название crm. В факте он нужен
+        # (sales_attribution/build.py читает `Название crm` буквально), но в срезах
+        # Power BI это третья ось поверх `направление` = 'Отзывы'. Гасим ТОЛЬКО на
+        # выходе Dim_Site: тип_сайта/шаблон -> '' (как у остальных 80 отзывных
+        # доменов ветки 1), Название crm -> 'Не указана' (замер: все 88 доменов,
+        # raw_crm по ним пуст). Разрез отзывов остаётся через `направление`.
         "Dim_Site": f"""
             CREATE TABLE ad_analytics.Dim_Site_new
             ENGINE = MergeTree
@@ -408,8 +415,8 @@ DIM_DDL = {
                 u.salon AS `салон`,
                 u.city AS `город`,
                 u.region AS `регион`,
-                u.site_type AS `тип_сайта`,
-                u.template AS `шаблон`,
+                if(u.site_type = 'отзывы', '', u.site_type) AS `тип_сайта`,
+                if(u.template = 'отзывы', '', u.template) AS `шаблон`,
                 u.direction AS `направление`,
                 u.site_status AS `статус`,
                 u.site_status AS status,
@@ -419,7 +426,7 @@ DIM_DDL = {
                 u.salon_id AS `id_салона`,
                 u.manager AS `менеджер`,
                 CAST(
-                    {_canonical_crm_name_sql("if(ifNull(u.crm_name, '') IN ('', 'Не указана'), if(ifNull(rc.crm_name, '') = '', 'Не указана', rc.crm_name), u.crm_name)")},
+                    {_canonical_crm_name_sql("if(ifNull(nullIf(u.crm_name, 'отзывы'), '') IN ('', 'Не указана'), if(ifNull(rc.crm_name, '') = '', 'Не указана', rc.crm_name), nullIf(u.crm_name, 'отзывы'))")},
                     'String'
                 ) AS `Название crm`
             FROM
