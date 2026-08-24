@@ -97,11 +97,11 @@
 
 | Контур | Расписание | Что обновляет |
 |---|---|---|
-| `cron_run.py` → `pipeline.py` | **ежедневно `0 2 * * *` UTC = 07:00 Екб**, крон Victory | шаги 0-148: срезы сырья, промежуточные витрины, звезда, `pbi_*`, `bi_*` |
+| `cron_run.py` → `pipeline.py` | **ежедневно `0 4 * * *` UTC = 09:00 Екб**, крон Victory | шаги 0-148: срезы сырья, промежуточные витрины, звезда, `pbi_*`, `bi_*` |
 | `step_cron_night/pipeline_night.py` | **ежедневно `10 18 * * *` UTC = 23:10 Екб**, крон Victory с `/tmp/ba6_night.lock` | шаги 101-106, 114: `metrika_yandex`, `check_utm`, `check_utm_fuck_direct`, `yandex_direct_korrektirovki`, `yandex_direct_404_errors`, `fact_ml_korrektirovki`, `yandex_direct_minus_snapshot` |
 
 **Ночной контур БА6 поставлен в крон 2026-08-17.** Окно выбрано до БА5 night (`0 21 * * *`) и
-далеко от дневных БА5/БА6 (`0 2 * * *`). Проверенный ручной прогон на Victory: PASS за 14м15с,
+далеко от дневных БА5 (`0 2 * * *`) и БА6 (`0 4 * * *`). Проверенный ручной прогон на Victory: PASS за 14м15с,
 самый длинный шаг `night_minus_snapshot` — 11м48с.
 
 Разовые и maintenance-контуры:
