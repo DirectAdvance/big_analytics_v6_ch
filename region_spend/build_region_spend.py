@@ -28,6 +28,8 @@ _COLUMNS = """
     `ad_group_id` Int64 CODEC(T64, ZSTD(3)),
     `ad_network_type_key` LowCardinality(String),
     `id_location` Nullable(Int64) CODEC(T64, ZSTD(3)),
+    `distance_km` Nullable(Int32) CODEC(ZSTD(3)),
+    `distance_km_agreg` Nullable(Int32) CODEC(ZSTD(3)),
     `cost` Decimal(18, 6) CODEC(ZSTD(3)),
     `clicks` Decimal(18, 6) CODEC(ZSTD(3)),
     `impressions` Decimal(18, 6) CODEC(ZSTD(3)),
@@ -65,6 +67,8 @@ def _insert_batch(client, target: str, lo: str, hi: str) -> None:
             ad_group_id,
             lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_network_type, ''))) AS ad_network_type_key,
             location_of_presence_id AS id_location,
+            anyLast(gl.distance_km) AS distance_km,
+            anyLast(gl.distance_km_agreg) AS distance_km_agreg,
             toDecimal64(sum(cost), 6) AS cost,
             toDecimal64(sum(clicks), 6) AS clicks,
             toDecimal64(sum(impressions), 6) AS impressions,
@@ -81,6 +85,16 @@ def _insert_batch(client, target: str, lo: str, hi: str) -> None:
             ) AS site_key
         FROM {STAGING_TABLE} y
         LEFT JOIN reference_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(y.account_login)
+        -- GEO_LOCATION_JOIN_2026-08-24: справочник расстояний портирован из BA5
+        -- (migrations/04_port_geo_location_dict_2026-08-24.py, id_location уникален
+        -- 16547/16547). Дедуп-подзапрос — страховка от будущих дублей на LEFT JOIN к
+        -- многомиллионному факту, а не фактический tie-break сейчас.
+        LEFT JOIN
+        (
+            SELECT id_location, any(distance_km) AS distance_km, any(distance_km_agreg) AS distance_km_agreg
+            FROM ad_analytics.gsheet_yandex_direct_id_location
+            GROUP BY id_location
+        ) gl ON gl.id_location = y.location_of_presence_id
         WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
         GROUP BY date, campaign_id, ad_group_id, ad_network_type_key, location_of_presence_id, account_login
         """,

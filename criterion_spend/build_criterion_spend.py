@@ -30,6 +30,11 @@ _COLUMNS = """
     `cost` Decimal(18, 6) CODEC(ZSTD(3)),
     `clicks` Decimal(18, 6) CODEC(ZSTD(3)),
     `impressions` Decimal(18, 6) CODEC(ZSTD(3)),
+    `all_forms` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_created` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_paid` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_spam_order` Decimal(18, 6) CODEC(ZSTD(3)),
+    `crm_order_canceled` Decimal(18, 6) CODEC(ZSTD(3)),
     `account_login` LowCardinality(Nullable(String)),
     `site_key` UInt64
 """
@@ -67,6 +72,11 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
                 toDecimal64(sum(cost), 6) AS cost,
                 toDecimal64(sum(clicks), 6) AS clicks,
                 toDecimal64(sum(impressions), 6) AS impressions,
+                toDecimal64(sum(all_forms), 6) AS all_forms,
+                toDecimal64(sum(crm_order_created), 6) AS crm_order_created,
+                toDecimal64(sum(crm_order_paid), 6) AS crm_order_paid,
+                toDecimal64(sum(crm_spam_order), 6) AS crm_spam_order,
+                toDecimal64(sum(crm_order_canceled), 6) AS crm_order_canceled,
                 account_login,
                 if(
                     notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(anyLast(gs.domain), '')))),

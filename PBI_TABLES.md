@@ -27,7 +27,7 @@ cookie-страницы, поисковые запросы) — есть и по
 | 3 | `analytics_report_criterion` | `arc_fact` удалён из контракта v6 (`tests/test_pbi_contract_lists.py`) |
 | 4 | `analytics_report_feed` | `arf_fact` удалён из контракта v6 |
 | 5 | `yandex_direct_accounts_human_cyborgs` | справочника нет в `raw_data`; PBIP пока читает `raw_new_human_cyborgs` |
-| — | `Dim_Distance` (DAX) | считается из `distance_km_agreg`; в физических `fact_region_*` v6 колонки нет, есть только в `bi_*`-вьюхах |
+| — | `Dim_Distance` (DAX) | считается из `distance_km_agreg`; с 2026-08-24 колонка физическая в `fact_region_spend` (шаг 141, джойн к порту `ad_analytics.gsheet_yandex_direct_id_location` — `migrations/04_port_geo_location_dict_2026-08-24.py`), в `bi_*`-вьюхах это проекция поверх неё, а не единственный источник; в `fact_region_zayavki` колонки по-прежнему нет |
 | — | `fact_direct_feed_funnel` (по смыслу) | имя занято, но это **не** воронка по фидам — см. §0.3 |
 
 20.08 страницы «Я.Директ_фиды/Фиды» скрыты в admin/user PBIP, потому что

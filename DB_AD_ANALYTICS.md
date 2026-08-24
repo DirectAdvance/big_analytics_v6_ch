@@ -138,6 +138,18 @@
 наполняется. `yandex_direct_cookie_analytics_website_pages` и `yd_search_query_report_master` —
 12.08.
 
+**Замороженный справочник совсем без продюсера.** `ad_analytics.gsheet_yandex_direct_id_location`
+(16 547 строк, 336.54 КиБ) — это не «редко обновляемая» таблица из списка выше, а разовый порт без
+какого-либо кода обновления вообще: ни в дневном, ни в ночном контуре, ни в `step0` нет строки,
+которая его пишет. Источник — Victory PG `public.local_gsheet_yandex_direct_id_location`
+(там тот же статус: заморожен, вне `TRUNCATE_INSERT_TABLES`). Портирован 2026-08-24 миграцией
+`migrations/04_port_geo_location_dict_2026-08-24.py` (идемпотентна, `--dry-run` поддерживается).
+Обновление — только повторный ручной запуск той же миграции, это осознанное решение, а не
+недосмотр (см. докстринг миграции). **Жёсткая зависимость двух шагов:** 141
+(`region_spend.build_region_spend` → `fact_region_spend.distance_km_agreg`,
+`fact_region_zayavki`) и 145 (`star_refactor.build_star` → `Dim_Location.distance_km_agreg` /
+`Область` / `GeoRegionType` / `location`) — оба шага упадут на `LEFT JOIN`, если таблица исчезнет.
+
 ## §5. Обязательные требования при создании объекта
 
 1. **`COMMENT` на каждый объект** — назначение, шаг-владелец, для материализации ещё и замер,

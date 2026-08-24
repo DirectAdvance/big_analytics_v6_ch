@@ -2,7 +2,9 @@ import inspect
 
 import pipeline
 import refresh_powerbi
+from criterion_spend import build_criterion_spend
 from data_check import verify_big_analytics
+from region_spend import build_region_spend
 from star_refactor import audit_pbi_sources, build_pbi_compat, build_star, build_star_extensions, cleanup_wide_intermediates
 from direct_feed_funnel import build as direct_feed_build
 from step10_crop_targeting import step10
@@ -488,3 +490,87 @@ def test_golden_kuderko_reads_specialist_from_dim_salon():
     assert "LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key" in sql
     assert "dsl.`специалист` = {specialist:String}" in sql
     assert "f.`специалист`" not in sql
+
+
+def test_dim_location_joins_geo_dict_instead_of_hardcoded_nulls():
+    """GEO_LOCATION_JOIN_2026-08-24: BA5 распояние-справочник восстановлен через
+    ad_analytics.gsheet_yandex_direct_id_location (migrations/04_port_geo_location_dict_2026-08-24.py).
+    Регресс-тест на возврат заглушек CAST(NULL...)/''."""
+    sql = build_star.DIM_DDL["Dim_Location"]
+
+    assert "ad_analytics.gsheet_yandex_direct_id_location" in sql
+    assert "CAST(NULL, 'LowCardinality(Nullable(String))') AS GeoRegionType" not in sql
+    assert "CAST(NULL, 'Nullable(Int32)') AS distance_km_agreg" not in sql
+    assert "d.`GeoRegionType`" in sql
+    assert "d.distance_km_agreg" in sql
+
+
+def test_region_spend_star_view_carries_distance_columns_without_join():
+    """bi_fact_region_spend_star — то, что реально читает TMDL fact_region_spend (проверено в
+    Dim_Location.tmdl/fact_region_spend.tmdl: partition читает `bi_fact_region_spend_star`,
+    столбцы distance_km/distance_km_agreg объявлены в модели). JOIN к справочнику сделан один раз
+    при сборке fact_region_spend (region_spend/build_region_spend.py) — здесь только passthrough,
+    иначе ломается test_region_and_criterion_star_views_keep_only_keys_and_metrics."""
+    sql = build_pbi_compat._region_spend_star_pbi_sql()
+
+    assert "f.distance_km" in sql
+    assert "f.distance_km_agreg" in sql
+    assert "JOIN" not in sql
+
+
+def test_region_spend_flat_view_no_longer_hardcodes_distance_km_null():
+    sql = build_pbi_compat._region_spend_pbi_sql()
+
+    assert "CAST(NULL, 'Nullable(Int64)') AS distance_km" not in sql
+    assert "f.distance_km," in sql
+    assert "f.distance_km_agreg" in sql
+
+
+def test_region_spend_fact_build_joins_geo_dict_with_dedup_guard():
+    """Fix 1 root: JOIN к справочнику живёт в ETL (region_spend/build_region_spend.py), не в
+    PBI-вьюхах — звёздные вьюхи обязаны быть join-free (см. тест выше)."""
+    assert "distance_km" in build_region_spend._COLUMNS
+    assert "distance_km_agreg" in build_region_spend._COLUMNS
+    src = inspect.getsource(build_region_spend._insert_batch)
+    assert "ad_analytics.gsheet_yandex_direct_id_location" in src
+    assert "GROUP BY id_location" in src  # dedup guard against fan-out on the LEFT JOIN
+    assert "gl.id_location = y.location_of_presence_id" in src
+
+
+def test_criterion_spend_columns_include_crm_sums():
+    """Fix 2: criterion_spend/build_criterion_spend.py читает те же 5 CRM-колонок из
+    direct_spend_staging, что и region_spend, но раньше их не суммировал."""
+    assert "all_forms" in build_criterion_spend._COLUMNS
+    assert "crm_order_created" in build_criterion_spend._COLUMNS
+    assert "crm_order_paid" in build_criterion_spend._COLUMNS
+    assert "crm_spam_order" in build_criterion_spend._COLUMNS
+    assert "crm_order_canceled" in build_criterion_spend._COLUMNS
+
+
+def test_criterion_spend_star_view_carries_crm_sums_not_zero_literals():
+    """bi_fact_criterion_spend_star — то, что реально читает TMDL fact_criterion_spend
+    (fact_criterion_spend.tmdl partition читает `bi_fact_criterion_spend_star`, без rename-шага —
+    столбцы уже должны прийти под русскими именами)."""
+    sql = build_pbi_compat._criterion_spend_star_pbi_sql()
+
+    assert "toFloat64(f.all_forms) AS `Все формы`" in sql
+    assert "toFloat64(f.crm_order_created) AS `CRM: Заказ создан`" in sql
+    assert "toFloat64(f.crm_order_paid) AS `CRM: Заказ оплачен`" in sql
+    assert "toFloat64(f.crm_spam_order) AS `CRM: Спам заказ`" in sql
+    assert "toFloat64(f.crm_order_canceled) AS `CRM: Заказ отменен`" in sql
+
+
+def test_criterion_spend_flat_view_crm_columns_no_longer_zero_literals():
+    sql = build_pbi_compat._criterion_spend_pbi_sql()
+
+    assert "toInt64(0) AS `Все формы`" not in sql
+    assert "toInt64(0) AS `CRM: Заказ создан`" not in sql
+    assert "toInt64(round(f.all_forms)) AS `Все формы`" in sql
+    assert "toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`" in sql
+    # kol_vo_zayavok/korr/kval/priezd/prodazhi — другая таксономия (fact_criterion_zayavki),
+    # их не трогаем.
+    assert "toInt64(0) AS kol_vo_zayavok" in sql
+    assert "toInt64(0) AS korr" in sql
+    assert "toInt64(0) AS kval" in sql
+    assert "toInt64(0) AS priezd" in sql
+    assert "toInt64(0) AS prodazhi" in sql

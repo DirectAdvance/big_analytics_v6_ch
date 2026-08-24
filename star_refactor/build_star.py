@@ -682,7 +682,8 @@ DIM_DDL = {
             ENGINE = MergeTree
             ORDER BY id_location
             AS
-            WITH locations AS
+            WITH
+            locations AS
             (
                 SELECT assumeNotNull(id_location) AS id_location
                 FROM ad_analytics.fact_region_spend
@@ -693,15 +694,32 @@ DIM_DDL = {
                 SELECT assumeNotNull(id_location) AS id_location
                 FROM ad_analytics.fact_region_zayavki
                 WHERE id_location IS NOT NULL
+            ),
+            -- GEO_LOCATION_JOIN_2026-08-24: справочник расстояний портирован из BA5
+            -- (public.local_gsheet_yandex_direct_id_location, разовая миграция
+            -- migrations/04_port_geo_location_dict_2026-08-24.py, 16547 строк). id_location в
+            -- справочнике уникален (16547/16547, 0 дублей) — any() здесь страховка от будущих
+            -- дублей, а не фактический tie-break сейчас (тот же приём, что в BA5
+            -- build_region_spend.py DISTINCT ON (id_location)).
+            dict AS
+            (
+                SELECT
+                    id_location,
+                    any(location) AS location,
+                    any(`Область`) AS `Область`,
+                    any(`GeoRegionType`) AS `GeoRegionType`,
+                    any(distance_km_agreg) AS distance_km_agreg
+                FROM ad_analytics.gsheet_yandex_direct_id_location
+                GROUP BY id_location
             )
             SELECT
-                id_location,
-                '' AS location,
-                '' AS `Область`,
-                CAST(NULL, 'LowCardinality(Nullable(String))') AS GeoRegionType,
-                CAST(NULL, 'Nullable(Int32)') AS distance_km_agreg
-            FROM locations
-            GROUP BY id_location
+                l.id_location,
+                ifNull(d.location, '') AS location,
+                ifNull(d.`Область`, '') AS `Область`,
+                CAST(d.`GeoRegionType`, 'LowCardinality(Nullable(String))') AS GeoRegionType,
+                CAST(d.distance_km_agreg, 'Nullable(Int32)') AS distance_km_agreg
+            FROM locations l
+            LEFT JOIN dict d ON d.id_location = l.id_location
         """,
         "Dim_ManagerLogin": f"""
             CREATE TABLE ad_analytics.Dim_ManagerLogin_new

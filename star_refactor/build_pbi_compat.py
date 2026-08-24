@@ -578,8 +578,8 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
             f.ad_group_id,
             f.ad_network_type_key,
             f.id_location AS id_location,
-            CAST(NULL, 'Nullable(Int64)') AS distance_km,
-            dl.distance_km_agreg,
+            f.distance_km,
+            f.distance_km_agreg,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -591,13 +591,17 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
             ds.domain AS domain,
             now() AS updated_at
         FROM ad_analytics.fact_region_spend f
-        LEFT JOIN ad_analytics.Dim_Location dl ON dl.id_location = f.id_location
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         {where_sql}
     """
 
 
 def _region_spend_star_pbi_sql(where_sql: str = "") -> str:
+    # GEO_LOCATION_JOIN_2026-08-24: distance_km/distance_km_agreg — физические колонки факта
+    # (JOIN к справочнику ad_analytics.gsheet_yandex_direct_id_location сделан один раз при сборке
+    # fact_region_spend в region_spend/build_region_spend.py, а не здесь) — звёздные *_star вьюхи
+    # обязаны отдавать только ключи и метрики без JOIN (см.
+    # test_region_and_criterion_star_views_keep_only_keys_and_metrics).
     return f"""
         SELECT
             f.date,
@@ -606,6 +610,8 @@ def _region_spend_star_pbi_sql(where_sql: str = "") -> str:
             f.ad_network_type_key,
             f.id_location,
             {_pbi_int64_key("f.site_key")} AS site_key,
+            f.distance_km,
+            f.distance_km_agreg,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
@@ -655,11 +661,11 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
-            toInt64(0) AS `Все формы`,
-            toInt64(0) AS `CRM: Заказ создан`,
-            toInt64(0) AS `CRM: Заказ оплачен`,
-            toInt64(0) AS `CRM: Спам заказ`,
-            toInt64(0) AS `CRM: Заказ отменен`,
+            toInt64(round(f.all_forms)) AS `Все формы`,
+            toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`,
+            toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
+            toInt64(round(f.crm_spam_order)) AS `CRM: Спам заказ`,
+            toInt64(round(f.crm_order_canceled)) AS `CRM: Заказ отменен`,
             toInt64(0) AS kol_vo_zayavok,
             toInt64(0) AS korr,
             toInt64(0) AS nekorr,
@@ -676,6 +682,13 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
 
 
 def _criterion_spend_star_pbi_sql(where_sql: str = "") -> str:
+    # CRITERION_CRM_SUMS_2026-08-24: TMDL fact_criterion_spend reads `bi_fact_criterion_spend_star`
+    # (not `bi_fact_criterion_spend`) and expects these 5 columns already under their Russian
+    # display names — the M code does no rename step for this table (unlike fact_region_spend,
+    # which renames snake_case -> Russian in Power Query). Without them M's
+    # `Table.SelectColumns(..., MissingField.UseNull)` + `Table.ReplaceValue(null, 0, ...)`
+    # silently turns the whole column into zeros, same failure shape as the `toInt64(0)` literals
+    # below in `_criterion_spend_pbi_sql` — just one layer further downstream.
     return f"""
         SELECT
             f.date,
@@ -686,7 +699,12 @@ def _criterion_spend_star_pbi_sql(where_sql: str = "") -> str:
             {_pbi_int64_key("f.site_key")} AS site_key,
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
-            toFloat64(f.impressions) AS impressions
+            toFloat64(f.impressions) AS impressions,
+            toFloat64(f.all_forms) AS `Все формы`,
+            toFloat64(f.crm_order_created) AS `CRM: Заказ создан`,
+            toFloat64(f.crm_order_paid) AS `CRM: Заказ оплачен`,
+            toFloat64(f.crm_spam_order) AS `CRM: Спам заказ`,
+            toFloat64(f.crm_order_canceled) AS `CRM: Заказ отменен`
         FROM ad_analytics.fact_criterion_spend f
         {where_sql}
     """
