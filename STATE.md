@@ -1,5 +1,21 @@
 # big_analytics_v6_ch — статус
 
+2026-08-24: BA6 коммит `d47bdb7` (`fix: ограничить BI справочники auto нишей`) доставлен на
+Victory вручную по scp в `~/big_analytics_v6_ch`; md5 Mac==Victory по 7 файлам, remote
+`py_compile` OK. Прогон `pipeline.py --from-step=3` (`run_id=8fb8ba739a07`) завершился
+`pipeline OK`, `verify_big_analytics.py` = PASS; быстрый `--from-step=6` перед этим упал до
+мутаций на ожидаемом отсутствии `ad_analytics.big_analytics_sources`, поэтому был заменён на
+`--from-step=3`. Итоговые live-объёмы: `big_analytics_full=5,323,227`,
+`fact_big_analytics=5,458,433`, `pbi_big_analytics_full=5,458,433`, `Dim_Site=4,673`,
+`bi_analytics_report_placement=13,234,048`. Проверка проблемы: `2line`, `5 звезд`,
+`«РЖД Медицина»` отсутствуют в `Dim_Site`/`bi_Dim_Site`/`Dim_Salon`/`bi_Dim_Salon`/
+`bi_analytics_report_placement`; non-auto домены из `reference_data.gsheet_sites` в
+`Dim_Site`/`bi_Dim_Site` и placement = 0. Кудерко по `По дате заявки` июнь/июль:
+продажи 0; `probeg-cars.ru` июнь и `autocenter93.ru` июль ушли на `Контекст` по 1 продаже.
+Остаток для отдельного решения: 4 account-only логина с `niche='None'` остаются в
+`fact_big_analytics`/`bi_Dim_Campaign` без домена/салона (1,708 строк, 2 продажи) — это не
+источник салонного среза и не вырезалось, чтобы не orphan-ить fact без отдельного правила.
+
 2026-08-24 (2nd rework, director second pass, 3 Important + 5 Minor): все закрыты, код не
 задеплоен/не закоммичен, ждёт review director.
 IMPORTANT #1 — `step0_sync_local/step0.py::_check_reviews_freshness` больше не бросает
