@@ -48,12 +48,17 @@ class PowerBIRefreshError(RuntimeError):
 _ALL_TABLES = [
     "big_analytics_full",
     "Dim_Date", "Dim_Campaign", "Dim_AdGroup", "Dim_Site", "Dim_City_Tier",
+    "Dim_AdFormat", "Dim_AdText", "Dim_AdNetworkType", "Dim_Adjustment", "Dim_Device",
+    "Dim_Source", "Dim_VkAdPlan", "Dim_VkAdGroup", "Dim_VkBanner", "Dim_ManagerLogin",
     "fact_vk_ads", "direct_history", "check_utm_fuck_direct",
     "yandex_direct_korrektirovki", "yandex_direct_404_errors",
     "pixel_score", "yandex_direct_cookie_analytics_website_pages",
     "fact_adformat_spend", "fact_criterion_spend", "fact_criterion_zayavki",
     "dim_criterion", "fact_region_spend", "fact_region_zayavki", "Dim_Location",
     "Dim_PlacementFeed", "fact_direct_feed_funnel",
+    "analytics_report_placement_links", "yandex_direct_ads_texts",
+    "yandex_direct_type_placement_report_master", "yandex_direct_search_query_report_master",
+    "yandex_direct_accounts_human_cyborgs",
     "yandex_direct_minus_snapshot", "v_yandex_direct_minus_delta",
     "fact_ml_korrektirovki",
 ]

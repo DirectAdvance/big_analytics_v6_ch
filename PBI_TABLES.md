@@ -9,7 +9,8 @@
 Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
 что живут на v5.** Метод: живая модель
 `~/Documents/креативы виктори/Большая аналитика_admin/Большая аналитика_v00.SemanticModel`
-(31 таблица с источником + 3 DAX-таблицы `Users` / `Модель атрибуции` / `Dim_Distance`),
+(31 таблица с источником + 2 DAX-таблицы `Модель атрибуции` / `Dim_Distance`; служебная
+`Users` удалена из текущего PBIP 2026-08-24),
 для каждой — источник в v5 и объект в ClickHouse `ad_analytics`, построчная сверка колонок.
 
 ## §0.1 Короткий ответ
@@ -203,7 +204,7 @@ ClickHouse. `type_placement_ru` теперь маппится внутри view;
 > является compatibility view через `Dim_PlacementFeed`.
 >
 > **Authoritative-источник списка** — массив `_ALL_TABLES` в
-> [`refresh_powerbi.py`](refresh_powerbi.py) (строки 48–59, 25 таблиц). В v6_ch эти таблицы
+> [`refresh_powerbi.py`](refresh_powerbi.py) (40 import-таблиц). В v6_ch эти таблицы
 > триггерятся на refresh датасета в Power BI Service отдельным подпроцессом `cron_run.py`
 > (`refresh_powerbi.py --no-notify`, запускается после успешного `pipeline.py`) — файла
 > `pipeline_powerbi.py` в этом репозитории нет, он существует только в `big_analytics_v5`.
