@@ -457,6 +457,29 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
         "raw_yandex_cost_zero": "SELECT if(sum(total_cost) = 0, 1, 0) FROM ad_analytics.raw_yandex",
         "full_before_2026": "SELECT count() FROM ad_analytics.big_analytics_full WHERE `Date` < toDate('2026-01-01')",
         "full_null_source": "SELECT count() FROM ad_analytics.big_analytics_full WHERE `источник` IS NULL OR `источник` = ''",
+        # LAST_DAY_COMPLETENESS_2026-08-24: свежий день в витрине не должен быть заметно
+        # меньше соседних. Ловит прогон, стартовавший внутрь окна загрузки
+        # `raw_data.yandex_direct_report_rows` (внешний загрузчик пишет её 04:30–06:42 МСК):
+        # крон стоял в 05:00 МСК и брал ~треть вчерашнего расхода — 2 399 534 руб. за
+        # 2026-08-23 против медианы 8 011 567 по семи предыдущим дням, ratio 0.30.
+        # Порог 0.6 откалиброван бэктестом по 39 дням (16.07–23.08): здоровые ratio
+        # 0.784–1.236 (минимум — суббота 01.08), единственный < 0.6 — сломанный 23.08.
+        # Пустое окно сравнения (свежая БД) даёт median 0 → проверка молчит, не падает.
+        "full_last_day_incomplete": """
+            SELECT if(
+                (SELECT toFloat64(sum(total_cost))
+                 FROM ad_analytics.big_analytics_full
+                 WHERE `Date` = today() - 1)
+                <
+                (SELECT median(c) * 0.6 FROM (
+                    SELECT toFloat64(sum(total_cost)) AS c
+                    FROM ad_analytics.big_analytics_full
+                    WHERE `Date` >= today() - 8 AND `Date` <= today() - 2
+                    GROUP BY `Date`
+                )),
+                1, 0
+            )
+        """,
         "full_funnel_korr_lt_kval": "SELECT count() FROM ad_analytics.big_analytics_full WHERE korr < kval",
         "full_funnel_kval_lt_priezd": "SELECT count() FROM ad_analytics.big_analytics_full WHERE kval < priezd",
         "full_funnel_priezd_lt_prodazhi": "SELECT count() FROM ad_analytics.big_analytics_full WHERE priezd < prodazhi",
