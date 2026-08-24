@@ -11,15 +11,22 @@ FDW и `VACUUM` относятся к v5/legacy и не являются инс�
 (`CRON_SCHEDULE_2026-08-16`). Victory живёт в UTC, поэтому 07:00 Екб — это 02:00 в crontab.
 
 ```
-0 2 * * * cd ~/big_analytics_v6_ch && /usr/bin/flock -n /tmp/ba6_cron.lock \
+0 2 * * * cd ~/big_analytics_v6_ch && BA6_POWERBI_REFRESH=1 \
+          /usr/bin/flock -n /tmp/ba6_cron.lock \
           ~/venv-v6/bin/python3 cron_run.py >> /tmp/ba6_cron.log 2>&1
 ```
 
-Запускается не `pipeline.py` напрямую, а обёртка `cron_run.py`: сам пайплайн в Telegram не пишет
-ничего — ни успех, ни падение, — а под расписанием это означает молчаливые провалы. Обёртка гоняет
-прогон, кладёт лог в `logs/cron_<стамп>.log` (держит 14 последних) и шлёт итог: run_id, время,
-verify PASS/нет, golden Кудерко; при падении — номер упавшего шага и хвост лога на 25 строк.
+Запускается не `pipeline.py` напрямую, а обёртка `cron_run.py`: после успешного pipeline она
+синхронно запускает selective `refresh_powerbi.py`, кладёт общий лог в `logs/cron_<стамп>.log`
+(держит 14 последних) и шлёт итог: run_id, время, verify, golden и статус Power BI. При падении
+pipeline Power BI не запускается. Refresh защищён от старого BA5-датасета: PostgreSQL datasource
+блокируется до POST; на 2026-08-24 настроенный Service dataset — `Большая аналитика_admin`
+с ClickHouse datasource `Extension`.
 `flock -n` не даёт наложиться на ручной прогон.
+
+`BA6_POWERBI_REFRESH=1` в строке крона обязателен: `cron_run.py` дёргает refresh ТОЛЬКО при этой
+переменной (`cron_run.py:271`), иначе молча пропускает его — pipeline OK, а BI со вчерашними
+данными. Так и было 2026-08-16…2026-08-24: переменную в крон не положили при включении refresh.
 
 ## Команды запуска
 
@@ -29,6 +36,9 @@ verify PASS/нет, golden Кудерко; при падении — номер 
 
 # То же, что делает крон (с уведомлением в Telegram).
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/cron_run.py
+
+# Только BA6 Power BI refresh (с отдельным уведомлением в Telegram).
+~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/refresh_powerbi.py
 
 # То же, но с maintenance steps 2 и 7.
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/pipeline.py --include-maintenance
