@@ -29,9 +29,15 @@ kol_vo_zayavok ⊇ korr ⊇ kval ⊇ priezd ⊇ prodazhi
 dohod_do_kredita ⊇ dobro
 ```
 
-Reason-сторона полностью отдельная от status — продажи на стороне reason тоже считаются
-(`sale ⊆ approved ⊆ credit` через auto-merge внутри reason). На status-стороне продажи
-также автоматически входят в `approved`, `credit`, `visit`, `qualified`, `correct`.
+REASON_METRIC_KEY_2026-08-25: reason-сторона матчится ТЕМ ЖЕ `_category_match_expr`, что и
+status-сторона — полным ключом (crm, status, salon, reason), а не только (crm, reason). Раньше
+голый `(crm, reason)` смешивал разные категории одной и той же пары reason, если категория
+зависела от status/salon (обнаружено: 203 лишних лида в dohod_do_kredita, 106 в dobro за
+1-24.08.2026). Продажи на стороне reason тоже считаются (`sale ⊆ approved ⊆ credit`). На
+status-стороне продажи также автоматически входят в `approved`, `credit`, `visit`, `qualified`,
+`correct`. Исключение — `CASH_SALE_STATUSES` (`plex`/`genzes`, «Продажа за наличные»): продажа за
+наличные не проходит через кредитный отдел, поэтому вычитается из обеих reason-метрик, но
+остаётся в `prodazhi`.
 
 ## Маппинг метрик
 
@@ -43,8 +49,8 @@ Reason-сторона полностью отдельная от status — пр
 | **priezd** | `visit` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
 | **prodazhi** | `sale` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
 | **nekorr** | `incorrect` | `status` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
-| **dohod_do_kredita** | `credit` | `reason` | reference_data.crm_status_mapping |
-| **dobro** | `approved` | `reason` | reference_data.crm_status_mapping |
+| **dohod_do_kredita** | `credit`+`approved`+`sale`, минус `CASH_SALE_STATUSES` | `status`+`salon`+`reason` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
+| **dobro** | `approved`+`sale`, минус `CASH_SALE_STATUSES` | `status`+`salon`+`reason` | reference_data.crm_status_mapping / CODE_STATUS_CATEGORY |
 
 ## Хардкод (не из таблицы)
 
@@ -75,10 +81,10 @@ priezd  = visit + sale + credit + approved
 prodazhi = sale
 ```
 
-**Reason-сторона:**
+**Reason-сторона** (полный ключ crm/status/salon/reason, как status-сторона):
 ```
-dohod_do_kredita = reason category credit + approved
-dobro            = reason category approved
+dohod_do_kredita = (credit + approved + sale) − CASH_SALE_STATUSES
+dobro            = (approved + sale) − CASH_SALE_STATUSES
 ```
 
 Гарантия: `korr ≥ kval ≥ priezd ≥ prodazhi` (status), `dohod_do_kredita ≥ dobro` (reason).
@@ -89,6 +95,8 @@ dobro            = reason category approved
 |-----------|---------|-------|--------|------|
 | `credit` | MEGA | Платина | Отказ по банкам | reason |
 | `credit`/`visit` | PLEX | УрбанКар / — | Консультация | status/reason |
+| `credit` | marcar (CODE_STATUS_CATEGORY) | — | Дошел в КО | status/reason |
+| `approved` | marcar (CODE_STATUS_CATEGORY) | — | Одобрение | status/reason |
 
 > ⚠️ **salon-override `kind='status'` активирует salon-ветку и в ЗВОНКАХ.** Появление строки
 > `salon<>''` `kind='status'` (например по «Лидер») включает salon-условие не только в
@@ -136,6 +144,7 @@ pipeline.py / fast_pipeline.py"), но в `pipeline.py`/`cron_run.py` v6_ch на
 | 2026-05-07 | Добавлены `'Оформленные'`, `'Продажа в кредит'`, `'Продажа за наличные'` в `visit` |
 | 2026-05-07 | `qualified` (11 статусов) → переведены в `correct` (были вне всех метрик) |
 | 2026-05-08 | **Рефакторинг воронки**: разделение status/reason — kol_vo_zayavok/korr/kval/priezd/prodazhi/nekorr из status, dohod_do_kredita/dobro из reason. `qualified` восстановлена как отдельная kval-категория. Удалены 4 мёртвых маппинга, перенесены 14 status→reason. |
+| 2026-08-25 | **REASON_METRIC_KEY**: dohod_do_kredita/dobro переведены с матча по голому (crm, reason) на тот же `_category_match_expr`, что и status-сторона (полный ключ crm/status/salon/reason) — устраняет 203/106 лишних лидов (Aug 1-24) от чужих status/salon с тем же reason. Добавлена категория `sale` в обе reason-метрики (`sale ⊆ approved ⊆ credit`). Добавлен `CASH_SALE_STATUSES` (plex/genzes «Продажа за наличные») — вычитается из reason-метрик, остаётся в prodazhi. Marcar «Дошел в КО»/«Одобрение» переведены в `CODE_STATUS_CATEGORY` из `visit` в `credit`/`approved` (раньше давали 0 KO/dobro для всех лидов Маркара); status-сторона (korr/kval/priezd) не изменилась — обе категории уже входили в объединения `visit`/`qualified`/`correct`. |
 
 ## local_gsheet_priezdi_marcar — воронка Маркар (детальный разбор)
 

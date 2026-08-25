@@ -253,19 +253,27 @@ def check_crm_mapping_coverage(client) -> list[str]:
 #      Появится право на запись — правку B делать в справочнике и удалять отсюда
 #      (гард сам скажет, что справочник и код сошлись).
 #
-# ⚠️ Только status-сторона воронки. Reason-метрики (`dohod_do_kredita`/`dobro`)
-# читают справочник по (crm, reason) и этим механизмом НЕ покрыты — поэтому
-# категории 'credit'/'approved' здесь запрещены (проверяет гард).
+# REASON_METRIC_KEY_2026-08-25: reason-метрики (`dohod_do_kredita`/`dobro`) теперь читают
+# справочник тем же `_category_match_expr`, что и status-сторона — полным ключом
+# (crm, status, salon, reason), а не голым (crm, reason). Поэтому 'credit'/'approved' в
+# CODE_STATUS_CATEGORY больше не запрещены (см. `_CODE_STATUS_SIDE_CATEGORIES` ниже).
 # ══════════════════════════════════════════════════════════════════════════════
 CODE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
     # A. MARCAR_GSHEET_STATUS_2026-08-05 — все четыре статуса патча step1
     ("marcar", "Продажа"): "sale",
-    ("marcar", "Дошел в КО"): "visit",
-    ("marcar", "Одобрение"): "visit",
+    ("marcar", "Дошел в КО"): "credit",      # REASON_METRIC_KEY_2026-08-25: было "visit"
+    ("marcar", "Одобрение"): "approved",     # REASON_METRIC_KEY_2026-08-25: было "visit"
     ("marcar", "Приехал"): "visit",
     # B. PLEX_OTKAZ_QUALIFIED_2026-08-05 — временный мост до GRANT'а на справочник
     ("plex", "Отказ клиента"): "qualified",
 }
+
+# CASH_SALE_2026-08-25: продажа за наличные не проходит через кредитный отдел —
+# в reason-метрики (dohod_do_kredita/dobro) не попадает, в prodazhi остаётся.
+CASH_SALE_STATUSES: frozenset[tuple[str, str]] = frozenset({
+    ("plex", "Продажа за наличные"),
+    ("genzes", "Продажа за наличные"),
+})
 
 # PERFORM_STATUS_PARITY_2026-08-14: сайт/v5 считает perform_api по default-ветке
 # local_crm_statuses, а не по неполному reference_data.crm_status_mapping.crm='rivendell'.
@@ -295,8 +303,11 @@ CODE_SOURCE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
     ("perform_api", "Хлам"): "incorrect",
 }
 
-# Категории status-стороны. 'credit'/'approved' сознательно вне списка — см. выше.
-_CODE_STATUS_SIDE_CATEGORIES = frozenset({"correct", "qualified", "visit", "sale", "incorrect"})
+# Допустимые категории CODE_STATUS_CATEGORY/CODE_SOURCE_STATUS_CATEGORY. 'credit'/'approved'
+# добавлены REASON_METRIC_KEY_2026-08-25 — reason-метрики читают тот же код через
+# `_category_match_expr`, что и status-сторона (см. комментарий над CODE_STATUS_CATEGORY).
+_CODE_STATUS_SIDE_CATEGORIES = frozenset(
+    {"correct", "qualified", "visit", "sale", "incorrect", "credit", "approved"})
 
 
 def _code_pairs(categories: tuple[str, ...] | None = None) -> list[tuple[str, str]]:
@@ -350,7 +361,8 @@ def check_code_status_categories(client) -> None:
 
       1. литералы словаря безопасны для подстановки в SQL;
       2. ключи `crm` — те же, что выдаёт `_crm_expr` (иначе override мёртв);
-      3. категории — только status-сторона (reason-метрики механизмом не покрыты);
+      3. категории — из допустимого набора `_CODE_STATUS_SIDE_CATEGORIES` (status- и
+         reason-сторона читают код одним и тем же `_category_match_expr`);
       4. КАЖДЫЙ статус, который проставляет патч Маркара (`MARCAR_STATUS_PRIORITY`
          в `step1_load_raw/step1.py`), имеет категорию — иначе воронка патченых
          лидов молча обнулится (замер на паритете с v5: priezd ≈ −646, prodazhi −6).
@@ -391,9 +403,8 @@ def check_code_status_categories(client) -> None:
     )
     if bad_categories:
         raise RuntimeError(
-            f"CODE_STATUS_CATEGORY: категории {bad_categories} вне status-стороны "
-            f"{sorted(_CODE_STATUS_SIDE_CATEGORIES)}. Reason-метрики (dohod_do_kredita/dobro) "
-            "читают справочник по (crm, reason) и этим механизмом не покрыты"
+            f"CODE_STATUS_CATEGORY: категории {bad_categories} вне допустимого набора "
+            f"{sorted(_CODE_STATUS_SIDE_CATEGORIES)}"
         )
 
     unknown_source_types = sorted(
@@ -517,10 +528,6 @@ def _category_match_expr(
 
 def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salon_expr: str) -> str:
     status = f"ifNull({status_expr}, '')"
-    reason = f"lower(ifNull({reason_expr}, ''))"
-    # REASON_CRM_SCOPE_2026-08-05: reason-метрики (dohod_do_kredita/dobro) матчатся В РАЗРЕЗЕ CRM,
-    # как и status-сторона в _category_match_expr. Глобальный матч по одному lower(reason)
-    # тянул причину чужой CRM на все CRM сразу и раздувал reason-воронку.
     crm = _crm_expr(source_type_expr)
     correct = _category_match_expr(
         ("correct", "qualified", "visit", "sale", "credit", "approved"),
@@ -545,6 +552,19 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     )
     sale = _category_match_expr(("sale",), status_expr, reason_expr, source_type_expr, salon_expr)
     incorrect = _category_match_expr(("incorrect",), status_expr, reason_expr, source_type_expr, salon_expr)
+    # REASON_METRIC_KEY_2026-08-25: dohod_do_kredita/dobro раньше матчились только по
+    # (crm, reason), отбрасывая status и salon — та же пара (crm, reason) в справочнике
+    # относится к разным категориям в зависимости от status/salon, из-за чего лиды
+    # incorrect/correct/visit считались в KO/dobro. Теперь оба используют тот же
+    # `_category_match_expr`, что и status-сторона (полный ключ crm/status/salon/reason),
+    # плюс sale — FUNNEL.md требует sale ⊆ approved ⊆ credit на reason-стороне.
+    cash_sale = f"({crm}, {status}) IN ({_code_pairs_sql(sorted(CASH_SALE_STATUSES))})"
+    credit_side = _category_match_expr(
+        ("credit", "approved", "sale"), status_expr, reason_expr, source_type_expr, salon_expr
+    )
+    approved_side = _category_match_expr(
+        ("approved", "sale"), status_expr, reason_expr, source_type_expr, salon_expr
+    )
     return f"""
     toDecimal64(if({status} != '', 1, 0), 6) AS kol_vo_zayavok,
     toDecimal64(if({correct}, 1, 0), 6) AS korr,
@@ -556,14 +576,8 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     toDecimal64(if({status} = 'Фильтр', 1, 0), 6) AS filtr,
     toDecimal64(if({status} = 'Недозвон', 1, 0), 6) AS nedozvon,
     toDecimal64(if({status} = 'Приедет', 1, 0), 6) AS priedet,
-    toInt64(if(({crm}, {reason}) IN (
-        SELECT crm, lower(reason) FROM reference_data.crm_status_mapping
-        WHERE category IN ('credit', 'approved') AND ifNull(reason, '') != ''
-    ), 1, 0)) AS dohod_do_kredita,
-    toInt64(if(({crm}, {reason}) IN (
-        SELECT crm, lower(reason) FROM reference_data.crm_status_mapping
-        WHERE category = 'approved' AND ifNull(reason, '') != ''
-    ), 1, 0)) AS dobro
+    toInt64(if({credit_side} AND NOT {cash_sale}, 1, 0)) AS dohod_do_kredita,
+    toInt64(if({approved_side} AND NOT {cash_sale}, 1, 0)) AS dobro
 """
 
 
