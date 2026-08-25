@@ -118,3 +118,12 @@ def build_brand_case_sql() -> str:
         "        ELSE ''\n"
         "    END"
     )
+
+
+def build_brand_multiif_sql(adgroup_code_expr: str) -> str:
+    """ClickHouse expression for field `марки авто` from the first ct-code."""
+    code = f"lowerUTF8(splitByChar('_', ifNull({adgroup_code_expr}, ''))[1])"
+    parts = []
+    for raw_code, brand in AG_PART1_BRAND_MAP.items():
+        parts.append(f"{code} = '{raw_code}', '{brand}'")
+    return f"multiIf({', '.join(parts)}, '')"

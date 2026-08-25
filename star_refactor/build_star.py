@@ -77,7 +77,6 @@ FACT_BIG_DIMENSION_COLUMNS = {
     "регион",
     "тип_сайта",
     "шаблон",
-    "специалист",
     "проджект",
     "менеджер",
     "id_салона",
@@ -708,7 +707,7 @@ DIM_DDL = {
             AS
             SELECT
                 `RlAdjustmentId`,
-                anyLast(`RlAdjustmentId_total`) AS `RlAdjustmentId_total`
+                if(`RlAdjustmentId` > 0, 'Есть корректировка', 'Нет корректировки') AS `RlAdjustmentId_total`
             FROM ad_analytics.big_analytics_unified
             WHERE `RlAdjustmentId` IS NOT NULL
             GROUP BY `RlAdjustmentId`
@@ -1329,11 +1328,30 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
                 b.banner_id AS banner_id,
                 anyLast(b.account_id) AS account_id,
                 anyLast(b.ad_plan_id) AS ad_plan_id,
-                anyLast(b.ad_group_id) AS ad_group_id
+                anyLast(b.ad_plan_name) AS ad_plan_name,
+                anyLast(b.ad_group_id) AS ad_group_id,
+                anyLast(b.ad_group_name) AS ad_group_name,
+                anyLast(b.banner_name) AS banner_name
             FROM raw_data.vk_ads_stats_day AS b
             WHERE b.banner_id IS NOT NULL
               AND b.account_id IN ({VK_AUTO_ACCOUNTS_SQL})
             GROUP BY b.banner_id
+        ),
+        salon_by_acc AS
+        (
+            SELECT
+                a.account_id AS account_id,
+                anyLast(nullIf(trim(ifNull(gs.salon, '')), '')) AS `салон`,
+                anyLast(nullIf(trim(ifNull(gs.region, '')), '')) AS `регион`,
+                anyLast(nullIf(trim(ifNull(gs.site_type, '')), '')) AS `тип_сайта`,
+                anyLast(nullIf(trim(ifNull(gs.directologist, '')), '')) AS `специалист`
+            FROM reference_data.vk_ads_agency_clients AS a
+            INNER JOIN reference_data.gsheet_sites AS gs
+                ON lowerUTF8(trim(ifNull(a.domain, ''))) = lowerUTF8(trim(ifNull(gs.domain, '')))
+            WHERE gs.niche = 'Авто'
+              AND ifNull(a.domain, '') != ''
+              AND ifNull(gs.domain, '') != ''
+            GROUP BY a.account_id
         ),
         salon_dim AS
         (
@@ -1350,10 +1368,13 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
         SELECT
             assumeNotNull(toDateOrNull(s.date)) AS date,
             CAST(s.account_id, 'Nullable(Int64)') AS account_id,
-            CAST(NULL, 'LowCardinality(Nullable(String))') AS `салон`,
+            CAST(sba.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(s.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
+            CAST(s.ad_plan_name, 'LowCardinality(Nullable(String))') AS ad_plan_name,
             CAST(s.ad_group_id, 'Nullable(Int64)') AS ad_group_id,
+            CAST(s.ad_group_name, 'LowCardinality(Nullable(String))') AS ad_group_name,
             CAST(s.banner_id, 'Nullable(Int64)') AS banner_id,
+            CAST(s.banner_name, 'LowCardinality(Nullable(String))') AS banner_name,
             'По дате заявки' AS `атрибуция`,
             toInt64(ifNull(s.shows, 0)) AS shows,
             toInt64(ifNull(s.clicks, 0)) AS clicks,
@@ -1364,10 +1385,11 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             toInt64(0) AS `квал`,
             toInt64(0) AS `визиты`,
             toInt64(0) AS `продажи`,
-            CAST(NULL, 'LowCardinality(Nullable(String))') AS `регион`,
-            CAST(NULL, 'LowCardinality(Nullable(String))') AS `тип_сайта`,
-            CAST(NULL, 'LowCardinality(Nullable(String))') AS `специалист`
+            CAST(sba.`регион`, 'LowCardinality(Nullable(String))') AS `регион`,
+            CAST(sba.`тип_сайта`, 'LowCardinality(Nullable(String))') AS `тип_сайта`,
+            CAST(sba.`специалист`, 'LowCardinality(Nullable(String))') AS `специалист`
         FROM raw_data.vk_ads_stats_day s
+        LEFT JOIN salon_by_acc sba ON sba.account_id = s.account_id
         WHERE s.date >= '{DATE_FROM}'
           {stats_where_sql}
           AND (ifNull(s.shows, 0) != 0 OR ifNull(s.clicks, 0) != 0 OR ifNull(s.spent, 0) != 0)
@@ -1381,8 +1403,11 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(bd.account_id, 'Nullable(Int64)') AS account_id,
             CAST(za.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(bd.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
+            CAST(bd.ad_plan_name, 'LowCardinality(Nullable(String))') AS ad_plan_name,
             CAST(ifNull(za.ad_group_id, bd.ad_group_id), 'Nullable(Int64)') AS ad_group_id,
+            CAST(bd.ad_group_name, 'LowCardinality(Nullable(String))') AS ad_group_name,
             CAST(za.banner_id, 'Nullable(Int64)') AS banner_id,
+            CAST(bd.banner_name, 'LowCardinality(Nullable(String))') AS banner_name,
             'По дате заявки' AS `атрибуция`,
             toInt64(0) AS shows,
             toInt64(0) AS clicks,
@@ -1407,8 +1432,11 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(bd.account_id, 'Nullable(Int64)') AS account_id,
             CAST(va.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(bd.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
+            CAST(bd.ad_plan_name, 'LowCardinality(Nullable(String))') AS ad_plan_name,
             CAST(ifNull(va.ad_group_id, bd.ad_group_id), 'Nullable(Int64)') AS ad_group_id,
+            CAST(bd.ad_group_name, 'LowCardinality(Nullable(String))') AS ad_group_name,
             CAST(va.banner_id, 'Nullable(Int64)') AS banner_id,
+            CAST(bd.banner_name, 'LowCardinality(Nullable(String))') AS banner_name,
             'По дате визита' AS `атрибуция`,
             toInt64(0) AS shows,
             toInt64(0) AS clicks,

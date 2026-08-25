@@ -109,7 +109,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, q, swap_shadow
-from corrections import specialist_correction_expr
+from corrections import calls_specialist_correction_expr, specialist_correction_expr
 from step1_load_raw.step1 import _resolved_lead_salon_expr, _salon_client_id_expr
 from step3_build_sources.step3 import (
     _ag_parts_expr,
@@ -554,8 +554,11 @@ WHERE (priezd > 0 OR prodazhi > 0)
 # Ветка 2 — звонки
 # ══════════════════════════════════════════════════════════════════════════════
 def _calls_branch_columns() -> dict[str, str]:
-    specialist = specialist_correction_expr(
-        "g.eff_arrival_date", "g.account_login", "g.specialist_raw"
+    specialist = calls_specialist_correction_expr(
+        "g.eff_arrival_date",
+        "g.account_login",
+        "g.specialist_raw",
+        "g.account_specialist_raw",
     )
     return {
         "key3": "concat('visit_call|', toString(g.eff_arrival_date), '|', ifNull(g.domain, ''))",
@@ -644,6 +647,7 @@ call_visits AS
         multiIf(c.source_type = 'marcar_crm_excel', 'Маркар', ifNull(crm.crm_name, '')) AS crm_name,
         coalesce(nullIf(gs_ma.status, ''), gs.status) AS `статус`,
         nullIf(trim(ifNull(coalesce(nullIf(gs_ma.directologist, ''), gs.directologist), '')), '') AS specialist_raw,
+        nullIf(trim(ifNull(ga.directologist, '')), '') AS account_specialist_raw,
         coalesce(nullIf(gs_ma.site_type, ''), gs.site_type) AS `тип_сайта`,
         coalesce(nullIf(gs_ma.template, ''), gs.template) AS `шаблон`,
         coalesce(nullIf(gs_ma.salon, ''), gs.salon) AS `салон`,
@@ -689,6 +693,8 @@ call_visits AS
        AND gs_ma.domain_key = ma.sheet_domain
        AND gs_ma.direction = 'Авто'
     LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(c.domain, '')))
+    LEFT JOIN gs_account ga
+        ON ga.login_key = lower(trim(ifNull(coalesce(nullIf(gs_ma.login_key, ''), gs.login_key), '')))
     LEFT JOIN crm_by_domain crm
         ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), c.domain), '')))
     LEFT JOIN posevy_calls_source_map pcm
@@ -707,6 +713,7 @@ SELECT
     crm_name,
     `статус`,
     specialist_raw,
+    account_specialist_raw,
     `тип_сайта`,
     `шаблон`,
     `салон`,
@@ -732,8 +739,8 @@ SELECT
 FROM call_visits
 GROUP BY
     eff_arrival_date, domain, account_login, manager_login, crm_name, `статус`,
-    specialist_raw, `тип_сайта`, `шаблон`, `салон`, `город`, `регион`, direction,
-    `проджект`, `id_салона`, `менеджер`, source_label
+    specialist_raw, account_specialist_raw, `тип_сайта`, `шаблон`, `салон`, `город`,
+    `регион`, direction, `проджект`, `id_салона`, `менеджер`, source_label
 HAVING priezd > 0 OR prodazhi > 0
 """
 
@@ -886,16 +893,10 @@ GROUP BY
 # Ветка 4 — пиксель (date-shift дробной атрибуции)
 # ══════════════════════════════════════════════════════════════════════════════
 def _pixel_branch_columns() -> dict[str, str]:
-    # DIRECTOLOGIST_CUTOFF_PIXEL_SHIFT: g.`специалист` здесь -- значение, посчитанное
-    # step11 (specialist_correction_expr) для СТАРОЙ даты заявки (p.`Date` до сдвига).
-    # `Date` этой ветки -- уже g.`Date` ПОСЛЕ сдвига на дату визита (pxv.new_date /
-    # orphan f.`Date`); ветки 1-3 (leads/calls/marcar_orphans) уже пересчитывают
-    # specialist_correction_expr на СВОЕЙ Date -- пиксель был единственной веткой,
-    # где cutoff по аккаунту не проверялся повторно после сдвига, поэтому лид,
-    # заведённый до cutoff, но с визитом/продажей после него, оставался у старого
-    # специалиста на визитной оси. g.`специалист` передаётся третьим аргументом как
-    # дефолт: если новая дата не задевает ни одно date-правило, значение не меняется.
-    specialist = specialist_correction_expr("g.`Date`", "g.account_login", "g.`специалист`")
+    # Pixel rows inherit the specialist already resolved on the claim axis.
+    # Re-running cutoff rules here was a no-op for today's forward visit shift and
+    # could move future backward shifts across a cutoff.
+    specialist = "g.`специалист`"
     return {
         "key3": "concat('visit_pixel|', toString(g.`Date`), '|', ifNull(g.domain, ''), "
                 "'|', toString(g.`CampaignId`))",

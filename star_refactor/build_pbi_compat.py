@@ -163,7 +163,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 'Заявки',
                 dcs.`тип_заявки`
             ) AS `тип_заявки`,
-            dsl.`специалист` AS `специалист`,
+            f.`специалист` AS `специалист`,
             dsl.`салон` AS `салон`,
             dsl.`город` AS `город`,
             dsl.`регион` AS `регион`,
@@ -588,6 +588,7 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
             toInt64(round(f.crm_spam_order)) AS `CRM: Спам заказ`,
             toInt64(round(f.crm_order_canceled)) AS `CRM: Заказ отменен`,
+            f.`специалист` AS `специалист`,
             ds.domain AS domain,
             now() AS updated_at
         FROM ad_analytics.fact_region_spend f
@@ -619,7 +620,8 @@ def _region_spend_star_pbi_sql(where_sql: str = "") -> str:
             toFloat64(f.crm_order_created) AS crm_order_created,
             toFloat64(f.crm_order_paid) AS crm_order_paid,
             toFloat64(f.crm_spam_order) AS crm_spam_order,
-            toFloat64(f.crm_order_canceled) AS crm_order_canceled
+            toFloat64(f.crm_order_canceled) AS crm_order_canceled,
+            f.`специалист` AS `специалист`
         FROM ad_analytics.fact_region_spend f
         {where_sql}
     """
@@ -636,11 +638,12 @@ def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
             toFloat64(f.cost) AS cost,
             toFloat64(f.clicks) AS clicks,
             toFloat64(f.impressions) AS impressions,
-            toInt64(0) AS `Все формы`,
-            toInt64(0) AS `CRM: Заказ создан`,
+            toInt64(round(f.all_forms)) AS `Все формы`,
+            toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`,
             toInt64(0) AS `CRM: Заказ оплачен`,
             toInt64(0) AS `CRM: Спам заказ`,
             toInt64(0) AS `CRM: Заказ отменен`,
+            f.`специалист` AS `специалист`,
             ds.domain AS domain,
             now() AS updated_at
         FROM ad_analytics.fact_adformat_spend f
@@ -672,6 +675,7 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(0) AS kval,
             toInt64(0) AS priezd,
             toInt64(0) AS prodazhi,
+            f.`специалист` AS `специалист`,
             ds.domain AS domain,
             now() AS updated_at
         FROM ad_analytics.fact_criterion_spend f
@@ -704,7 +708,8 @@ def _criterion_spend_star_pbi_sql(where_sql: str = "") -> str:
             toFloat64(f.crm_order_created) AS `CRM: Заказ создан`,
             toFloat64(f.crm_order_paid) AS `CRM: Заказ оплачен`,
             toFloat64(f.crm_spam_order) AS `CRM: Спам заказ`,
-            toFloat64(f.crm_order_canceled) AS `CRM: Заказ отменен`
+            toFloat64(f.crm_order_canceled) AS `CRM: Заказ отменен`,
+            f.`специалист` AS `специалист`
         FROM ad_analytics.fact_criterion_spend f
         {where_sql}
     """
@@ -1012,9 +1017,27 @@ def _search_query_report_master_pbi_sql() -> str:
             date_from,
             date_to,
             client_login,
-            criterion_type,
-            targeting_category,
-            brand_options,
+            multiIf(
+                criterion_type = 'AUTOTARGETING_CRITERION_TYPE', 'Автотаргетинг',
+                criterion_type = 'KEYWORD_CRITERION_TYPE', 'Ключевые слова',
+                criterion_type
+            ) AS criterion_type,
+            multiIf(
+                targeting_category = 'EXACT', 'Точное соответствие',
+                targeting_category = 'ALTERNATIVE', 'Альтернативные запросы',
+                targeting_category = 'NARROW', 'Узкие запросы',
+                targeting_category = 'ACCESSORY', 'Сопутствующие запросы',
+                targeting_category = 'BROADER', 'Широкие запросы',
+                targeting_category = 'UNDEFINED', 'Не определено',
+                targeting_category
+            ) AS targeting_category,
+            multiIf(
+                brand_options = 'NO_BRAND', 'Без бренда',
+                brand_options = 'COMPETITOR_BRAND', 'Бренды конкурентов',
+                brand_options = 'SELF_BRAND', 'Свой бренд',
+                brand_options = 'UNKNOWN_BRAND', 'Бренд не определен',
+                brand_options
+            ) AS brand_options,
             campaign_id,
             ad_group_id,
             toInt64(sum(impressions)) AS impressions,
@@ -1216,12 +1239,48 @@ def _dim_date_pbi_sql() -> str:
     """
 
 
+def _campaign_status_ru_expr(expr: str) -> str:
+    clean = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
+    upper = f"upperUTF8({clean})"
+    return (
+        f"multiIf({clean} = '', 'Не указана', "
+        f"{upper} IN ('ACCEPTED', 'ACTIVE'), 'Активна', "
+        f"{upper} = 'DRAFT', 'Черновик', "
+        f"{upper} = 'MODERATION', 'На модерации', "
+        f"{upper} = 'REJECTED', 'Отклонена', "
+        f"{upper} IN ('SUSPENDED', 'STOPPED'), 'Остановлена', "
+        f"{upper} = 'ARCHIVED', 'Архив', {expr})"
+    )
+
+
+def _payment_model_ru_expr(expr: str) -> str:
+    clean = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
+    upper = f"upperUTF8({clean})"
+    return (
+        f"multiIf({clean} = '', 'Не указана', "
+        f"{upper} = 'CPA', 'за конверсии', "
+        f"{upper} = 'CPC', 'за клики', {expr})"
+    )
+
+
+def _ad_network_type_ru_expr(expr: str) -> str:
+    clean = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
+    upper = f"upperUTF8({clean})"
+    return (
+        f"multiIf({clean} = '', 'Не указана', "
+        f"{upper} = 'SEARCH', 'Поиск', "
+        f"{upper} = 'AD_NETWORK', 'РСЯ', {expr})"
+    )
+
+
 def _dim_ad_network_type_pbi_sql() -> str:
-    return """
+    ad_network_type = _ad_network_type_ru_expr("ad_network_type")
+    ad_network_type_camel = _ad_network_type_ru_expr("AdNetworkType")
+    return f"""
         SELECT
             ad_network_type_key,
-            ad_network_type,
-            AdNetworkType
+            {ad_network_type} AS ad_network_type,
+            {ad_network_type_camel} AS AdNetworkType
         FROM ad_analytics.Dim_AdNetworkType
     """
 
@@ -1230,7 +1289,15 @@ def _dim_ad_format_pbi_sql() -> str:
     return """
         SELECT
             ad_format_key,
-            anyLast(ad_format) AS ad_format
+            anyLast(multiIf(
+                ad_format = 'IMAGE', 'графический',
+                ad_format = 'TEXT', 'текстовый (ТГО)',
+                ad_format = 'VIDEO', 'видео',
+                ad_format IN ('SMART_SINGLE', 'SMART_MULTIPLE', 'SMART_TILE'), 'смарт-баннер',
+                ad_format = 'ADAPTIVE_IMAGE', 'адаптивный графический',
+                ad_format = 'multicard', 'комбинаторное объявление',
+                ad_format
+            )) AS ad_format
         FROM (
             SELECT
                 lowerUTF8(trim(BOTH ' ' FROM ifNull(ad_format, ''))) AS ad_format_key,
@@ -1333,7 +1400,11 @@ def _dim_source_pbi_sql() -> str:
 
 
 def _dim_campaign_pbi_sql() -> str:
-    return """
+    campaign_status = _campaign_status_ru_expr("dc.campaign_status")
+    payment_model = _payment_model_ru_expr("dc.payment_model")
+    cpc_cpa = _payment_model_ru_expr("dc.cpc_cpa")
+    service_campaign_status = _campaign_status_ru_expr("ss.campaign_status")
+    return f"""
         WITH auto_accounts AS (
             SELECT DISTINCT lower(ifNull(login_key, '')) AS account_login
             FROM reference_data.gsheet_sites
@@ -1388,14 +1459,14 @@ def _dim_campaign_pbi_sql() -> str:
             dc.account_login,
             dc.campaign_code,
             dc.tp,
-            dc.cpc_cpa,
+            {cpc_cpa} AS cpc_cpa,
             dc.site_quiz,
-            dc.campaign_status AS `статус_кампании`,
+            {campaign_status} AS `статус_кампании`,
             ss.specialist AS `специалист`,
             CAST(NULL, 'Nullable(String)') AS manager_login,
-            dc.campaign_status,
-            dc.payment_model,
-            dc.payment_model AS `тип_оплаты`,
+            {campaign_status} AS campaign_status,
+            {payment_model} AS payment_model,
+            {payment_model} AS `тип_оплаты`,
             dc.`номер кампании | название кампании`
         FROM ad_analytics.Dim_Campaign dc
         LEFT JOIN service_campaigns ss ON ss.CampaignId = dc.CampaignId
@@ -1406,14 +1477,14 @@ def _dim_campaign_pbi_sql() -> str:
             ifNull(ss.account_login, '') AS account_login,
             CAST(NULL, 'Nullable(String)') AS campaign_code,
             '' AS tp,
-            '' AS cpc_cpa,
+            'Не указана' AS cpc_cpa,
             '' AS site_quiz,
-            ss.campaign_status AS `статус_кампании`,
+            {service_campaign_status} AS `статус_кампании`,
             ss.specialist AS `специалист`,
             CAST(NULL, 'Nullable(String)') AS manager_login,
-            ss.campaign_status,
-            CAST(NULL, 'Nullable(String)') AS payment_model,
-            CAST(NULL, 'Nullable(String)') AS `тип_оплаты`,
+            {service_campaign_status} AS campaign_status,
+            'Не указана' AS payment_model,
+            'Не указана' AS `тип_оплаты`,
             concat(toString(ss.CampaignId), ' | ', ifNull(ss.CampaignName, '')) AS `номер кампании | название кампании`
         FROM service_campaigns ss
         LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = ss.CampaignId
@@ -1426,17 +1497,17 @@ def _dim_adgroup_pbi_sql() -> str:
         SELECT
             AdGroupId,
             AdGroupName,
-            adgroup_code,
+            if(trim(ifNull(adgroup_code, '')) = '', 'Не указано', adgroup_code) AS adgroup_code,
             `номер группы | название группы`,
-            `марки авто`,
-            ag_part1,
-            ag_part2,
-            ag_part3,
-            ag_part4,
-            ag_part5,
-            ag_part6,
-            ag_part7,
-            ag_part1 AS ag_part1_name,
+            if(trim(ifNull(`марки авто`, '')) = '', 'Не указано', `марки авто`) AS `марки авто`,
+            if(trim(ifNull(ag_part1, '')) = '', 'Не указано', ag_part1) AS ag_part1,
+            if(trim(ifNull(ag_part2, '')) = '', 'Не указано', ag_part2) AS ag_part2,
+            if(trim(ifNull(ag_part3, '')) = '', 'Не указано', ag_part3) AS ag_part3,
+            if(trim(ifNull(ag_part4, '')) = '', 'Не указано', ag_part4) AS ag_part4,
+            if(trim(ifNull(ag_part5, '')) = '', 'Не указано', ag_part5) AS ag_part5,
+            if(trim(ifNull(ag_part6, '')) = '', 'Не указано', ag_part6) AS ag_part6,
+            if(trim(ifNull(ag_part7, '')) = '', 'Не указано', ag_part7) AS ag_part7,
+            if(trim(ifNull(ag_part1, '')) = '', 'Не указано', ag_part1) AS ag_part1_name,
             `неверный_кодер_new`,
             parent_CampaignId
         FROM ad_analytics.Dim_AdGroup
@@ -1444,17 +1515,17 @@ def _dim_adgroup_pbi_sql() -> str:
         SELECT
             sg.AdGroupId,
             CAST(NULL, 'Nullable(String)') AS AdGroupName,
-            CAST(NULL, 'Nullable(String)') AS adgroup_code,
+            'Не указано' AS adgroup_code,
             '' AS `номер группы | название группы`,
-            '' AS `марки авто`,
-            '' AS ag_part1,
-            '' AS ag_part2,
-            '' AS ag_part3,
-            '' AS ag_part4,
-            '' AS ag_part5,
-            '' AS ag_part6,
-            '' AS ag_part7,
-            '' AS ag_part1_name,
+            'Не указано' AS `марки авто`,
+            'Не указано' AS ag_part1,
+            'Не указано' AS ag_part2,
+            'Не указано' AS ag_part3,
+            'Не указано' AS ag_part4,
+            'Не указано' AS ag_part5,
+            'Не указано' AS ag_part6,
+            'Не указано' AS ag_part7,
+            'Не указано' AS ag_part1_name,
             CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
             sg.parent_CampaignId
         FROM (
@@ -1501,8 +1572,11 @@ def _vk_ads_pbi_sql() -> str:
             f.account_id AS account_id,
             f.`салон`,
             f.ad_plan_id AS ad_plan_id,
+            p.ad_plan_name AS ad_plan_name,
             f.ad_group_id AS ad_group_id,
+            g.ad_group_name AS ad_group_name,
             f.banner_id AS banner_id,
+            b.banner_name AS banner_name,
             f.`атрибуция`,
             f.shows,
             f.clicks,
@@ -1517,6 +1591,9 @@ def _vk_ads_pbi_sql() -> str:
             f.`тип_сайта`,
             f.`специалист`
         FROM ad_analytics.fact_vk_ads f
+        LEFT JOIN ad_analytics.Dim_VkAdPlan p ON f.ad_plan_id = p.ad_plan_id
+        LEFT JOIN ad_analytics.Dim_VkAdGroup g ON f.ad_group_id = g.ad_group_id
+        LEFT JOIN ad_analytics.Dim_VkBanner b ON f.banner_id = b.banner_id
     """
 
 

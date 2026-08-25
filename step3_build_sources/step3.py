@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, q, replace_view, swap_shadow
+from config.brand_map import build_brand_multiif_sql
 from config.settings import CDR_PATTERN
 from step1_load_raw.step1 import MARCAR_SOURCE_TYPE, MARCAR_STATUS_PRIORITY
 
@@ -515,8 +516,8 @@ def _category_match_expr(
     crm = _crm_expr(source_type_expr)
     status = f"ifNull({status_expr}, '')"
     source_type = f"ifNull({source_type_expr}, '')"
-    reason = f"lower(ifNull({reason_expr}, ''))"
-    salon = f"lower(trim(ifNull({salon_expr}, '')))"
+    reason = f"lowerUTF8(ifNull({reason_expr}, ''))"
+    salon = f"lowerUTF8(trim(ifNull({salon_expr}, '')))"
     # CODE_STATUS_CATEGORY_2026-08-06: пары из словаря выкинуты из справочника
     # (override, а не добавка) и матчатся отдельной веткой по своей категории.
     override = _code_override_filter()
@@ -533,15 +534,15 @@ def _category_match_expr(
             WHERE category IN ({cats_sql}) AND reason = '' AND salon = ''{override}
         )
         OR ({crm}, {status}, {reason}) IN (
-            SELECT crm, status, lower(reason) FROM reference_data.crm_status_mapping
+            SELECT crm, status, lowerUTF8(reason) FROM reference_data.crm_status_mapping
             WHERE category IN ({cats_sql}) AND reason != '' AND salon = ''{override}
         )
         OR ({crm}, {salon}, {status}) IN (
-            SELECT crm, lower(salon), status FROM reference_data.crm_status_mapping
+            SELECT crm, lowerUTF8(salon), status FROM reference_data.crm_status_mapping
             WHERE category IN ({cats_sql}) AND reason = '' AND salon != ''{override}
         )
         OR ({crm}, {salon}, {status}, {reason}) IN (
-            SELECT crm, lower(salon), status, lower(reason) FROM reference_data.crm_status_mapping
+            SELECT crm, lowerUTF8(salon), status, lowerUTF8(reason) FROM reference_data.crm_status_mapping
             WHERE category IN ({cats_sql}) AND reason != '' AND salon != ''{override}
         )
         {code_branch}
@@ -582,7 +583,7 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     # incorrect/correct/visit считались в KO/dobro. Теперь оба используют тот же
     # `_category_match_expr`, что и status-сторона (полный ключ crm/status/salon/reason),
     # плюс sale — FUNNEL.md требует sale ⊆ approved ⊆ credit на reason-стороне.
-    reason_lower = f"lower(ifNull({reason_expr}, ''))"
+    reason_lower = f"lowerUTF8(ifNull({reason_expr}, ''))"
     cash_sale = f"({crm}, {status}) IN ({_code_pairs_sql(sorted(CASH_SALE_STATUSES))})"
     # CASH_SALE_CREDIT_REASON_2026-08-25 (director review): «Был в КСО» на plex/«Продажа за
     # наличные» означает, что лид ФАКТИЧЕСКИ прошёл кредитный отдел — общее допущение
@@ -1150,7 +1151,7 @@ SELECT
     toDecimal64(yd.total_cost, 6) AS total_cost,
     coalesce(nullIf(la.domain, ''), {_gs_pick_expr("domain")}) AS domain,
     yd.`RlAdjustmentId` AS `RlAdjustmentId`,
-    toString(yd.`RlAdjustmentId`) AS `RlAdjustmentId_total`,
+    if(yd.`RlAdjustmentId` > 0, 'Есть корректировка', 'Нет корректировки') AS `RlAdjustmentId_total`,
     yd.campaign_code AS campaign_code,
     yd.tp AS tp,
     yd.cpc_cpa AS cpc_cpa,
@@ -1159,7 +1160,7 @@ SELECT
     yd.account_login AS account_login,
     coalesce(nullIf(yd.manager_login, ''), {_gs_pick_expr("directologist")}) AS manager_login,
     {_ag_parts_expr("yd.")},
-    '' AS `марки авто`,
+    {build_brand_multiif_sql("yd.adgroup_code")} AS `марки авто`,
     ifNull(nullIf(coalesce(la.crm_name, crm.crm_name), ''), 'Не указана') AS `Название crm`,
     if(la.kol_vo_zayavok > 0, if(la.zvonki_cdr, 'Звонки_CDR', 'Заявка'), NULL) AS `тип_заявки`,
     ifNull(la.kol_vo_zayavok, toDecimal64(0, 6)) AS kol_vo_zayavok,
@@ -1241,7 +1242,7 @@ def _lead_source_columns(
         ("total_cost", "toDecimal64(0, 6)"),
         ("domain", "l.domain"),
         ("RlAdjustmentId", "l.correction_id"),
-        ("RlAdjustmentId_total", "toString(l.correction_id)"),
+        ("RlAdjustmentId_total", "if(l.correction_id > 0, 'Есть корректировка', 'Нет корректировки')"),
         ("campaign_code", "CAST(NULL, 'Nullable(String)')"),
         ("tp", "CAST(NULL, 'Nullable(String)')"),
         ("cpc_cpa", "CAST(NULL, 'Nullable(String)')"),
@@ -1690,12 +1691,13 @@ def _build_direct_cascade_sql(lo: str, hi: str) -> str:
         "AdNetworkType": "ca.`AdNetworkType`",
         "Device": "ca.`Device`",
         "RlAdjustmentId": "ca.`RlAdjustmentId`",
-        "RlAdjustmentId_total": "toString(ca.`RlAdjustmentId`)",
+        "RlAdjustmentId_total": "if(ca.`RlAdjustmentId` > 0, 'Есть корректировка', 'Нет корректировки')",
         "campaign_code": "ca.campaign_code",
         "tp": "ca.tp",
         "cpc_cpa": "ca.cpc_cpa",
         "site_quiz": "ca.site_quiz",
         "adgroup_code": "ca.adgroup_code",
+        "марки авто": build_brand_multiif_sql("ca.adgroup_code"),
         "account_login": account_login,
         "manager_login": "coalesce(nullIf(ca.manager_login, ''), gs.directologist)",
         "неверный_кодер_new": "if(ifNull(ca.campaign_code, '') = '', 'неверный кодер', NULL)",

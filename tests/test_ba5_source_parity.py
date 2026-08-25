@@ -52,6 +52,16 @@ def test_arrival_calls_reuse_ba5_call_source_labels():
     assert '"источник": "\'Звонки\'"' not in repr(columns)
 
 
+def test_arrival_calls_drop_stale_specialist_after_account_cutoff():
+    columns = _calls_branch_columns()
+    sql = _calls_branch_sql("2026-01-01")
+
+    assert "g.account_specialist_raw" in columns["специалист"]
+    assert "account_specialist_raw" in sql
+    assert "LEFT JOIN gs_account ga" in sql
+    assert "2026-04-10" in columns["специалист"]
+
+
 def test_arrival_leads_keep_posev_channel_sources():
     sql = _leads_branch_sql("2026-01-01")
 

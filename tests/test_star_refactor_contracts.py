@@ -2,12 +2,14 @@ import inspect
 
 import pipeline
 import refresh_powerbi
+from adformat_spend import build_adformat_spend
 from criterion_spend import build_criterion_spend
 from data_check import verify_big_analytics
 from region_spend import build_region_spend
 from star_refactor import audit_pbi_sources, build_pbi_compat, build_star, build_star_extensions, cleanup_wide_intermediates
 from direct_feed_funnel import build as direct_feed_build
 from step10_crop_targeting import step10
+from step3_build_sources import step3
 
 
 def test_build_fact_materializes_site_key():
@@ -59,6 +61,8 @@ def test_build_fact_projects_new_dimension_keys_and_removes_duplicate_text_attrs
     assert "account_key" in target_cols
     assert "crm_status_key" in target_cols
     assert "salon_key" in target_cols
+    assert "специалист" in target_cols
+    assert "`специалист`" in select_sql
     for column in [
         "account_login",
         "Название crm",
@@ -70,7 +74,6 @@ def test_build_fact_projects_new_dimension_keys_and_removes_duplicate_text_attrs
         "регион",
         "тип_сайта",
         "шаблон",
-        "специалист",
         "проджект",
         "менеджер",
         "id_салона",
@@ -302,6 +305,7 @@ def test_region_and_criterion_star_views_keep_only_keys_and_metrics():
         assert "domain" not in sql
         assert "updated_at" not in sql
         assert "toInt64(0)" not in sql
+        assert "f.`специалист` AS `специалист`" in sql
     assert "Dim_Criterion" not in criterion_sql
     assert " AS criterion," not in criterion_sql
     assert "ifNull(dcr.criterion" not in criterion_sql
@@ -339,8 +343,8 @@ def test_feed_funnel_import_uses_global_pipeline_batches():
     assert "range_batches(DATE_FROM, days=1)" not in source
 
 
-def test_heavy_direct_ads_texts_is_not_in_selective_powerbi_refresh():
-    assert "yandex_direct_ads_texts" not in refresh_powerbi._ALL_TABLES
+def test_direct_ads_texts_is_in_selective_powerbi_refresh_after_model_publish():
+    assert "yandex_direct_ads_texts" in refresh_powerbi._ALL_TABLES
 
 
 def test_pbi_audit_prefers_bi_contract_before_physical_object():
@@ -402,11 +406,25 @@ def test_pbi_full_restores_duplicate_text_attrs_from_new_dimensions():
     assert "LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key" in sql
     assert "concat(ifNull(da.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`" in sql
     assert "if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`)" in sql
-    assert "dsl.`специалист` AS `специалист`" in sql
+    assert "f.`специалист` AS `специалист`" in sql
     assert "dcs.`статус` AS `статус`" in sql
     assert "dsl.`салон`" in sql
     assert "f.`салон`" not in sql
-    assert "f.`специалист`" not in sql
+
+
+def test_pbi_campaign_filters_return_russian_values():
+    campaign_sql = build_pbi_compat._dim_campaign_pbi_sql()
+    ad_network_sql = build_pbi_compat._dim_ad_network_type_pbi_sql()
+
+    assert "'MODERATION', 'На модерации'" in campaign_sql
+    assert "'DRAFT', 'Черновик'" in campaign_sql
+    assert "'REJECTED', 'Отклонена'" in campaign_sql
+    assert "'CPA', 'за конверсии'" in campaign_sql
+    assert "'CPC', 'за клики'" in campaign_sql
+    assert "AS `статус_кампании`" in campaign_sql
+    assert "AS `тип_оплаты`" in campaign_sql
+    assert "'SEARCH', 'Поиск'" in ad_network_sql
+    assert "'AD_NETWORK', 'РСЯ'" in ad_network_sql
 
 
 def test_wide_compat_views_restore_duplicate_text_attrs_from_new_dimensions():
@@ -546,6 +564,7 @@ def test_region_spend_star_view_carries_distance_columns_without_join():
 
     assert "f.distance_km" in sql
     assert "f.distance_km_agreg" in sql
+    assert "f.`специалист` AS `специалист`" in sql
     assert "JOIN" not in sql
 
 
@@ -555,6 +574,7 @@ def test_region_spend_flat_view_no_longer_hardcodes_distance_km_null():
     assert "CAST(NULL, 'Nullable(Int64)') AS distance_km" not in sql
     assert "f.distance_km," in sql
     assert "f.distance_km_agreg" in sql
+    assert "f.`специалист` AS `специалист`" in sql
 
 
 def test_region_spend_fact_build_joins_geo_dict_with_dedup_guard():
@@ -568,6 +588,16 @@ def test_region_spend_fact_build_joins_geo_dict_with_dedup_guard():
     assert "gl.id_location = y.location_of_presence_id" in src
 
 
+def test_spend_facts_use_dated_specialist_mapping():
+    for module in (build_region_spend, build_criterion_spend, build_adformat_spend):
+        source = inspect.getsource(module)
+
+        assert "`специалист` LowCardinality(Nullable(String))" in module._COLUMNS
+        assert "gs_best_cte(pairs_sql)" in source
+        assert 'specialist_correction_expr("date", "account_login", "any(gb.directologist)")' in source
+        assert "gb.match_date = y.date" in source
+
+
 def test_criterion_spend_columns_include_crm_sums():
     """Fix 2: criterion_spend/build_criterion_spend.py читает те же 5 CRM-колонок из
     direct_spend_staging, что и region_spend, но раньше их не суммировал."""
@@ -576,6 +606,33 @@ def test_criterion_spend_columns_include_crm_sums():
     assert "crm_order_paid" in build_criterion_spend._COLUMNS
     assert "crm_spam_order" in build_criterion_spend._COLUMNS
     assert "crm_order_canceled" in build_criterion_spend._COLUMNS
+
+
+def test_adformat_spend_carries_form_sums():
+    assert "all_forms" in build_adformat_spend._COLUMNS
+    assert "crm_order_created" in build_adformat_spend._COLUMNS
+
+    sql = build_pbi_compat._adformat_spend_pbi_sql()
+    assert "toInt64(0) AS `Все формы`" not in sql
+    assert "toInt64(0) AS `CRM: Заказ создан`" not in sql
+    assert "toInt64(round(f.all_forms)) AS `Все формы`" in sql
+    assert "toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`" in sql
+
+
+def test_adjustment_dimension_uses_yes_no_labels_not_raw_ids():
+    source_sql = build_star.DIM_DDL["Dim_Adjustment"]
+
+    assert "if(`RlAdjustmentId` > 0, 'Есть корректировка', 'Нет корректировка')" not in source_sql
+    assert "if(`RlAdjustmentId` > 0, 'Есть корректировка', 'Нет корректировки')" in source_sql
+    assert "anyLast(`RlAdjustmentId_total`) AS `RlAdjustmentId_total`" not in source_sql
+
+
+def test_direct_sources_fill_brand_from_ct_code():
+    sql = step3._build_direct_sql("tmp_direct", "AND 0")
+
+    assert "AS `марки авто`" in sql
+    assert "ct0181', 'Lada'" in sql
+    assert "'' AS `марки авто`" not in sql
 
 
 def test_criterion_spend_star_view_carries_crm_sums_not_zero_literals():
@@ -589,6 +646,7 @@ def test_criterion_spend_star_view_carries_crm_sums_not_zero_literals():
     assert "toFloat64(f.crm_order_paid) AS `CRM: Заказ оплачен`" in sql
     assert "toFloat64(f.crm_spam_order) AS `CRM: Спам заказ`" in sql
     assert "toFloat64(f.crm_order_canceled) AS `CRM: Заказ отменен`" in sql
+    assert "f.`специалист` AS `специалист`" in sql
 
 
 def test_criterion_spend_flat_view_crm_columns_no_longer_zero_literals():
@@ -598,6 +656,7 @@ def test_criterion_spend_flat_view_crm_columns_no_longer_zero_literals():
     assert "toInt64(0) AS `CRM: Заказ создан`" not in sql
     assert "toInt64(round(f.all_forms)) AS `Все формы`" in sql
     assert "toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`" in sql
+    assert "f.`специалист` AS `специалист`" in sql
     # kol_vo_zayavok/korr/kval/priezd/prodazhi — другая таксономия (fact_criterion_zayavki),
     # их не трогаем.
     assert "toInt64(0) AS kol_vo_zayavok" in sql

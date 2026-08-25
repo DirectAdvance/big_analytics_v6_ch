@@ -23,6 +23,11 @@ axis (`step3_build_sources/step3.py::_build_direct_sql` `gs_best` CTE,
       match; ties broken toward the most recently launched row)
   99 = account_login has no `gsheet_sites` row at all (site_key stays 0 downstream,
        same behaviour as before this change)
+
+Rows with broken windows (`block_date <= launch_date`) naturally miss priority 1
+and fall to priority 3. Placeholder logins such as `нет`/`авито` are not special:
+if the account_login matches them, the same priority order is used; otherwise the
+spend row lands in priority 99 and is preserved.
 """
 
 from __future__ import annotations
@@ -78,6 +83,8 @@ def _demo() -> None:
     for token in ("gs_best", "match_priority", "row_number() OVER", "rn = 1",
                   "launch_date", "block_date", "match_login_key", "match_date"):
         assert token in sql, f"missing {token!r}"
+    assert "ifNull(gs.login_key, '') = '', 99" in sql
+    assert "ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2" in sql
     print("dated_site_join self-check OK")
 
 
