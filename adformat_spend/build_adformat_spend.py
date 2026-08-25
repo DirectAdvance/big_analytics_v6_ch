@@ -13,6 +13,7 @@ from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
 from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
+from spend.dated_site_join import gs_best_cte
 
 logger = logging.getLogger("pipeline.adformat_spend")
 
@@ -53,8 +54,14 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     )
     ranges = day_ranges(DATE_FROM)
     for idx, (lo, hi) in enumerate(ranges, start=1):
+        pairs_sql = (
+            f"SELECT DISTINCT lower(trim(ifNull(account_login, ''))) AS login_key, date AS date_val "
+            f"FROM {STAGING_TABLE} WHERE date >= toDate('{lo}') AND date < toDate('{hi}')"
+        )
         client.command(
             f"""
+            WITH
+            {gs_best_cte(pairs_sql)}
             INSERT INTO {shadow}
             SELECT
                 date,
@@ -67,12 +74,14 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
                 toDecimal64(sum(impressions), 6) AS impressions,
                 account_login,
                 if(
-                    notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(anyLast(gs.domain), '')))),
-                    cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(anyLast(gs.domain), '')))),
+                    notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(any(gb.domain), '')))),
+                    cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(any(gb.domain), '')))),
                     toUInt64(0)
                 ) AS site_key
             FROM {STAGING_TABLE} y
-            LEFT JOIN reference_data.gsheet_sites gs ON lower(ifNull(gs.login_key, '')) = lower(y.account_login)
+            LEFT JOIN gs_best gb
+              ON gb.match_login_key = lower(trim(ifNull(y.account_login, '')))
+             AND gb.match_date = y.date
             WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
             GROUP BY date, campaign_id, ad_group_id, ad_network_type_key, ad_format, account_login
             """,

@@ -886,6 +886,16 @@ GROUP BY
 # Ветка 4 — пиксель (date-shift дробной атрибуции)
 # ══════════════════════════════════════════════════════════════════════════════
 def _pixel_branch_columns() -> dict[str, str]:
+    # DIRECTOLOGIST_CUTOFF_PIXEL_SHIFT: g.`специалист` здесь -- значение, посчитанное
+    # step11 (specialist_correction_expr) для СТАРОЙ даты заявки (p.`Date` до сдвига).
+    # `Date` этой ветки -- уже g.`Date` ПОСЛЕ сдвига на дату визита (pxv.new_date /
+    # orphan f.`Date`); ветки 1-3 (leads/calls/marcar_orphans) уже пересчитывают
+    # specialist_correction_expr на СВОЕЙ Date -- пиксель был единственной веткой,
+    # где cutoff по аккаунту не проверялся повторно после сдвига, поэтому лид,
+    # заведённый до cutoff, но с визитом/продажей после него, оставался у старого
+    # специалиста на визитной оси. g.`специалист` передаётся третьим аргументом как
+    # дефолт: если новая дата не задевает ни одно date-правило, значение не меняется.
+    specialist = specialist_correction_expr("g.`Date`", "g.account_login", "g.`специалист`")
     return {
         "key3": "concat('visit_pixel|', toString(g.`Date`), '|', ifNull(g.domain, ''), "
                 "'|', toString(g.`CampaignId`))",
@@ -923,7 +933,7 @@ def _pixel_branch_columns() -> dict[str, str]:
         "priezd": "toDecimal64(round(g.priezd_shifted, 6), 6)",
         "prodazhi": "toDecimal64(round(g.prodazhi_shifted, 6), 6)",
         "статус": "g.`статус`",
-        "специалист": "g.`специалист`",
+        "специалист": specialist,
         "тип_сайта": "g.`тип_сайта`",
         "шаблон": "g.`шаблон`",
         "салон": "g.`салон`",

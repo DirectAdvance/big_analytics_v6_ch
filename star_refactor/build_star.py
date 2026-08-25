@@ -316,7 +316,35 @@ DIM_DDL = {
         # fact rows for that column (e.g. a catalog domain with no traffic yet).
         # Measured: специалист empty count returns to the pre-bug baseline 3025
         # and 284 previously-lost values come back with zero new losses; the 9
-        # directory-owned attributes are byte-for-byte unchanged (0 diff). Branch
+        # directory-owned attributes are byte-for-byte unchanged (0 diff).
+        #
+        # DIRECTOLOGIST_CUTOFF_DIM_SITE_2026-08-25 (Семён): специалист moved back
+        # to directory-first (partial reversal of the fix above, `специалист`
+        # ONLY -- направление/Название crm keep fact-priority, their reason
+        # above still holds). Root cause: `fact_specialist` picks the specialist
+        # with the MOST fact rows for a domain over ALL history -- undated. A
+        # domain whose site was relaunched under a new account/specialist (same
+        # domain string reused, measured live: e.g. stav-bucar.ru launched
+        # 2026-06-25 under Тумашенко Евгений after a 2025 Кудерко-era site of
+        # the same name) keeps the OLD specialist as long as the old era has
+        # more fact rows than the new one has accumulated -- June/July spend
+        # for the reused domain then shows the specialist who has NOT owned it
+        # since April (KNOWN_ISSUES: "Кудерко must not be active in June").
+        # `gs.directologist` does not have this problem for domains it covers:
+        # unlike направление/crm, it lives in the SAME namespace as `специалист`
+        # (real person/agency names, verified live -- both columns hold e.g.
+        # "Кудерко Семен"/"Тумашенко Евгений" byte-identically), so there is no
+        # taxonomy mismatch to guard against, and Sheets is kept current by the
+        # people who reassign sites. `fact_specialist` stays as the FALLBACK for
+        # domains where the directory value is blank (still needed -- e.g. a
+        # site the sheet hasn't filled in yet). Measured live 2026-08-25 on the
+        # 4,669 directory-covered (niche='Авто') domains: 295 change, 2 are
+        # this task's 3 disputed domains resolving correctly (stav-bucar.ru:
+        # Кудерко Семен -> Тумашенко Евгений; bucars-stav.ru/buauto54.ru:
+        # unchanged, directory and fact already agreed on Кудерко Семен), most
+        # of the rest fill an empty fact-side pick with the directory's value
+        # (empty специалист count 2938 -> 2670, an improvement, not a
+        # regression, on the same measure patch 2 above protects). Branch
         # 2 (domains the directory does not cover at all) is untouched -- it
         # already sourced these 3 columns from fact, so it was never part of the
         # A/B/C bug.
@@ -449,7 +477,7 @@ DIM_DDL = {
                     d.template AS template,
                     coalesce(nullIf(fd.direction, ''), d.direction) AS direction,
                     d.site_status AS site_status,
-                    coalesce(nullIf(fs.specialist, ''), d.specialist) AS specialist,
+                    coalesce(nullIf(d.specialist, ''), fs.specialist) AS specialist,
                     d.project AS project,
                     d.salon_id AS salon_id,
                     d.manager AS manager,
