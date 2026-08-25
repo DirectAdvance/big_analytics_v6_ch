@@ -419,6 +419,28 @@ copy-строк в `raw_leads/raw_calls/raw_perform_leads` = 0. Compare v5→v6 
 - Golden-дельта по Кудерко — не новая, root-cause #37 (неполное сырьё, 29/67 логинов).
   В текущем прогоне Δ+219 660.57 ₽ переведена verify-гейтом в warning и не валит PASS.
 
+2026-08-25: коммит `6c7e5b9` (executor `oleg_programmer`, отдельно от `07575f1`/`9017fab`) —
+`region_spend`/`criterion_spend`/`adformat_spend` builders получили колонку `специалист`
+(`LowCardinality(Nullable(String))`), которой у них раньше не было вообще (только `site_key`).
+Значение = `specialist_correction_expr(date, account_login, any(gb.directologist))` поверх
+`gs_best` CTE из `07575f1` — общая функция из `corrections.py:162`, уже применяемая на
+claim/pixel/visit/calls осях, здесь не переизобреталась. `GROUP BY`/`WHERE`/`sum(cost)` не
+трогались — деньги по построению не двигаются. Проверено read-only симуляцией на живом
+Victory ClickHouse (`raw_data.yandex_direct_report_rows` + `reference_data.gsheet_sites`, БЕЗ
+записи, пайплайн не запускался — hard constraint): login `e-20086622` Jan–Apr(<04-10) уходит
+Тумашенко→Кудерко (66 269/786 223/905 724/258 892 ₽), Apr(>=04-10) остаётся Тумашенко
+(71 334 ₽) — барьер строго исключающий, ожидаемо. Августовские логины Кудерко
+(`porg-x7wkhs7d`/`vzw5t7mt`/`ead45mqo`) не тронуты — правило не срабатывает, резолвятся через
+директорию. Все 4 правила сработали во всех 3 фактах (Кудерко 227 630 строк/15,27М ₽, Сергеев
+162 394/9,52М, Питеркина 173/9,45К — только пустой-fallback, Чепелев 32 740/2,87М).
+`py_compile` OK, pytest 239/1 skip/2 pre-existing fail (`yandex_direct_ads_texts`, не связано).
+**Не сделано:** сам прогон (`region_spend.run()`/`criterion_spend.run()`/`adformat_spend.run()`)
+withheld по task-констрейнту — новую колонку никто не видел живьём в `fact_*`; `build_pbi_compat.py`
+для этих трёх фактов всё ещё берёт только `домен` из `Dim_Site` и не прокидывает `специалист` —
+вне скоупа задачи (явный список файлов), нужен отдельный проход, если Семён захочет видеть колонку
+в Power BI. Июньская цифра Кудерко 1 707,89 ₽ из `07575f1` не перепроверялась — её код
+(`corrections.py`/`step11`/`step13`/`step6`) в этом коммите не трогался.
+
 ## Открытые дефекты
 
 `KNOWN_ISSUES.md`: к прежним добавлены **#39** (часть PBI ещё на `raw_new_*`), **#40** (FIXED:
