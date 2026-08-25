@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
+from corrections import specialist_correction_expr
 from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
 from spend.dated_site_join import gs_best_cte
 
@@ -31,7 +32,8 @@ _COLUMNS = """
     `clicks` Decimal(18, 6) CODEC(ZSTD(3)),
     `impressions` Decimal(18, 6) CODEC(ZSTD(3)),
     `account_login` LowCardinality(Nullable(String)),
-    `site_key` UInt64
+    `site_key` UInt64,
+    `специалист` LowCardinality(Nullable(String))
 """
 
 
@@ -58,6 +60,8 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             f"SELECT DISTINCT lower(trim(ifNull(account_login, ''))) AS login_key, date AS date_val "
             f"FROM {STAGING_TABLE} WHERE date >= toDate('{lo}') AND date < toDate('{hi}')"
         )
+        # SPECIALIST_DATE_OVERRIDE_2026-08-25: same shared rule as region_spend, see there.
+        specialist_expr = specialist_correction_expr("date", "account_login", "any(gb.directologist)")
         client.command(
             f"""
             WITH
@@ -77,7 +81,8 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
                     notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(any(gb.domain), '')))),
                     cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(any(gb.domain), '')))),
                     toUInt64(0)
-                ) AS site_key
+                ) AS site_key,
+                {specialist_expr} AS `специалист`
             FROM {STAGING_TABLE} y
             LEFT JOIN gs_best gb
               ON gb.match_login_key = lower(trim(ifNull(y.account_login, '')))

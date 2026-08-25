@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
+from corrections import specialist_correction_expr
 from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
 from spend.dated_site_join import gs_best_cte
 
@@ -40,7 +41,8 @@ _COLUMNS = """
     `crm_spam_order` Decimal(18, 6) CODEC(ZSTD(3)),
     `crm_order_canceled` Decimal(18, 6) CODEC(ZSTD(3)),
     `account_login` LowCardinality(Nullable(String)),
-    `site_key` UInt64
+    `site_key` UInt64,
+    `специалист` LowCardinality(Nullable(String))
 """
 
 
@@ -63,6 +65,12 @@ def _insert_batch(client, target: str, lo: str, hi: str) -> None:
         f"SELECT DISTINCT lower(trim(ifNull(account_login, ''))) AS login_key, date AS date_val "
         f"FROM {STAGING_TABLE} WHERE date >= toDate('{lo}') AND date < toDate('{hi}')"
     )
+    # SPECIALIST_DATE_OVERRIDE_2026-08-25: gs_best.directologist (the date-windowed site
+    # owner from 07575f1) is the base value; specialist_correction_expr overrides it for
+    # the four historically-reassigned login sets on top -- same shared rule the claim/
+    # pixel/visit/calls axes already use (corrections.py:872, step11.py:54, step13.py,
+    # step6.py:112), not reinvented here.
+    specialist_expr = specialist_correction_expr("date", "account_login", "any(gb.directologist)")
     client.command(
         f"""
         WITH
@@ -89,7 +97,8 @@ def _insert_batch(client, target: str, lo: str, hi: str) -> None:
                 notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(any(gb.domain), '')))),
                 cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(any(gb.domain), '')))),
                 toUInt64(0)
-            ) AS site_key
+            ) AS site_key,
+            {specialist_expr} AS `специалист`
         FROM {STAGING_TABLE} y
         LEFT JOIN gs_best gb
           ON gb.match_login_key = lower(trim(ifNull(y.account_login, '')))
