@@ -256,7 +256,7 @@ def check_crm_mapping_coverage(client) -> list[str]:
 # REASON_METRIC_KEY_2026-08-25: reason-метрики (`dohod_do_kredita`/`dobro`) теперь читают
 # справочник тем же `_category_match_expr`, что и status-сторона — полным ключом
 # (crm, status, salon, reason), а не голым (crm, reason). Поэтому 'credit'/'approved' в
-# CODE_STATUS_CATEGORY больше не запрещены (см. `_CODE_STATUS_SIDE_CATEGORIES` ниже).
+# CODE_STATUS_CATEGORY больше не запрещены (см. `_CODE_MATCH_CATEGORIES` ниже).
 # ══════════════════════════════════════════════════════════════════════════════
 CODE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
     # A. MARCAR_GSHEET_STATUS_2026-08-05 — все четыре статуса патча step1
@@ -303,10 +303,13 @@ CODE_SOURCE_STATUS_CATEGORY: dict[tuple[str, str], str] = {
     ("perform_api", "Хлам"): "incorrect",
 }
 
-# Допустимые категории CODE_STATUS_CATEGORY/CODE_SOURCE_STATUS_CATEGORY. 'credit'/'approved'
-# добавлены REASON_METRIC_KEY_2026-08-25 — reason-метрики читают тот же код через
-# `_category_match_expr`, что и status-сторона (см. комментарий над CODE_STATUS_CATEGORY).
-_CODE_STATUS_SIDE_CATEGORIES = frozenset(
+# Допустимые категории CODE_STATUS_CATEGORY/CODE_SOURCE_STATUS_CATEGORY. Название без "STATUS
+# SIDE" НАМЕРЕННО (переименовано 2026-08-25, director review) -- 'credit'/'approved' добавлены
+# REASON_METRIC_KEY_2026-08-25 и живут на reason-стороне (dohod_do_kredita/dobro), поэтому
+# множество больше не описывает только статус-сторону; это вокабуляр категорий, общий для ОБЕИХ
+# сторон, потому что обе читают код через один `_category_match_expr` (см. комментарий над
+# CODE_STATUS_CATEGORY).
+_CODE_MATCH_CATEGORIES = frozenset(
     {"correct", "qualified", "visit", "sale", "incorrect", "credit", "approved"})
 
 
@@ -359,9 +362,11 @@ def check_code_status_categories(client) -> None:
     на запись в справочник нет и не будет, источник истины для этих статусов —
     `CODE_STATUS_CATEGORY`, поэтому проверяется покрытие КОДОМ:
 
-      1. литералы словаря безопасны для подстановки в SQL;
-      2. ключи `crm` — те же, что выдаёт `_crm_expr` (иначе override мёртв);
-      3. категории — из допустимого набора `_CODE_STATUS_SIDE_CATEGORIES` (status- и
+      1. литералы словаря (`CODE_STATUS_CATEGORY` И `CASH_SALE_STATUSES`, тот же
+         `_code_pairs_sql`-подстановщик) безопасны для подстановки в SQL;
+      2. ключи `crm` — те же, что выдаёт `_crm_expr` (иначе override/исключение мёртво),
+         тоже проверено для `CODE_STATUS_CATEGORY` И `CASH_SALE_STATUSES`;
+      3. категории — из допустимого набора `_CODE_MATCH_CATEGORIES` (status- и
          reason-сторона читают код одним и тем же `_category_match_expr`);
       4. КАЖДЫЙ статус, который проставляет патч Маркара (`MARCAR_STATUS_PRIORITY`
          в `step1_load_raw/step1.py`), имеет категорию — иначе воронка патченых
@@ -394,17 +399,36 @@ def check_code_status_categories(client) -> None:
             "CRM_BY_SOURCE_TYPE — `_crm_expr` такой ключ никогда не вернёт, override мёртв"
         )
 
+    # CASH_SALE_GUARD_2026-08-25: тот же литерал/crm гард, что выше для CODE_STATUS_CATEGORY —
+    # CASH_SALE_STATUSES подставляется в тот же `_code_pairs_sql` (step3.py:561, cash_sale
+    # ветка `_metric_expr`), молча дающий мёртвую ветку на опечатку в ключе, как и
+    # CODE_STATUS_CATEGORY до этого гарда. Отдельного checker'а нет намеренно — расширяем
+    # существующий, а не заводим второй параллельный.
+    for crm, status in CASH_SALE_STATUSES:
+        if any(bad in crm or bad in status for bad in ("'", "\\")):
+            raise RuntimeError(
+                f"CASH_SALE_STATUSES: ключ ({crm!r}, {status!r}) содержит кавычку/бэкслеш — "
+                "он подставляется в SQL литералом, экранирования тут нет"
+            )
+    unknown_cash_crm = sorted({crm for crm, _status in CASH_SALE_STATUSES if crm not in known_crm})
+    if unknown_cash_crm:
+        raise RuntimeError(
+            f"CASH_SALE_STATUSES: ключи crm {unknown_cash_crm} не встречаются среди значений "
+            "CRM_BY_SOURCE_TYPE — `_crm_expr` такой ключ никогда не вернёт, cash-sale-исключение "
+            "мертво и молча не сработает (reason-метрики не занизятся, но и не очистятся)"
+        )
+
     bad_categories = sorted(
         {
             category
             for category in [*CODE_STATUS_CATEGORY.values(), *CODE_SOURCE_STATUS_CATEGORY.values()]
-            if category not in _CODE_STATUS_SIDE_CATEGORIES
+            if category not in _CODE_MATCH_CATEGORIES
         }
     )
     if bad_categories:
         raise RuntimeError(
             f"CODE_STATUS_CATEGORY: категории {bad_categories} вне допустимого набора "
-            f"{sorted(_CODE_STATUS_SIDE_CATEGORIES)}"
+            f"{sorted(_CODE_MATCH_CATEGORIES)}"
         )
 
     unknown_source_types = sorted(
@@ -558,7 +582,21 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     # incorrect/correct/visit считались в KO/dobro. Теперь оба используют тот же
     # `_category_match_expr`, что и status-сторона (полный ключ crm/status/salon/reason),
     # плюс sale — FUNNEL.md требует sale ⊆ approved ⊆ credit на reason-стороне.
+    reason_lower = f"lower(ifNull({reason_expr}, ''))"
     cash_sale = f"({crm}, {status}) IN ({_code_pairs_sql(sorted(CASH_SALE_STATUSES))})"
+    # CASH_SALE_CREDIT_REASON_2026-08-25 (director review): «Был в КСО» на plex/«Продажа за
+    # наличные» означает, что лид ФАКТИЧЕСКИ прошёл кредитный отдел — общее допущение
+    # CASH_SALE_STATUSES («cash sale вообще не проходит через кредитный отдел») для этой
+    # причины неверно, поэтому её нельзя вычитать из dohod_do_kredita (метрика «дошёл до
+    # кредита», а этот лид дошёл). Для dobro (факт одобрения) «Был в КСО» ничего не
+    # доказывает — прохождение отдела не то же самое, что одобрение банком, dobro продолжает
+    # вычитать её как раньше (`cash_sale`, без исключения по reason). Скоуп по reason, а не
+    # полное снятие CASH_SALE_STATUSES: остальные reason той же пары («Не был в КСО», «Не
+    # забился», «Оформленные», genzes без reason) кредитный отдел действительно не проходили
+    # и остаются исключены из ОБЕИХ метрик. На 2026-данных эффект 0 лидов (reason «был в ксо»
+    # среди plex/«Продажа за наличные» не встречается, измерено) — правка корректности
+    # правила на будущее, а не сдвиг текущих чисел.
+    cash_sale_credit = f"({cash_sale} AND {reason_lower} != 'был в ксо')"
     credit_side = _category_match_expr(
         ("credit", "approved", "sale"), status_expr, reason_expr, source_type_expr, salon_expr
     )
@@ -576,7 +614,7 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     toDecimal64(if({status} = 'Фильтр', 1, 0), 6) AS filtr,
     toDecimal64(if({status} = 'Недозвон', 1, 0), 6) AS nedozvon,
     toDecimal64(if({status} = 'Приедет', 1, 0), 6) AS priedet,
-    toInt64(if({credit_side} AND NOT {cash_sale}, 1, 0)) AS dohod_do_kredita,
+    toInt64(if({credit_side} AND NOT {cash_sale_credit}, 1, 0)) AS dohod_do_kredita,
     toInt64(if({approved_side} AND NOT {cash_sale}, 1, 0)) AS dobro
 """
 

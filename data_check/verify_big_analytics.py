@@ -483,6 +483,20 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
         "full_funnel_korr_lt_kval": "SELECT count() FROM ad_analytics.big_analytics_full WHERE korr < kval",
         "full_funnel_kval_lt_priezd": "SELECT count() FROM ad_analytics.big_analytics_full WHERE kval < priezd",
         "full_funnel_priezd_lt_prodazhi": "SELECT count() FROM ad_analytics.big_analytics_full WHERE priezd < prodazhi",
+        # REASON_FUNNEL_NESTING_2026-08-25 (director review): dohod_do_kredita/dobro
+        # (claim-axis, big_analytics_full) are category-supersets of korr/priezd by
+        # construction in step3_build_sources/step3.py::_metric_expr — credit_side's
+        # categories (credit, approved, sale) are a subset of priezd's (visit, sale,
+        # credit, approved), and approved_side's (approved, sale) a subset of
+        # credit_side's, so `dobro <= dohod_do_kredita <= priezd <= korr` per row is a
+        # structural guarantee, not a reference number — no golden fixture needed, any
+        # violation is a code regression in the category sets.
+        "full_funnel_dobro_gt_dohod_do_kredita": (
+            "SELECT count() FROM ad_analytics.big_analytics_full WHERE dobro > dohod_do_kredita"
+        ),
+        "full_funnel_dohod_do_kredita_gt_priezd": (
+            "SELECT count() FROM ad_analytics.big_analytics_full WHERE dohod_do_kredita > priezd"
+        ),
         "unified_count_mismatch": """
             SELECT if(
                 (SELECT count() FROM ad_analytics.big_analytics_unified)

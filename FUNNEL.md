@@ -22,7 +22,8 @@ PostgreSQL-генератор `config/status_sql.py` оставлен как leg
 kol_vo_zayavok ⊇ korr ⊇ kval ⊇ priezd ⊇ prodazhi
 ```
 
-**Reason-сторона** (берёт `leads.reason`, `kind='reason'`):
+**Reason-сторона** (матчится полным ключом `crm/status/salon/reason`, `kind='reason'` строки
+справочника участвуют наравне со `status`-строками — см. REASON_METRIC_KEY_2026-08-25 ниже):
 
 ```
 доход ⊇ добро
@@ -32,12 +33,27 @@ dohod_do_kredita ⊇ dobro
 REASON_METRIC_KEY_2026-08-25: reason-сторона матчится ТЕМ ЖЕ `_category_match_expr`, что и
 status-сторона — полным ключом (crm, status, salon, reason), а не только (crm, reason). Раньше
 голый `(crm, reason)` смешивал разные категории одной и той же пары reason, если категория
-зависела от status/salon (обнаружено: 203 лишних лида в dohod_do_kredita, 106 в dobro за
-1-24.08.2026). Продажи на стороне reason тоже считаются (`sale ⊆ approved ⊆ credit`). На
-status-стороне продажи также автоматически входят в `approved`, `credit`, `visit`, `qualified`,
-`correct`. Исключение — `CASH_SALE_STATUSES` (`plex`/`genzes`, «Продажа за наличные»): продажа за
-наличные не проходит через кредитный отдел, поэтому вычитается из обеих reason-метрик, но
-остаётся в `prodazhi`.
+зависела от status/salon. Это ДВУСТОРОННЕЕ изменение — часть лидов теряет категорию (пара
+reason матчила чужой status/salon), часть приобретает (полный ключ ловит статусы/салоны, которых
+голый reason не видел, плюс сама метрика расширена веткой `sale`) — это НЕ чистая чистка ложных
+срабатываний в одну сторону. На большинстве срезов net положителен (метрика растёт), кроме
+июльского `dohod_do_kredita`, где убыль (−721) перевешивает прибыль (+521). Измерено по строкам
+(director, 2026-08-25):
+
+| Период | Метрика | Ушло | Пришло | Net |
+|---|---|---:|---:|---:|
+| Авг 1-24 | dohod_do_kredita | −214 | +387 | **+173** |
+| Авг 1-24 | dobro | −98 | +321 | **+223** |
+| Июль | dohod_do_kredita | −721 | +521 | **−200** |
+| Июль | dobro | −158 | +470 | **+312** |
+
+Ветка звонков (`config/status_sql.py::_build_calls_agg` legacy / `step6_build_full/step6.py:111`
+live) считается отдельно и тоже сдвигается: июль KO 173→160, dobro 96→100; август KO 113→118,
+dobro 81→84 (status-сторона звонков не менялась). Продажи на стороне reason тоже считаются
+(`sale ⊆ approved ⊆ credit`). На status-стороне продажи также автоматически входят в `approved`,
+`credit`, `visit`, `qualified`, `correct`. Исключение — `CASH_SALE_STATUSES` (`plex`/`genzes`,
+«Продажа за наличные»): продажа за наличные не проходит через кредитный отдел, поэтому
+вычитается из обеих reason-метрик, но остаётся в `prodazhi`.
 
 ## Маппинг метрик
 
@@ -98,14 +114,19 @@ dobro            = (approved + sale) − CASH_SALE_STATUSES
 | `credit` | marcar (CODE_STATUS_CATEGORY) | — | Дошел в КО | status/reason |
 | `approved` | marcar (CODE_STATUS_CATEGORY) | — | Одобрение | status/reason |
 
-> ⚠️ **salon-override `kind='status'` активирует salon-ветку и в ЗВОНКАХ.** Появление строки
-> `salon<>''` `kind='status'` (например по «Лидер») включает salon-условие не только в
-> агрегате лидов, но и в `_build_calls_agg` (генератор агрегата звонков, `config/status_sql.py`).
-> Путь звонков = `raw_calls c LEFT JOIN gsheet_sites gs`, поэтому salon там берётся **только
-> из `gs."salon"`** (в `raw_calls` колонки `salon` нет), а `source_type` — **сырой `c.source_type`**
-> (`mauto`/`crmf_excel`/…, совпадает с ключом override; маппленый `Фаиг`/`Плекс` сломал бы матч).
-> Латентный баг алиаса `c.salon`, разбуженный этим, исправлен — см.
-> [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) #11.
+> ⚠️ **salon-override `kind='status'` активирует salon-ветку и в ЗВОНКАХ — на ОБЕИХ сторонах
+> воронки.** Появление строки `salon<>''` `kind='status'` (например по «Лидер») включает
+> salon-условие не только в агрегате лидов, но и в живой ветке звонков v6
+> `step6_build_full/step6.py::_calls_select` (легаси-порт — `config/status_sql.py::
+> _build_calls_agg`, PostgreSQL, не источник расчёта в v6, см. шапку файла). `_calls_select`
+> вызывает ОДИН `_metric_expr("c.status", "c.reason", "c.source_type", "gs.salon")` на обе
+> метрики (status-сторона korr/kval/priezd/prodazhi И reason-сторона dohod_do_kredita/dobro,
+> REASON_METRIC_KEY_2026-08-25), поэтому salon-override по построению задевает reason-метрики
+> звонков тоже, не только status. `gs.salon` резолвится через `gs_domain_best` (тот же
+> date-aware CTE по `launch_date`/`block_date`, что и у аккаунтов), а не через `raw_calls.salon`
+> напрямую (`raw_calls` такой колонки не несёт). Латентный баг алиаса `c.salon` из легаси-ветки,
+> разбуженный этим, исправлен — см. [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) #11 (проверено:
+> взаимодействия с новым REASON_METRIC_KEY-правилом нет, director 2026-08-25).
 
 ## Как добавить новый статус
 
