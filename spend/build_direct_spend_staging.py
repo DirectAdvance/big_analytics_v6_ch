@@ -88,8 +88,8 @@ def _insert_batch(client, target: str, lo: str, hi: str) -> None:
             ifNull(all_forms, toDecimal128(0, 9)) AS all_forms,
             ifNull(crm_order_created, toDecimal128(0, 9)) AS crm_order_created,
             ifNull(crm_order_paid, toDecimal128(0, 9)) AS crm_order_paid,
-            ifNull(crm_spam_order, toDecimal128(0, 9)) AS crm_spam_order,
-            ifNull(crm_order_canceled, toDecimal128(0, 9)) AS crm_order_canceled
+            toDecimal128(0, 9) AS crm_spam_order,
+            toDecimal128(0, 9) AS crm_order_canceled
         FROM cleaned
         """,
         settings=SAFE_QUERY_SETTINGS,
