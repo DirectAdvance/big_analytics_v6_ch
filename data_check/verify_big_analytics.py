@@ -519,13 +519,13 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
             "SELECT count() FROM ad_analytics.fact_criterion_zayavki WHERE prodazhi > dobro"
         ),
         "feed_funnel_dohod_do_kredita_gt_priezd": (
-            "SELECT count() FROM ad_analytics.fact_direct_feed_funnel WHERE dohod_do_kredita > `Приезд_feed`"
+            "SELECT count() FROM ad_analytics.bi_fact_direct_feed_funnel WHERE dohod_do_kredita > priezd"
         ),
         "feed_funnel_dobro_gt_dohod_do_kredita": (
-            "SELECT count() FROM ad_analytics.fact_direct_feed_funnel WHERE dobro > dohod_do_kredita"
+            "SELECT count() FROM ad_analytics.bi_fact_direct_feed_funnel WHERE dobro > dohod_do_kredita"
         ),
         "feed_funnel_prodazhi_gt_dobro": (
-            "SELECT count() FROM ad_analytics.fact_direct_feed_funnel WHERE `Продажи_feed` > dobro"
+            "SELECT count() FROM ad_analytics.bi_fact_direct_feed_funnel WHERE prodazhi > dobro"
         ),
         "ml_korrektirovki_funnel_dohod_do_kredita_gt_priezd": (
             "SELECT count() FROM ad_analytics.fact_ml_korrektirovki WHERE dohod_do_kredita > priezd"

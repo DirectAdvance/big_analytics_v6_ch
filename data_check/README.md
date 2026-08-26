@@ -23,7 +23,8 @@
 инварианты воронки, golden Кудерко, совместимость `fact_big_analytics` и `big_analytics_unified`.
 Инвариант воронки включает кредитные шаги: `korr >= kval >= priezd >= dohod_do_kredita >= dobro >= prodazhi`.
 Для PBI-источников отдельно проверяются `fact_region_zayavki`, `fact_criterion_zayavki`,
-`fact_direct_feed_funnel` и `fact_ml_korrektirovki`.
+`bi_fact_direct_feed_funnel` и `fact_ml_korrektirovki`. Лёгкая
+`fact_direct_feed_funnel` не содержит кредитные шаги и не подходит для этого инварианта.
 
 Важно: golden Кудерко в v6 зависит от внешнего бэкфила `raw_data.yandex_direct_report_rows`.
 Если логируется `KUDERKO_RAW_INCOMPLETE`, это означает неполное сырьё по 67 логинам Кудерко

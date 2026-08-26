@@ -705,3 +705,14 @@ def test_criterion_spend_flat_view_crm_columns_no_longer_zero_literals():
     assert "toInt64(0) AS kval" in sql
     assert "toInt64(0) AS priezd" in sql
     assert "toInt64(0) AS prodazhi" in sql
+
+
+def test_feed_funnel_pbi_paid_orders_fill_lower_funnel_steps():
+    sql = build_pbi_compat._feed_funnel_pbi_sql()
+
+    paid_expr = "toInt64(round(f.crm_order_paid))"
+    assert f"{paid_expr} AS kval" in sql
+    assert f"{paid_expr} AS priezd" in sql
+    assert f"{paid_expr} AS dohod_do_kredita" in sql
+    assert f"{paid_expr} AS dobro" in sql
+    assert f"{paid_expr} AS prodazhi" in sql
