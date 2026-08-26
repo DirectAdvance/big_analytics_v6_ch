@@ -19,11 +19,10 @@
   маппинг)
 - **`payment_model`** — passthrough одноимённой колонки из `reference_data.direct_campaigns` (значение
   вычисляется не здесь)
-- Emoji-префикс статуса в названии кампании (🟢/🟡/⚪) в Power BI — **в v6_ch этой фичи нет в коде**:
-  ни `step6_build_full/step6.py`, ни `star_refactor/*` её не формируют (grep по `step6.py` —
-  0 совпадений). `step6_build_full/CLAUDE.md`/`README.md` до 2026-08-14 ошибочно документировали
-  её как живую логику — исправлено там же. Если это нужно для PBI — искать не здесь, это не
-  реализовано.
+- Emoji-префикс статуса в названии кампании (🟢/🟡/🔴/⚪) для Power BI формируется не здесь:
+  `step4.py` отдаёт только текстовый `campaign_status`, а визуальный префикс добавлен в PBIP
+  semantic model `Большая аналитика_admin_ch/.../definition/tables/Dim_Campaign.tmdl`.
+  Если префикс пропал в отчёте, проверять TMDL и публикацию/refresh, не `step4.py`.
 
 ## Что реально делает `step4.py`
 
