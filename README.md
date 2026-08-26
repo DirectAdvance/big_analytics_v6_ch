@@ -137,6 +137,8 @@ UNION ALL всех источников → `big_analytics_full`.
 > `logger.exception` и в `data_quality_log`. Уведомления есть только у ночного
 > `step_cron_night/pipeline_night.py` (ошибки + отчёт) и у standalone-скриптов
 > (`watch_pipeline.py`, `funnel_drift_snapshot.py`, `yandex_direct_checking_report`).
+> Дневной cron шлёт lifecycle-уведомления из `cron_run.py`: старт/финиш pipeline и
+> старт/финиш Power BI refresh, если включён `BA6_POWERBI_REFRESH=1`.
 > Сам канал живой: тестовая отправка 2026-08-16 доставлена и с Мака, и с Victory.
 
 ---

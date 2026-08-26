@@ -23,6 +23,39 @@ def test_main_skips_powerbi_refresh_when_flag_is_off(tmp_path, monkeypatch):
     assert rc == 0
 
 
+def test_main_logs_and_sends_pipeline_and_powerbi_lifecycle(tmp_path, monkeypatch):
+    monkeypatch.setenv("BA6_POWERBI_REFRESH", "1")
+    monkeypatch.setattr(cron_run, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(cron_run, "rotate_logs", lambda: None)
+    sent = []
+
+    def fake_run_pipeline(log_path):
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write("10:00:00 [INFO] verify_big_analytics: PASS\n")
+        return 0
+
+    def fake_run_powerbi_refresh(log_path):
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write("Power BI: статус=Completed\n")
+        return 0
+
+    monkeypatch.setattr(cron_run, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(cron_run, "run_powerbi_refresh", fake_run_powerbi_refresh)
+    monkeypatch.setattr(cron_run, "send_html", lambda html, **kwargs: sent.append(html) or True)
+
+    assert cron_run.main() == 0
+
+    log_text = next(tmp_path.glob("cron_*.log")).read_text(encoding="utf-8")
+    assert "CRON_RUNNER: pipeline started" in log_text
+    assert "CRON_RUNNER: pipeline finished rc=0" in log_text
+    assert "CRON_RUNNER: Power BI refresh started" in log_text
+    assert "CRON_RUNNER: Power BI refresh finished rc=0" in log_text
+    assert sent[0].startswith("<b>🟡 БА6: pipeline начал работу</b>")
+    assert sent[1].startswith("✅ <b>БА6: прогон OK</b>")
+    assert sent[2].startswith("<b>🟡 БА6: Power BI refresh начал работу</b>")
+    assert sent[3].startswith("✅ <b>БА6: pipeline + Power BI OK</b>")
+
+
 def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_path, monkeypatch):
     monkeypatch.setattr(cron_run, "LOG_DIR", Path(tmp_path))
     previous = tmp_path / "cron_20260820_100000.log"

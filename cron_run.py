@@ -84,8 +84,30 @@ def rotate_logs():
         path.unlink(missing_ok=True)
 
 
+def log_event(log_path: Path, event: str) -> None:
+    log_path.parent.mkdir(exist_ok=True)
+    stamp = datetime.now(EKB).strftime("%Y-%m-%d %H:%M:%S %Z")
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n=== {stamp} CRON_RUNNER: {event} ===\n")
+
+
+def send_status(title: str, log_path: Path) -> bool:
+    return send_html(
+        f"<b>{escape(title)}</b>\nлог: <code>{escape(str(log_path))}</code>",
+        bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+        proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=30,
+    )
+
+
+def send_report(message: str) -> bool:
+    return send_html(
+        message, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
+        proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=30,
+    )
+
+
 def run_pipeline(log_path: Path) -> int:
-    with log_path.open("w", encoding="utf-8") as fh:
+    with log_path.open("a", encoding="utf-8") as fh:
         proc = subprocess.run(
             [sys.executable, "-u", str(BASE / "pipeline.py")],
             stdout=fh, stderr=subprocess.STDOUT, cwd=str(BASE),
@@ -284,23 +306,27 @@ def main() -> int:
     log_path = LOG_DIR / f"cron_{stamp}.log"
 
     started = time.time()
+    log_event(log_path, "pipeline started")
+    if not send_status("🟡 БА6: pipeline начал работу", log_path):
+        print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
     pipeline_rc = run_pipeline(log_path)
-    powerbi_rc = (
-        run_powerbi_refresh(log_path)
-        if pipeline_rc == 0 and os.environ.get("BA6_POWERBI_REFRESH") == "1"
-        else None
-    )
-    minutes = int((time.time() - started) / 60)
-
-    message = build_message(pipeline_rc, log_path, minutes, powerbi_rc)
-    delivered = send_html(
-        message, bot_token=TELEGRAM_BOT_TOKEN, chat_id=TELEGRAM_CHAT_ID,
-        proxy_variants=TELEGRAM_PROXY_VARIANTS, timeout=30,
-    )
-    if not delivered:
+    log_event(log_path, f"pipeline finished rc={pipeline_rc}")
+    if not send_report(build_message(pipeline_rc, log_path, int((time.time() - started) / 60))):
         # Не глотаем молча: иначе провал прогона И провал уведомления выглядят одинаково.
         print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
-    return pipeline_rc or powerbi_rc or 0
+
+    if pipeline_rc != 0 or os.environ.get("BA6_POWERBI_REFRESH") != "1":
+        return pipeline_rc
+
+    log_event(log_path, "Power BI refresh started")
+    if not send_status("🟡 БА6: Power BI refresh начал работу", log_path):
+        print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
+    powerbi_rc = run_powerbi_refresh(log_path)
+    log_event(log_path, f"Power BI refresh finished rc={powerbi_rc}")
+    minutes = int((time.time() - started) / 60)
+    if not send_report(build_message(pipeline_rc, log_path, minutes, powerbi_rc)):
+        print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
+    return powerbi_rc
 
 
 if __name__ == "__main__":
