@@ -32,9 +32,8 @@ step10/step11 и до step12/step13, чтобы `big_analytics_full_arrival` и 
 -------------------
 1. `directologist` из `reference_data.gsheet_sites` по домену (реальный специалист);
 2. `direction_main` оттуда же (канал: SEO / Контекст / Посевы / …);
-3. `'Звонки'` — для `campaign_code = 'звонки'` или фактических `_source_table='calls'`
-   без связки в gsheet;
-4. `'Без специалиста'` — последний resort.
+3. `'Без специалиста'` — последний resort. Звонки остаются в `тип_заявки`/`источник`,
+   но не становятся отдельным специалистом.
 
 Идемпотентность и область
 -------------------------
@@ -109,7 +108,7 @@ def _fallback_expr(alias: str = "s", gs: str = "gsp", ga: str = "gsa") -> str:
         "coalesce("
         f"{_directologist_fallback_expr(alias, gs, ga)}, "
         f"nullIf(trim(ifNull({gs}.direction_main, '')), ''), "
-        f"if({_is_calls_expr(alias)}, 'Звонки', 'Без специалиста')), "
+        "'Без специалиста'), "
         f"{alias}.`специалист`)"
     )
 
@@ -124,8 +123,7 @@ def _tier_report(client, table: str) -> str:
             multiIf(
                 {_directologist_fallback_expr('s')} != '', '1_directologist',
                 trim(ifNull(gsp.direction_main, '')) != '', '2_direction_main',
-                {_is_calls_expr('s')}, '3_Звонки',
-                '4_Без специалиста'
+                '3_Без специалиста'
             ) AS tier,
             count() AS rows,
             round(sum(s.total_cost), 2) AS cost,

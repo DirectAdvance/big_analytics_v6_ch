@@ -587,21 +587,9 @@ DIM_DDL = {
             ENGINE = MergeTree
             ORDER BY ifNull(CampaignId, 0)
             AS
-            SELECT
-                `CampaignId`,
-                `CampaignName`,
-                account_login,
-                replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code,
-                tp,
-                cpc_cpa,
-                site_quiz,
-                campaign_status,
-                payment_model,
-                coalesce(
-                    nullIf(trim(BOTH ' ' FROM ifNull(campaign_label, '')), ''),
-                    concat(toString(`CampaignId`), ' | ', ifNull(`CampaignName`, ''))
-                ) AS `номер кампании | название кампании`
-            FROM (
+            WITH
+            fact_campaigns AS
+            (
                 SELECT
                     `CampaignId`,
                     anyLast(`CampaignName`) AS `CampaignName`,
@@ -616,7 +604,42 @@ DIM_DDL = {
                 FROM ad_analytics.big_analytics_unified
                 WHERE `CampaignId` IS NOT NULL
                 GROUP BY `CampaignId`
+            ),
+            status_campaigns AS
+            (
+                SELECT
+                    `CampaignId`,
+                    anyLast(`CampaignName`) AS `CampaignName`,
+                    anyLast(account_login) AS account_login,
+                    anyLast(campaign_status) AS campaign_status,
+                    anyLast(payment_model) AS payment_model
+                FROM ad_analytics.campaign_status_v
+                WHERE `CampaignId` IS NOT NULL
+                GROUP BY `CampaignId`
+            ),
+            campaign_ids AS
+            (
+                SELECT `CampaignId` FROM fact_campaigns
+                UNION DISTINCT
+                SELECT `CampaignId` FROM status_campaigns
             )
+            SELECT
+                ids.`CampaignId`,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`) AS `CampaignName`,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.account_login, '')), ''), f.account_login) AS account_login,
+                replaceAll(f.campaign_code, 'kviz', 'quiz') AS campaign_code,
+                f.tp,
+                f.cpc_cpa,
+                f.site_quiz,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.campaign_status, '')), ''), f.campaign_status) AS campaign_status,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.payment_model, '')), ''), f.payment_model) AS payment_model,
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(f.campaign_label, '')), ''),
+                    concat(toString(ids.`CampaignId`), ' | ', ifNull(coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`), ''))
+                ) AS `номер кампании | название кампании`
+            FROM campaign_ids ids
+            LEFT JOIN fact_campaigns f ON f.`CampaignId` = ids.`CampaignId`
+            LEFT JOIN status_campaigns cs ON cs.`CampaignId` = ids.`CampaignId`
         """,
         "Dim_AdGroup": """
             CREATE TABLE ad_analytics.Dim_AdGroup_new
@@ -1041,21 +1064,9 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
         ENGINE = MergeTree
         ORDER BY ifNull(CampaignId, 0)
         AS
-        SELECT
-            `CampaignId`,
-            `CampaignName`,
-            account_login,
-            replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code,
-            tp,
-            cpc_cpa,
-            site_quiz,
-            campaign_status,
-            payment_model,
-            coalesce(
-                nullIf(trim(BOTH ' ' FROM ifNull(campaign_label, '')), ''),
-                concat(toString(`CampaignId`), ' | ', ifNull(`CampaignName`, ''))
-            ) AS `номер кампании | название кампании`
-        FROM (
+        WITH
+        fact_campaigns AS
+        (
             SELECT
                 `CampaignId`,
                 anyLast(`CampaignName`) AS `CampaignName`,
@@ -1070,7 +1081,42 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
             FROM ad_analytics.big_analytics_unified
             WHERE 0 AND `CampaignId` IS NOT NULL
             GROUP BY `CampaignId`
+        ),
+        status_campaigns AS
+        (
+            SELECT
+                `CampaignId`,
+                anyLast(`CampaignName`) AS `CampaignName`,
+                anyLast(account_login) AS account_login,
+                anyLast(campaign_status) AS campaign_status,
+                anyLast(payment_model) AS payment_model
+            FROM ad_analytics.campaign_status_v
+            WHERE 0 AND `CampaignId` IS NOT NULL
+            GROUP BY `CampaignId`
+        ),
+        campaign_ids AS
+        (
+            SELECT `CampaignId` FROM fact_campaigns
+            UNION DISTINCT
+            SELECT `CampaignId` FROM status_campaigns
         )
+        SELECT
+            ids.`CampaignId`,
+            coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`) AS `CampaignName`,
+            coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.account_login, '')), ''), f.account_login) AS account_login,
+            replaceAll(f.campaign_code, 'kviz', 'quiz') AS campaign_code,
+            f.tp,
+            f.cpc_cpa,
+            f.site_quiz,
+            coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.campaign_status, '')), ''), f.campaign_status) AS campaign_status,
+            coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.payment_model, '')), ''), f.payment_model) AS payment_model,
+            coalesce(
+                nullIf(trim(BOTH ' ' FROM ifNull(f.campaign_label, '')), ''),
+                concat(toString(ids.`CampaignId`), ' | ', ifNull(coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`), ''))
+            ) AS `номер кампании | название кампании`
+        FROM campaign_ids ids
+        LEFT JOIN fact_campaigns f ON f.`CampaignId` = ids.`CampaignId`
+        LEFT JOIN status_campaigns cs ON cs.`CampaignId` = ids.`CampaignId`
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
@@ -1081,21 +1127,9 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
         client.command(
             f"""
             INSERT INTO {shadow}
-            SELECT
-                `CampaignId`,
-                `CampaignName`,
-                account_login,
-                replaceAll(campaign_code, 'kviz', 'quiz') AS campaign_code,
-                tp,
-                cpc_cpa,
-                site_quiz,
-                campaign_status,
-                payment_model,
-                coalesce(
-                    nullIf(trim(BOTH ' ' FROM ifNull(campaign_label, '')), ''),
-                    concat(toString(`CampaignId`), ' | ', ifNull(`CampaignName`, ''))
-                ) AS `номер кампании | название кампании`
-            FROM (
+            WITH
+            fact_campaigns AS
+            (
                 SELECT
                     `CampaignId`,
                     anyLast(`CampaignName`) AS `CampaignName`,
@@ -1110,7 +1144,42 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
                 FROM ad_analytics.big_analytics_unified
                 WHERE {bucket_filter}
                 GROUP BY `CampaignId`
+            ),
+            status_campaigns AS
+            (
+                SELECT
+                    `CampaignId`,
+                    anyLast(`CampaignName`) AS `CampaignName`,
+                    anyLast(account_login) AS account_login,
+                    anyLast(campaign_status) AS campaign_status,
+                    anyLast(payment_model) AS payment_model
+                FROM ad_analytics.campaign_status_v
+                WHERE {bucket_filter}
+                GROUP BY `CampaignId`
+            ),
+            campaign_ids AS
+            (
+                SELECT `CampaignId` FROM fact_campaigns
+                UNION DISTINCT
+                SELECT `CampaignId` FROM status_campaigns
             )
+            SELECT
+                ids.`CampaignId`,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`) AS `CampaignName`,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.account_login, '')), ''), f.account_login) AS account_login,
+                replaceAll(f.campaign_code, 'kviz', 'quiz') AS campaign_code,
+                f.tp,
+                f.cpc_cpa,
+                f.site_quiz,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.campaign_status, '')), ''), f.campaign_status) AS campaign_status,
+                coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.payment_model, '')), ''), f.payment_model) AS payment_model,
+                coalesce(
+                    nullIf(trim(BOTH ' ' FROM ifNull(f.campaign_label, '')), ''),
+                    concat(toString(ids.`CampaignId`), ' | ', ifNull(coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`), ''))
+                ) AS `номер кампании | название кампании`
+            FROM campaign_ids ids
+            LEFT JOIN fact_campaigns f ON f.`CampaignId` = ids.`CampaignId`
+            LEFT JOIN status_campaigns cs ON cs.`CampaignId` = ids.`CampaignId`
             """,
             settings=SAFE_QUERY_SETTINGS,
         )

@@ -1,8 +1,8 @@
 from spec_fallback import _fallback_expr
 
 
-def test_fallback_expr_classifies_calls_by_source_table_not_only_campaign_code():
+def test_fallback_expr_does_not_classify_calls_as_specialist():
     expr = _fallback_expr()
 
-    assert "s.`_source_table` = 'calls'" in expr
-    assert "s.campaign_code, '') = 'звонки'" in expr
+    assert "'Звонки'" not in expr
+    assert "'Без специалиста'" in expr

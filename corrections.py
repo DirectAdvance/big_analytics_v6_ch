@@ -875,7 +875,7 @@ def _stage6_labels() -> str:
         "coalesce("
         "nullIf(trim(ifNull(gsp.directologist, '')), ''), "
         "nullIf(trim(ifNull(gsp.direction_main, '')), ''), "
-        "if(ifNull(s.campaign_code, '') = 'звонки', 'Звонки', 'Без специалиста')))"
+        "'Без специалиста'))"
     )
 
     exprs = {
