@@ -1566,7 +1566,7 @@ def _dim_site_pbi_sql() -> str:
 
 
 def _vk_ads_pbi_sql() -> str:
-    return """
+    return f"""
         SELECT
             f.date AS date,
             f.account_id AS account_id,

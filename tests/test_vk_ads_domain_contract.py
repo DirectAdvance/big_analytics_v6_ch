@@ -17,5 +17,6 @@ def test_vk_ads_fact_keeps_domain_grain_for_leads_and_visits():
 def test_vk_ads_pbi_view_exports_site_key_and_domain():
     sql = _vk_ads_pbi_sql()
 
+    assert "{" not in sql
     assert 'AS site_key' in sql
     assert 'f.domain AS domain' in sql
