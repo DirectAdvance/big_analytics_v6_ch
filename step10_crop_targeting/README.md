@@ -22,6 +22,7 @@
 - `ad_analytics.crop_targeting_api_telegain_lead` с BA5-формулой Telega.in API: `kval = korr - ne_otvechaet - filtr - nedozvon`.
 - `ad_analytics.big_analytics_cost_overlays`
 - обновлённый `ad_analytics.big_analytics_full` с overlay-расходами и funnel-метриками для Google Sheets/Telega.in; raw `social_посевы`/`telegram`, покрытые Telega.in-заказом, вырезаются по UTM-ключу.
+- Для посевных overlay продажа поднимает нижние кредитные шаги: `dohod_do_kredita >= dobro >= prodazhi`; иначе итоговая BI-воронка получает невозможное состояние "продажа без одобрения".
 
 `local_telega_in_orders` не держим физически: сырьё уже есть в `raw_data.telega_in_orders`, а отличия
 хранятся отдельно в `telega_in_order_field_overrides` и `telega_in_order_price_overrides`.
@@ -48,4 +49,4 @@ python3 data_check/verify_big_analytics.py
 - `big_analytics_cost_overlays` не должен иметь дублей по overlay key.
 - `vk_ads` overlay spend должен совпадать с `raw_data.vk_ads_stats_day` по тем же ключам.
 - `vk_ads` overlay-строки остаются с нулевой воронкой.
-- Google Sheets/Telega.in overlay-строки несут свою funnel-воронку, а перекрытые raw `social_посевы`/`telegram` строки удаляются из `big_analytics_full_new`.
+- Google Sheets/Telega.in overlay-строки несут свою funnel-воронку, где `prodazhi` включены в `dohod_do_kredita` и `dobro`; перекрытые raw `social_посевы`/`telegram` строки удаляются из `big_analytics_full_new`.

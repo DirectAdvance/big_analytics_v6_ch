@@ -107,19 +107,20 @@ def _telega_api_metric_expr(status_expr: str = "status") -> str:
     ne_otvechaet_expr = f"toInt64({_in_status(status_expr, ne_otvechaet)})"
     filtr_expr = f"toInt64(ifNull({status_expr}, '') = 'Фильтр')"
     nedozvon_expr = f"toInt64(ifNull({status_expr}, '') = 'Недозвон')"
+    sale_expr = f"toInt64({_in_status(status_expr, sale)})"
     return f"""
         toInt64(if(ifNull({status_expr}, '') != '', 1, 0)) AS kol_vo_zayavok,
         {korr_expr} AS korr,
         {korr_expr} - {ne_otvechaet_expr} - {filtr_expr} - {nedozvon_expr} AS kval,
         toInt64({_in_status(status_expr, priezd)}) AS priezd,
-        toInt64({_in_status(status_expr, sale)}) AS prodazhi,
+        {sale_expr} AS prodazhi,
         toInt64({_in_status(status_expr, nekorr)}) AS nekorr,
         {ne_otvechaet_expr} AS ne_otvechaet,
         {filtr_expr} AS filtr,
         {nedozvon_expr} AS nedozvon,
         toInt64(ifNull({status_expr}, '') = 'Приедет') AS priedet,
-        toInt64(0) AS dohod_do_kredita,
-        toInt64(0) AS dobro
+        {sale_expr} AS dohod_do_kredita,
+        {sale_expr} AS dobro
     """
 
 
@@ -132,6 +133,14 @@ def _gs_metric(column: str) -> str:
 
 def _api_metric(column: str) -> str:
     return f"toDecimal256(ifNull(t.{column}, 0), 6)"
+
+
+def _gs_metric_int(column: str) -> str:
+    return f"toInt64(round({_gs_metric(column)}))"
+
+
+def _api_metric_int(column: str) -> str:
+    return f"toInt64(round({_api_metric(column)}))"
 
 
 def _require(client, database: str, table: str) -> None:
@@ -727,8 +736,8 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
             {_gs_metric("filtr")} AS filtr,
             {_gs_metric("nedozvon")} AS nedozvon,
             {_gs_metric("priedet")} AS priedet,
-            toInt64(0) AS dohod_do_kredita,
-            toInt64(0) AS dobro,
+            {_gs_metric_int("prodazhi")} AS dohod_do_kredita,
+            {_gs_metric_int("prodazhi")} AS dobro,
             CAST(NULL, 'Nullable(String)') AS `статус`,
             CAST(g.`Специалист`, 'Nullable(String)') AS `специалист`,
             CAST(coalesce(gd.site_type, gs.site_type), 'Nullable(String)') AS `тип_сайта`,
@@ -825,8 +834,8 @@ def _insert_crop_api_costs(client, target: str) -> None:
             {_api_metric("filtr")} AS filtr,
             {_api_metric("nedozvon")} AS nedozvon,
             {_api_metric("priedet")} AS priedet,
-            ifNull(t.dohod_do_kredita, 0) AS dohod_do_kredita,
-            ifNull(t.dobro, 0) AS dobro,
+            greatest(ifNull(t.dohod_do_kredita, 0), {_api_metric_int("prodazhi")}) AS dohod_do_kredita,
+            greatest(ifNull(t.dobro, 0), {_api_metric_int("prodazhi")}) AS dobro,
             CAST(t.`статус`, 'Nullable(String)') AS `статус`,
             CAST(t.`специалист`, 'Nullable(String)') AS `специалист`,
             CAST(t.`тип_сайта`, 'Nullable(String)') AS `тип_сайта`,
