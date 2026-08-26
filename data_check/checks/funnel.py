@@ -26,12 +26,14 @@ def check_invariants(row: dict) -> list[str]:
         issues.append(f'kval({kval}) > korr({korr})')
     if priezd > kval:
         issues.append(f'priezd({priezd}) > kval({kval})')
-    if prodazhi > priezd:
-        issues.append(f'prodazhi({prodazhi}) > priezd({priezd})')
+    if dohod > priezd:
+        issues.append(f'dohod_do_kredita({dohod}) > priezd({priezd})')
     if prodazhi > 0 and priezd == 0:
         issues.append(f'prodazhi({prodazhi}) > 0 но priezd=0 (продажа без визита)')
     if dobro > dohod:
         issues.append(f'dobro({dobro}) > dohod_do_kredita({dohod})')
+    if prodazhi > dobro:
+        issues.append(f'prodazhi({prodazhi}) > dobro({dobro})')
     return issues
 
 

@@ -497,6 +497,45 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
         "full_funnel_dohod_do_kredita_gt_priezd": (
             "SELECT count() FROM ad_analytics.big_analytics_full WHERE dohod_do_kredita > priezd"
         ),
+        "full_funnel_prodazhi_gt_dobro": (
+            "SELECT count() FROM ad_analytics.big_analytics_full WHERE prodazhi > dobro"
+        ),
+        "region_funnel_dohod_do_kredita_gt_priezd": (
+            "SELECT count() FROM ad_analytics.fact_region_zayavki WHERE dohod_do_kredita > priezd"
+        ),
+        "region_funnel_dobro_gt_dohod_do_kredita": (
+            "SELECT count() FROM ad_analytics.fact_region_zayavki WHERE dobro > dohod_do_kredita"
+        ),
+        "region_funnel_prodazhi_gt_dobro": (
+            "SELECT count() FROM ad_analytics.fact_region_zayavki WHERE prodazhi > dobro"
+        ),
+        "criterion_funnel_dohod_do_kredita_gt_priezd": (
+            "SELECT count() FROM ad_analytics.fact_criterion_zayavki WHERE dohod_do_kredita > priezd"
+        ),
+        "criterion_funnel_dobro_gt_dohod_do_kredita": (
+            "SELECT count() FROM ad_analytics.fact_criterion_zayavki WHERE dobro > dohod_do_kredita"
+        ),
+        "criterion_funnel_prodazhi_gt_dobro": (
+            "SELECT count() FROM ad_analytics.fact_criterion_zayavki WHERE prodazhi > dobro"
+        ),
+        "feed_funnel_dohod_do_kredita_gt_priezd": (
+            "SELECT count() FROM ad_analytics.fact_direct_feed_funnel WHERE dohod_do_kredita > `Приезд_feed`"
+        ),
+        "feed_funnel_dobro_gt_dohod_do_kredita": (
+            "SELECT count() FROM ad_analytics.fact_direct_feed_funnel WHERE dobro > dohod_do_kredita"
+        ),
+        "feed_funnel_prodazhi_gt_dobro": (
+            "SELECT count() FROM ad_analytics.fact_direct_feed_funnel WHERE `Продажи_feed` > dobro"
+        ),
+        "ml_korrektirovki_funnel_dohod_do_kredita_gt_priezd": (
+            "SELECT count() FROM ad_analytics.fact_ml_korrektirovki WHERE dohod_do_kredita > priezd"
+        ),
+        "ml_korrektirovki_funnel_dobro_gt_dohod_do_kredita": (
+            "SELECT count() FROM ad_analytics.fact_ml_korrektirovki WHERE dobro > dohod_do_kredita"
+        ),
+        "ml_korrektirovki_funnel_prodazhi_gt_dobro": (
+            "SELECT count() FROM ad_analytics.fact_ml_korrektirovki WHERE prodazhi > dobro"
+        ),
         "unified_count_mismatch": """
             SELECT if(
                 (SELECT count() FROM ad_analytics.big_analytics_unified)
