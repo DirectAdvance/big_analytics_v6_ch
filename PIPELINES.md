@@ -27,10 +27,12 @@ INSERT, ~27 млн строк, потом почасовые доливки по
 
 Запускается не `pipeline.py` напрямую, а обёртка `cron_run.py`: после успешного pipeline она
 синхронно запускает selective `refresh_powerbi.py`, кладёт общий лог в `logs/cron_<стамп>.log`
-(держит 14 последних) и шлёт итог: run_id, время, verify, golden и статус Power BI. При падении
-pipeline Power BI не запускается. Refresh защищён от старого BA5-датасета: PostgreSQL datasource
-блокируется до POST; на 2026-08-24 настроенный Service dataset — `Большая аналитика_admin`
-с ClickHouse datasource `Extension`.
+(держит 14 последних) и шлёт итог в Telegram: `run_id`, время, точный `verify` PASS/FAIL,
+главные цифры `big_analytics_full` (расход, воронка, CPL), raw vs вчера, `full+arrival →
+unified → fact`, golden Кудерко, статус Power BI и тайминги шагов. При падении pipeline Power BI
+не запускается и Telegram явно пишет `не запускался: pipeline FAIL`. Refresh защищён от старого
+BA5-датасета: PostgreSQL datasource блокируется до POST; на 2026-08-24 настроенный Service
+dataset — `Большая аналитика_admin` с ClickHouse datasource `Extension`.
 `flock -n` не даёт наложиться на ручной прогон.
 
 `BA6_POWERBI_REFRESH=1` в строке крона обязателен: `cron_run.py` дёргает refresh ТОЛЬКО при этой

@@ -47,17 +47,25 @@ FINAL_TABLES = (
     "pbi_import_big_analytics_full",
 )
 FINAL_CHECKS = (
+    "raw_yandex_cost_zero",
     "unified_count_mismatch",
     "fact_unified_count_mismatch",
     "full_before_2026",
     "full_null_source",
+    "full_last_day_incomplete",
     "full_funnel_korr_lt_kval",
     "full_funnel_kval_lt_priezd",
     "full_funnel_priezd_lt_prodazhi",
+    "full_funnel_dobro_gt_dohod_do_kredita",
+    "full_funnel_dohod_do_kredita_gt_priezd",
 )
 
 RE_RUN_ID = re.compile(r"run_id=([0-9a-f]+)")
 RE_GOLDEN = re.compile(r"golden_kuderko cost=(\S+) delta=(\S+) sales=(\d+)")
+RE_VERIFY_FAIL = re.compile(r"verify_big_analytics:\s*FAIL:\s*(.+)$", re.M)
+RE_FULL_METRICS = re.compile(
+    r"full metrics:\s*cost=(\S+)\s+z=(\S+)\s+korr=(\S+)\s+kval=(\S+)\s+priezd=(\S+)\s+prodazhi=(\S+)"
+)
 RE_FAIL_STEP = re.compile(r"Шаг (\S+) FAIL")
 RE_STEP_START = re.compile(r"Шаг\s+(\S+):\s+(.+)")
 RE_STEP_DONE = re.compile(r"Шаг\s+(\S+)\s+(OK|FAIL)\s+за\s+([\d.]+)\s+сек")
@@ -165,6 +173,10 @@ def fmt_int(value: int) -> str:
     return format_ru_amount(float(value))
 
 
+def fmt_money(value: float) -> str:
+    return f"{format_ru_amount(value)} ₽"
+
+
 def fmt_seconds(seconds: float) -> str:
     seconds_int = int(round(seconds))
     if seconds_int < 60:
@@ -189,7 +201,52 @@ def build_raw_section(current: dict[str, int], previous: dict[str, int] | None) 
     return rows
 
 
-def build_final_section(counts: dict[str, int]) -> list[str]:
+def build_main_section(full_metrics: re.Match[str] | None) -> list[str]:
+    if not full_metrics:
+        return ["", "<b>главное</b>", "full metrics: <b>нет в логе</b>"]
+
+    cost, zayavki, korr, kval, priezd, prodazhi = (float(v) for v in full_metrics.groups())
+
+    def cpl(count: float) -> str:
+        return fmt_money(cost / count) if count else "—"
+
+    return [
+        "",
+        "<b>главное</b>",
+        f"Расход: <code>{fmt_money(cost)}</code>",
+        (
+            "Воронка: "
+            f"заявки {format_ru_amount(zayavki)} → "
+            f"корр {format_ru_amount(korr)} → "
+            f"квал {format_ru_amount(kval)} → "
+            f"приезды {format_ru_amount(priezd)} → "
+            f"продажи {format_ru_amount(prodazhi)}"
+        ),
+        (
+            "CPL: "
+            f"заявка {cpl(zayavki)}, "
+            f"квал {cpl(kval)}, "
+            f"приезд {cpl(priezd)}, "
+            f"продажа {cpl(prodazhi)}"
+        ),
+    ]
+
+
+def parse_verify_failures(verify_fail: re.Match[str] | None) -> list[str]:
+    if not verify_fail:
+        return []
+    return [part.strip() for part in verify_fail.group(1).split(";") if part.strip()]
+
+
+def build_verify_line(verify_pass: bool, verify_failures: list[str]) -> str:
+    if verify_pass:
+        return "verify: PASS"
+    if verify_failures:
+        return f"verify: <b>FAIL</b> <code>{escape('; '.join(verify_failures[:5]))}</code>"
+    return "verify: <b>нет PASS</b>"
+
+
+def build_final_section(counts: dict[str, int], verify_failures: list[str]) -> list[str]:
     rows = ["", "<b>raw → итоговые</b>"]
     full = counts.get("big_analytics_full")
     arrival = counts.get("big_analytics_full_arrival")
@@ -208,8 +265,14 @@ def build_final_section(counts: dict[str, int]) -> list[str]:
         rows.append(f"нет counts: <code>{', '.join(missing)}</code>")
 
     bad_checks = [name for name in FINAL_CHECKS if counts.get(name, 0)]
+    bad_check_names = set(bad_checks)
+    logged_failures = [
+        f for f in verify_failures
+        if f.split("=", 1)[0] not in bad_check_names
+    ]
+    bad_checks.extend(logged_failures[:5])
     if bad_checks:
-        rows.append(f"инварианты: <b>FAIL</b> <code>{', '.join(bad_checks)}</code>")
+        rows.append(f"инварианты: <b>FAIL</b> <code>{escape(', '.join(bad_checks))}</code>")
     else:
         rows.append("инварианты: OK")
     return rows
@@ -252,18 +315,35 @@ def build_warnings_section(text: str) -> list[str]:
     return rows
 
 
+def build_powerbi_section(pipeline_rc: int, powerbi_rc: int | None, powerbi_enabled: bool) -> list[str]:
+    if powerbi_rc == 0:
+        status = "OK"
+    elif powerbi_rc:
+        status = "<b>FAIL</b>"
+    elif pipeline_rc != 0:
+        status = "не запускался: pipeline FAIL"
+    elif powerbi_enabled:
+        status = "ожидает запуска после pipeline"
+    else:
+        status = "пропущен (BA6_POWERBI_REFRESH не включён)"
+    return ["", "<b>Power BI</b>", status]
+
+
 def build_message(
     rc: int,
     log_path: Path,
     minutes: int,
     powerbi_rc: int | None = None,
+    powerbi_enabled: bool = False,
 ) -> str:
     text = log_path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
 
     run_id = RE_RUN_ID.search(text)
     golden = RE_GOLDEN.search(text)
+    full_metrics = RE_FULL_METRICS.search(text)
     verify_pass = bool(RE_VERIFY_PASS.search(text))
+    verify_failures = parse_verify_failures(RE_VERIFY_FAIL.search(text))
     counts = parse_counts(text)
     prev_log = previous_cron_log(log_path)
     prev_counts = parse_counts(prev_log.read_text(encoding="utf-8", errors="replace")) if prev_log else None
@@ -282,11 +362,13 @@ def build_message(
     ]
     if run_id:
         rows.append(f"run_id <code>{run_id.group(1)}</code>")
-    rows.append("verify: PASS" if verify_pass else "verify: <b>нет PASS</b>")
+    rows.append(build_verify_line(verify_pass, verify_failures))
     rows.extend(build_warnings_section(text))
+    rows.extend(build_main_section(full_metrics))
     rows.extend(build_raw_section(counts, prev_counts))
-    rows.extend(build_final_section(counts))
+    rows.extend(build_final_section(counts, verify_failures))
     rows.extend(build_golden_section(text, golden))
+    rows.extend(build_powerbi_section(rc, powerbi_rc, powerbi_enabled))
     rows.extend(build_steps_section(text))
 
     if rc != 0 or powerbi_rc:
@@ -306,16 +388,19 @@ def main() -> int:
     log_path = LOG_DIR / f"cron_{stamp}.log"
 
     started = time.time()
+    powerbi_enabled = os.environ.get("BA6_POWERBI_REFRESH") == "1"
     log_event(log_path, "pipeline started")
     if not send_status("🟡 БА6: pipeline начал работу", log_path):
         print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
     pipeline_rc = run_pipeline(log_path)
     log_event(log_path, f"pipeline finished rc={pipeline_rc}")
-    if not send_report(build_message(pipeline_rc, log_path, int((time.time() - started) / 60))):
+    if not send_report(build_message(
+        pipeline_rc, log_path, int((time.time() - started) / 60), powerbi_enabled=powerbi_enabled,
+    )):
         # Не глотаем молча: иначе провал прогона И провал уведомления выглядят одинаково.
         print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
 
-    if pipeline_rc != 0 or os.environ.get("BA6_POWERBI_REFRESH") != "1":
+    if pipeline_rc != 0 or not powerbi_enabled:
         return pipeline_rc
 
     log_event(log_path, "Power BI refresh started")
@@ -324,7 +409,7 @@ def main() -> int:
     powerbi_rc = run_powerbi_refresh(log_path)
     log_event(log_path, f"Power BI refresh finished rc={powerbi_rc}")
     minutes = int((time.time() - started) / 60)
-    if not send_report(build_message(pipeline_rc, log_path, minutes, powerbi_rc)):
+    if not send_report(build_message(pipeline_rc, log_path, minutes, powerbi_rc, powerbi_enabled=powerbi_enabled)):
         print("CRON_RUNNER: Telegram не доставлен", file=sys.stderr)
     return powerbi_rc
 

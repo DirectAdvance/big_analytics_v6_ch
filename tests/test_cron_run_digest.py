@@ -78,6 +78,7 @@ def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_
             "10:01:06 INFO raw_yandex=120",
             "10:01:06 INFO raw_leads=49",
             "10:01:06 INFO raw_calls=7",
+            "10:01:06 INFO full metrics: cost=1200 z=12 korr=10 kval=6 priezd=3 prodazhi=2",
             "10:01:06 INFO big_analytics_full=10",
             "10:01:06 INFO big_analytics_full_arrival=2",
             "10:01:06 INFO big_analytics_unified=12",
@@ -101,9 +102,13 @@ def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_
     message = cron_run.build_message(0, current, 2)
 
     assert "raw_leads: 49 (-1 строк) <b>ПРОСАДКА</b>" in message
+    assert "Расход: <code>1 200 ₽</code>" in message
+    assert "Воронка: заявки 12 → корр 10 → квал 6 → приезды 3 → продажи 2" in message
+    assert "CPL: заявка 100 ₽, квал 200 ₽, приезд 400 ₽, продажа 600 ₽" in message
     assert "full+arrival=12, unified=12, fact=12 OK" in message
     assert "инварианты: OK" in message
     assert "raw Кудерко: 67/67, до cutoff 67/67" in message
+    assert "<b>Power BI</b>\nпропущен (BA6_POWERBI_REFRESH не включён)" in message
     assert "1 step1_load_raw.step1" in message
     assert "1м02с" in message
     assert "verify: PASS" in message
@@ -150,6 +155,38 @@ def test_build_message_fresh_reviews_has_no_warnings_section(tmp_path):
 
     assert "✅ <b>БА6: прогон OK</b>" in message
     assert "предупреждения шагов" not in message
+
+
+def test_build_message_surfaces_verify_fail_details(tmp_path):
+    log = tmp_path / "cron_20260825_105407.log"
+    log.write_text(
+        "\n".join([
+            "10:00:00 INFO run_id=abc123",
+            "10:00:01 INFO full metrics: cost=1200 z=12 korr=10 kval=6 priezd=3 prodazhi=2",
+            "10:00:02 INFO big_analytics_full=10",
+            "10:00:02 INFO big_analytics_full_arrival=2",
+            "10:00:02 INFO big_analytics_unified=12",
+            "10:00:02 INFO fact_big_analytics=12",
+            "10:00:03 INFO full_last_day_incomplete=1",
+            "10:00:04 [ERROR] verify_big_analytics: FAIL: full_last_day_incomplete=1",
+            "10:00:05 [ERROR] pipeline: Шаг 900 FAIL за 60.5 сек",
+        ]),
+        encoding="utf-8",
+    )
+
+    message = cron_run.build_message(1, log, 41, powerbi_enabled=True)
+
+    assert "verify: <b>FAIL</b> <code>full_last_day_incomplete=1</code>" in message
+    assert "инварианты: <b>FAIL</b> <code>full_last_day_incomplete</code>" in message
+    assert "<b>Power BI</b>\nне запускался: pipeline FAIL" in message
+
+
+def test_build_message_reports_powerbi_done_status(tmp_path):
+    log = tmp_path / "cron_20260825_105407.log"
+    log.write_text("10:00:00 [INFO] verify_big_analytics: PASS\n", encoding="utf-8")
+
+    assert "<b>Power BI</b>\nOK" in cron_run.build_message(0, log, 2, powerbi_rc=0, powerbi_enabled=True)
+    assert "<b>Power BI</b>\n<b>FAIL</b>" in cron_run.build_message(0, log, 2, powerbi_rc=1, powerbi_enabled=True)
 
 
 def test_verify_pass_does_not_match_fail_line():
