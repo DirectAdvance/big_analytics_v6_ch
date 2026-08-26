@@ -67,12 +67,14 @@ step3 → ... → Dim_Campaign (campaign_status, payment_model из ad_analytics
 
 | Условие | Результат |
 |---|---|
+| `status='ARCHIVED'` или `state='ARCHIVED'` | `Архив` |
+| `status IN ('SUSPENDED','STOPPED')` или `state IN ('OFF','SUSPENDED')` | `Остановлена` |
 | `status IN ('ACCEPTED','ACTIVE')` или `state='ON'` | `Активна` |
-| `status IN ('SUSPENDED','STOPPED')` или `state='OFF'` | `Остановлена` |
-| `status='ARCHIVED'` | `Архив` |
 | иначе | исходное значение `status` как есть |
 
-Регистр не важен (`upper(...)`). Это не тот набор ключей, что использовался в v5.
+Регистр не важен (`upper(...)`). `state` важнее общего `status`: `status=ACCEPTED` +
+`state=SUSPENDED/OFF` считается остановленной кампанией, иначе фильтр `Активна` в Power BI
+покажет логины без реально активных кампаний. Это не тот набор ключей, что использовался в v5.
 
 ## Куки
 

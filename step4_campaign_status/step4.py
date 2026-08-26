@@ -35,18 +35,18 @@ def run(conn=None, run_id: str | None = None, prefetch_thread=None) -> dict:  # 
             campaign_id AS `CampaignId`,
             account_login,
             multiIf(
+                upper(ifNull(status, '')) = 'ARCHIVED' OR upper(ifNull(state, '')) = 'ARCHIVED', 'Архив',
+                upper(ifNull(status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(state, '')) IN ('OFF', 'SUSPENDED'), 'Остановлена',
                 upper(ifNull(status, '')) IN ('ACCEPTED', 'ACTIVE') OR upper(ifNull(state, '')) = 'ON', 'Активна',
-                upper(ifNull(status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(state, '')) = 'OFF', 'Остановлена',
-                upper(ifNull(status, '')) IN ('ARCHIVED'), 'Архив',
                 ifNull(status, '')
             ) AS `статус`,
             CAST(NULL, 'Nullable(String)') AS `специалист`,
             campaign_name AS `CampaignName`,
             CAST(NULL, 'Nullable(String)') AS manager_login,
             multiIf(
+                upper(ifNull(status, '')) = 'ARCHIVED' OR upper(ifNull(state, '')) = 'ARCHIVED', 'Архив',
+                upper(ifNull(status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(state, '')) IN ('OFF', 'SUSPENDED'), 'Остановлена',
                 upper(ifNull(status, '')) IN ('ACCEPTED', 'ACTIVE') OR upper(ifNull(state, '')) = 'ON', 'Активна',
-                upper(ifNull(status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(state, '')) = 'OFF', 'Остановлена',
-                upper(ifNull(status, '')) IN ('ARCHIVED'), 'Архив',
                 ifNull(status, '')
             ) AS campaign_status,
             payment_model,
