@@ -1,5 +1,15 @@
 # big_analytics_v6_ch — статус
 
+2026-08-27 01:20 Екб: исправлен VK Ads cost-overlay в step10. До правки строки расхода VK Ads в
+`pbi_big_analytics_full` теряли `domain/салон/регион/специалист` и весь расход попадал в
+`без домена`, хотя `fact_vk_ads` уже был разложен по доменам. Теперь overlay берёт site dimensions
+через `reference_data.vk_ads_agency_clients -> reference_data.gsheet_sites` только для `niche='Авто'`.
+Также исправлена идемпотентность `_overlay_full`: перед повторной вставкой удаляются все старые
+`cascade_level='cost_overlay'`, включая исторические overlay-строки без префикса в `key3`.
+Live ClickHouse после пересборки derived-слоя: `bi_pbi_big_analytics_full` для VK Ads имеет
+ненулевой расход в пустом домене = 0; `cost_overlay` = 2 420 строк / 21 523 099,18 ₽;
+`verify_big_analytics.py --full` = PASS. Power BI refresh НЕ запускался по команде Семёна.
+
 2026-08-24: BA6/PBIP audit по таблицам Power BI закрыт и проверен refresh. `refresh_powerbi.py` расширен с
 25 до 40 import-таблиц: теперь `_ALL_TABLES` совпадает со всеми импортными таблицами текущей
 admin semantic model; calculated/DAX остались только `Dim_Distance` и `Модель атрибуции`.

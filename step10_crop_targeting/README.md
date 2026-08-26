@@ -35,7 +35,9 @@
 day_ranges(DATE_FROM)
 ```
 
-После swap повторный step10 должен быть идемпотентным по сумме `total_cost`.
+После swap повторный step10 должен быть идемпотентным по сумме `total_cost`: перед новой вставкой
+из `big_analytics_full` удаляются все старые строки `cascade_level='cost_overlay'`, включая
+исторические строки без префикса `crop_cost|`.
 
 ## Проверки
 
@@ -47,6 +49,8 @@ python3 data_check/verify_big_analytics.py
 Ключевые SQL-инварианты:
 
 - `big_analytics_cost_overlays` не должен иметь дублей по overlay key.
-- `vk_ads` overlay spend должен совпадать с `raw_data.vk_ads_stats_day` по тем же ключам.
+- `vk_ads` overlay spend должен совпадать с `raw_data.vk_ads_stats_day` по тем же ключам и не
+  терять `domain`/`салон`/`регион`/`специалист`: lookup идёт через
+  `reference_data.vk_ads_agency_clients -> reference_data.gsheet_sites` только для `niche='Авто'`.
 - `vk_ads` overlay-строки остаются с нулевой воронкой.
 - Google Sheets/Telega.in overlay-строки несут свою funnel-воронку, где `prodazhi` включены в `dohod_do_kredita` и `dobro`; перекрытые raw `social_посевы`/`telegram` строки удаляются из `big_analytics_full_new`.

@@ -911,24 +911,48 @@ def _insert_vk_ads_costs(client, target: str) -> None:
             )
             WHERE event_date IS NOT NULL
             GROUP BY event_date, account_id, ad_plan_id
+        ),
+        salon_by_acc AS
+        (
+            SELECT
+                a.account_id AS account_id,
+                anyLast(gs.domain) AS domain,
+                anyLast(nullIf(trim(ifNull(gs.status, '')), '')) AS gs_status,
+                anyLast(nullIf(trim(ifNull(gs.directologist, '')), '')) AS directologist,
+                anyLast(nullIf(trim(ifNull(gs.salon, '')), '')) AS salon,
+                anyLast(nullIf(trim(ifNull(gs.city, '')), '')) AS city,
+                anyLast(nullIf(trim(ifNull(gs.region, '')), '')) AS region,
+                anyLast(nullIf(trim(ifNull(gs.site_type, '')), '')) AS site_type,
+                anyLast(nullIf(trim(ifNull(gs.direction, '')), '')) AS direction,
+                anyLast(nullIf(trim(ifNull(gs.client_id, '')), '')) AS client_id,
+                anyLast(nullIf(trim(ifNull(gs.project_manager, '')), '')) AS project_manager,
+                anyLast(nullIf(trim(ifNull(gs.sales_manager, '')), '')) AS sales_manager,
+                anyLast(nullIf(trim(ifNull(gs.login_key, '')), '')) AS login_key
+            FROM reference_data.vk_ads_agency_clients AS a
+            INNER JOIN reference_data.gsheet_sites AS gs
+                ON lowerUTF8(trim(ifNull(a.domain, ''))) = lowerUTF8(trim(ifNull(gs.domain, '')))
+            WHERE gs.niche = 'Авто'
+              AND ifNull(a.domain, '') != ''
+              AND ifNull(gs.domain, '') != ''
+            GROUP BY a.account_id
         )
         SELECT
-            concat('vk_ads_cost|', toString(event_date), '|', toString(ifNull(account_id, 0)), '|', toString(ifNull(ad_plan_id, 0))) AS key3,
-            event_date AS `Date`,
-            multiIf(toDayOfWeek(event_date) = 1, '1_Понедельник', toDayOfWeek(event_date) = 2, '2_Вторник',
-                    toDayOfWeek(event_date) = 3, '3_Среда', toDayOfWeek(event_date) = 4, '4_Четверг',
-                    toDayOfWeek(event_date) = 5, '5_Пятница', toDayOfWeek(event_date) = 6, '6_Суббота', '7_Воскресенье') AS `День недели`,
-            toStartOfWeek(event_date, 1) AS week_start,
-            toInt64(ifNull(ad_plan_id, 0)) AS `CampaignId`,
-            ad_plan_name AS `CampaignName`,
+            concat('vk_ads_cost|', toString(vk.event_date), '|', toString(ifNull(vk.account_id, 0)), '|', toString(ifNull(vk.ad_plan_id, 0))) AS key3,
+            vk.event_date AS `Date`,
+            multiIf(toDayOfWeek(vk.event_date) = 1, '1_Понедельник', toDayOfWeek(vk.event_date) = 2, '2_Вторник',
+                    toDayOfWeek(vk.event_date) = 3, '3_Среда', toDayOfWeek(vk.event_date) = 4, '4_Четверг',
+                    toDayOfWeek(vk.event_date) = 5, '5_Пятница', toDayOfWeek(vk.event_date) = 6, '6_Суббота', '7_Воскресенье') AS `День недели`,
+            toStartOfWeek(vk.event_date, 1) AS week_start,
+            toInt64(ifNull(vk.ad_plan_id, 0)) AS `CampaignId`,
+            vk.ad_plan_name AS `CampaignName`,
             toInt64(0) AS `AdGroupId`,
             CAST(NULL, 'Nullable(String)') AS `AdGroupName`,
             CAST(NULL, 'Nullable(String)') AS `AdNetworkType`,
             CAST(NULL, 'Nullable(String)') AS `Device`,
             toDecimal64(0, 6) AS `Impressions`,
             toDecimal64(0, 6) AS `Clicks`,
-            toDecimal64(spent, 6) AS total_cost,
-            CAST(NULL, 'Nullable(String)') AS domain,
+            toDecimal64(vk.spent, 6) AS total_cost,
+            CAST(sba.domain, 'Nullable(String)') AS domain,
             toInt64(0) AS `RlAdjustmentId`,
             '' AS `RlAdjustmentId_total`,
             CAST('VK Ads', 'Nullable(String)') AS campaign_code,
@@ -936,7 +960,7 @@ def _insert_vk_ads_costs(client, target: str) -> None:
             'cpc' AS cpc_cpa,
             '' AS site_quiz,
             CAST(NULL, 'Nullable(String)') AS adgroup_code,
-            '' AS account_login,
+            ifNull(sba.login_key, '') AS account_login,
             CAST('VK Ads', 'Nullable(String)') AS manager_login,
             '' AS ag_part1, '' AS ag_part2, '' AS ag_part3, '' AS ag_part4, '' AS ag_part5, '' AS ag_part6, '' AS ag_part7,
             '' AS `марки авто`,
@@ -954,26 +978,26 @@ def _insert_vk_ads_costs(client, target: str) -> None:
             toDecimal256(0, 6) AS priedet,
             toInt64(0) AS dohod_do_kredita,
             toInt64(0) AS dobro,
-            CAST(NULL, 'Nullable(String)') AS `статус`,
-            CAST(NULL, 'Nullable(String)') AS `специалист`,
-            CAST(NULL, 'Nullable(String)') AS `тип_сайта`,
+            CAST(sba.gs_status, 'Nullable(String)') AS `статус`,
+            CAST(sba.directologist, 'Nullable(String)') AS `специалист`,
+            CAST(sba.site_type, 'Nullable(String)') AS `тип_сайта`,
             CAST(NULL, 'Nullable(String)') AS `шаблон`,
-            CAST(NULL, 'Nullable(String)') AS `салон`,
-            CAST(NULL, 'Nullable(String)') AS `город`,
-            CAST(NULL, 'Nullable(String)') AS `регион`,
-            CAST('Авто', 'Nullable(String)') AS direction,
+            CAST(sba.salon, 'Nullable(String)') AS `салон`,
+            CAST(sba.city, 'Nullable(String)') AS `город`,
+            CAST(sba.region, 'Nullable(String)') AS `регион`,
+            CAST(ifNull(sba.direction, 'Авто'), 'Nullable(String)') AS direction,
             CAST(NULL, 'Nullable(String)') AS `неверный_кодер_new`,
             CAST(NULL, 'Nullable(String)') AS fid,
-            CAST(NULL, 'Nullable(String)') AS `проджект`,
-            CAST(NULL, 'Nullable(String)') AS `id_салона`,
-            CAST(NULL, 'Nullable(String)') AS `менеджер`,
+            CAST(sba.project_manager, 'Nullable(String)') AS `проджект`,
+            CAST(sba.client_id, 'Nullable(String)') AS `id_салона`,
+            CAST(sba.sales_manager, 'Nullable(String)') AS `менеджер`,
             'VK Ads' AS `источник`,
             'Комплекс' AS `направление`,
             '' AS `номер кампании | название кампании`,
             '' AS `номер группы | название группы`,
             CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
             CAST(NULL, 'Nullable(Int32)') AS `План приезда`,
-            '' AS `аккаунт|сайт`,
+            concat(ifNull(sba.login_key, ''), '|', ifNull(sba.domain, '')) AS `аккаунт|сайт`,
             CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
             CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
             'VK Ads' AS `поставщик`,
@@ -981,7 +1005,8 @@ def _insert_vk_ads_costs(client, target: str) -> None:
             CAST('cost_overlay', 'Nullable(String)') AS cascade_level,
             CAST(NULL, 'Nullable(String)') AS campaign_status,
             CAST(NULL, 'Nullable(String)') AS payment_model
-        FROM vk_spend
+        FROM vk_spend AS vk
+        LEFT JOIN salon_by_acc sba ON sba.account_id = vk.account_id
         """,
         settings=SAFE_QUERY_SETTINGS,
     )
@@ -1094,8 +1119,11 @@ def _overlay_full(client) -> tuple[int, float, float]:
             SELECT *
             FROM ad_analytics.big_analytics_full
             WHERE `Date` >= toDate('{lo}') AND `Date` < toDate('{hi}')
-              AND NOT startsWith(key3, 'crop_cost|')
-              AND NOT startsWith(key3, 'vk_ads_cost|')
+              AND NOT (
+                  ifNull(cascade_level, '') = 'cost_overlay'
+                  OR startsWith(key3, 'crop_cost|')
+                  OR startsWith(key3, 'vk_ads_cost|')
+              )
               AND NOT (
                   _source_table IN ('social_посевы', 'telegram')
                   AND key3 IN ({_telega_covered_raw_keys(lo, hi)})

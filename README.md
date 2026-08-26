@@ -207,6 +207,9 @@ step 145). Актуальные инварианты и открытые рас�
 (встроенная модель `v00` — редактирует агент `pbip_editor`).
 _Legacy Windows-путь `C:\Users\Mi\Desktop\креативы виктори\готовые таблицы\…` устарел — не использовать._
 
+BA6 Power BI работает только по нише `Авто`. Не-авто ниши не добавляются в BI-измерения,
+страницы и срезы и не рассматриваются как часть отчёта.
+
 ### VK Ads domain grain
 
 `star_refactor.build_star.build_vk_ads_fact` собирает `fact_vk_ads` на доменном зерне:
@@ -214,6 +217,11 @@ _Legacy Windows-путь `C:\Users\Mi\Desktop\креативы виктори\г
 только при совпадении с баннером из `banner_dim`. PBI-compat витрина экспортирует эти
 поля для связи `fact_vk_ads.site_key -> Dim_Site.site_key`; без пересборки BA6 pipeline
 Power BI продолжит показывать старое распределение VK Ads по доменам.
+
+В общей витрине `pbi_big_analytics_full` расход VK Ads приходит через cost-overlay step10.
+Эти строки тоже обязаны получать site dimensions из
+`reference_data.vk_ads_agency_clients -> reference_data.gsheet_sites`, иначе Power BI покажет
+расход в `без домена`, хотя отдельная `fact_vk_ads` уже разложена по доменам.
 
 Структура (POSIX-разделители на Mac):
 - `Большая аналитика_v00.Report/definition/pages/<id>/page.json` — страницы (filterConfig + visuals)
