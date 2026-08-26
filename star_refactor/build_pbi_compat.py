@@ -1802,6 +1802,7 @@ def _direct_type_placement_pbi_sql() -> str:
                 position_type = 'ORGANIC_SEARCH_POSITION_TYPE', 'Динамические места на поиске',
                 position_type = 'PRIME_POSITION_TYPE', 'Спецразмещение',
                 position_type = 'SERP_GEO_WIZARD_POSITION_TYPE', 'Геоблок в поисковой выдаче',
+                position_type = 'SERVICE_GALLERY_POSITION_TYPE', 'Галерея услуг',
                 position_type = 'SUGGEST_POSITION_TYPE', 'Реклама в саджесте',
                 position_type = 'TELEGRAM_POSITION_TYPE', 'Реклама в Telegram',
                 position_type

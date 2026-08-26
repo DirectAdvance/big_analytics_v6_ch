@@ -223,6 +223,8 @@ def test_dim_campaign_normalizes_kviz_to_quiz():
     assert "replaceAll(f.campaign_code, 'kviz', 'quiz') AS campaign_code" in build_source
     assert "FROM ad_analytics.campaign_status_v" in ddl_sql
     assert "FROM ad_analytics.campaign_status_v" in build_source
+    assert "ids.`CampaignId` AS `CampaignId`" in ddl_sql
+    assert "ids.`CampaignId` AS `CampaignId`" in build_source
 
 
 def test_campaign_and_adgroup_labels_fallback_on_blank_values():
@@ -406,6 +408,7 @@ def test_direct_cookie_sources_have_pbi_views():
     placement_sql = build_pbi_compat._pbi_view_select_sql("yandex_direct_type_placement_report_master")
     assert "toStartOfMonth(scope_from) AS date" in placement_sql
     assert "position_type = 'PRIME_POSITION_TYPE', 'Спецразмещение'" in placement_sql
+    assert "position_type = 'SERVICE_GALLERY_POSITION_TYPE', 'Галерея услуг'" in placement_sql
     assert "GROUP BY loaded_at, date, client_login, campaign_id, ad_group_id, type_placement, type_placement_ru" in placement_sql
 
 

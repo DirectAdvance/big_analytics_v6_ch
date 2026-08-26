@@ -624,7 +624,7 @@ DIM_DDL = {
                 SELECT `CampaignId` FROM status_campaigns
             )
             SELECT
-                ids.`CampaignId`,
+                ids.`CampaignId` AS `CampaignId`,
                 coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`) AS `CampaignName`,
                 coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.account_login, '')), ''), f.account_login) AS account_login,
                 replaceAll(f.campaign_code, 'kviz', 'quiz') AS campaign_code,
@@ -1101,7 +1101,7 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
             SELECT `CampaignId` FROM status_campaigns
         )
         SELECT
-            ids.`CampaignId`,
+            ids.`CampaignId` AS `CampaignId`,
             coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`) AS `CampaignName`,
             coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.account_login, '')), ''), f.account_login) AS account_login,
             replaceAll(f.campaign_code, 'kviz', 'quiz') AS campaign_code,
@@ -1164,7 +1164,7 @@ def build_dim_campaign(client, bucket_count: int = 1) -> int:
                 SELECT `CampaignId` FROM status_campaigns
             )
             SELECT
-                ids.`CampaignId`,
+                ids.`CampaignId` AS `CampaignId`,
                 coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.`CampaignName`, '')), ''), f.`CampaignName`) AS `CampaignName`,
                 coalesce(nullIf(trim(BOTH ' ' FROM ifNull(cs.account_login, '')), ''), f.account_login) AS account_login,
                 replaceAll(f.campaign_code, 'kviz', 'quiz') AS campaign_code,
