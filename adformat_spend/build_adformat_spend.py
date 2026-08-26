@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
-from corrections import specialist_correction_expr
+from corrections import calls_specialist_correction_expr
 from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
 from spend.dated_site_join import gs_best_cte
 
@@ -63,7 +63,12 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
             f"FROM {STAGING_TABLE} WHERE date >= toDate('{lo}') AND date < toDate('{hi}')"
         )
         # SPECIALIST_DATE_OVERRIDE_2026-08-25: same shared rule as region_spend, see there.
-        specialist_expr = specialist_correction_expr("date", "account_login", "any(gb.directologist)")
+        specialist_expr = calls_specialist_correction_expr(
+            "date",
+            "account_login",
+            "any(gb.directologist)",
+            "CAST(NULL, 'Nullable(String)')",
+        )
         client.command(
             f"""
             WITH

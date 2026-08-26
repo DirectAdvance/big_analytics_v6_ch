@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, swap_shadow
-from corrections import specialist_correction_expr
+from corrections import calls_specialist_correction_expr
 from spend.build_direct_spend_staging import STAGING_TABLE, ensure_staging
 from spend.dated_site_join import gs_best_cte
 
@@ -70,7 +70,12 @@ def _insert_batch(client, target: str, lo: str, hi: str) -> None:
     # the four historically-reassigned login sets on top -- same shared rule the claim/
     # pixel/visit/calls axes already use (corrections.py:872, step11.py:54, step13.py,
     # step6.py:112), not reinvented here.
-    specialist_expr = specialist_correction_expr("date", "account_login", "any(gb.directologist)")
+    specialist_expr = calls_specialist_correction_expr(
+        "date",
+        "account_login",
+        "any(gb.directologist)",
+        "CAST(NULL, 'Nullable(String)')",
+    )
     client.command(
         f"""
         WITH

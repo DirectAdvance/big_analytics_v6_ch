@@ -93,17 +93,13 @@ gs_account_specialist AS
 
 
 def _directologist_fallback_expr(alias: str = "s", gs: str = "gsp", ga: str = "gsa") -> str:
-    calls_specialist = calls_specialist_correction_expr(
+    dated_specialist = calls_specialist_correction_expr(
         f"{alias}.`Date`",
         f"{alias}.account_login",
         f"{gs}.directologist",
         f"{ga}.directologist",
     )
-    return (
-        f"if({_is_calls_expr(alias)}, "
-        f"nullIf(trim(ifNull({calls_specialist}, '')), ''), "
-        f"nullIf(trim(ifNull({gs}.directologist, '')), ''))"
-    )
+    return f"nullIf(trim(ifNull({dated_specialist}, '')), '')"
 
 
 def _fallback_expr(alias: str = "s", gs: str = "gsp", ga: str = "gsa") -> str:

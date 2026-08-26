@@ -646,7 +646,7 @@ def _stage4_ag_parts() -> str:
     code = "ifNull(s.adgroup_code, '')"
     valid = f"match({code}, {_lit(_AG_CODE_PATTERN)})"
     tp67 = "ifNull(s.tp, '') IN ('tp6', 'tp7')"
-    guard = f"({code} != '' AND {code} != {_lit(_INVALID_CODE)})"
+    guard = f"(({code} != '' OR {tp67}) AND {code} != {_lit(_INVALID_CODE)})"
     scope = f"({SCOPE_DIRECT_CROP})"
 
     parts = []

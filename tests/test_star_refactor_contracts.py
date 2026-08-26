@@ -1,8 +1,11 @@
 import inspect
+import importlib
 
 import pipeline
 import refresh_powerbi
+import spec_fallback
 from adformat_spend import build_adformat_spend
+from corrections import _stage4_ag_parts, calls_specialist_correction_expr
 from criterion_spend import build_criterion_spend
 from data_check import verify_big_analytics
 from region_spend import build_region_spend
@@ -126,6 +129,13 @@ def test_dim_adgroup_uses_narrow_raw_source_before_fact_fallback():
     assert "reference_data.direct_adgroups" in sql
     assert "ad_analytics.big_analytics_unified" in sql
     assert sql.index("reference_data.direct_adgroups") < sql.index("ad_analytics.big_analytics_unified")
+
+
+def test_tp6_tp7_empty_adgroup_code_maps_to_mk_tk():
+    sql = _stage4_ag_parts()
+
+    assert "OR ifNull(s.tp, '') IN ('tp6', 'tp7')" in sql
+    assert "multiIf(ifNull(s.tp, '') IN ('tp6', 'tp7'), 'MK/TK'" in sql
 
 
 def test_dim_site_uses_ba5_empty_crm_label():
@@ -589,13 +599,39 @@ def test_region_spend_fact_build_joins_geo_dict_with_dedup_guard():
 
 
 def test_spend_facts_use_dated_specialist_mapping():
+    stale_guard = calls_specialist_correction_expr(
+        "date",
+        "account_login",
+        "any(gb.directologist)",
+        "CAST(NULL, 'Nullable(String)')",
+    )
+
+    assert "date >= toDate('2026-04-10')" in stale_guard
+    assert "date >= toDate('2026-04-21')" in stale_guard
+    assert "date >= toDate('2026-06-19')" in stale_guard
+    assert "date >= toDate('2026-07-17')" in stale_guard
+    assert "CAST(NULL, 'Nullable(String)')" in stale_guard
+
     for module in (build_region_spend, build_criterion_spend, build_adformat_spend):
         source = inspect.getsource(module)
 
         assert "`специалист` LowCardinality(Nullable(String))" in module._COLUMNS
         assert "gs_best_cte(pairs_sql)" in source
-        assert 'specialist_correction_expr("date", "account_login", "any(gb.directologist)")' in source
+        assert "calls_specialist_correction_expr(" in source
+        assert "\"CAST(NULL, 'Nullable(String)')\"" in source
         assert "gb.match_date = y.date" in source
+
+
+def test_claim_and_visit_fallbacks_do_not_restore_stale_directologist_after_cutoff():
+    arrival = importlib.import_module("step13_arrival.step13")
+    fallback_sql = spec_fallback._directologist_fallback_expr()
+    arrival_source = inspect.getsource(arrival)
+
+    assert "s.`Date` >= toDate('2026-04-10')" in fallback_sql
+    assert "CAST(NULL, 'Nullable(String)')" in fallback_sql
+    assert "if((ifNull(s.campaign_code, '') = 'звонки'" not in fallback_sql
+    assert "calls_specialist_correction_expr(\n        \"g.eff_arrival_date\"" in arrival_source
+    assert "CAST(NULL, 'Nullable(String)')" in arrival_source
 
 
 def test_criterion_spend_columns_include_crm_sums():

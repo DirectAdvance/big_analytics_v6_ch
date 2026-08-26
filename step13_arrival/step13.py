@@ -109,7 +109,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, q, swap_shadow
-from corrections import calls_specialist_correction_expr, specialist_correction_expr
+from corrections import calls_specialist_correction_expr
 from step1_load_raw.step1 import _resolved_lead_salon_expr, _salon_client_id_expr
 from step3_build_sources.step3 import (
     _ag_parts_expr,
@@ -302,8 +302,11 @@ def _leads_branch_columns() -> dict[str, str]:
     """Колонка витрины -> выражение. Колонки, которых здесь нет, ClickHouse заполнит
     дефолтом типа (Decimal→0, String→'', Nullable→NULL) — именно так обнуляются
     claim-метрики Impressions/Clicks/total_cost."""
-    specialist = specialist_correction_expr(
-        "g.eff_arrival_date", "g.account_login", "g.specialist_raw"
+    specialist = calls_specialist_correction_expr(
+        "g.eff_arrival_date",
+        "g.account_login",
+        "g.specialist_raw",
+        "CAST(NULL, 'Nullable(String)')",
     )
     return {
         "key3": "concat('visit_lead|', g._source_table, '|', toString(g.eff_arrival_date), "
@@ -749,8 +752,11 @@ HAVING priezd > 0 OR prodazhi > 0
 # Ветка 3 — Маркар gsheet-orphans
 # ══════════════════════════════════════════════════════════════════════════════
 def _marcar_orphan_branch_columns() -> dict[str, str]:
-    specialist = specialist_correction_expr(
-        "g.eff_arrival_date", "g.account_login", "g.specialist_raw"
+    specialist = calls_specialist_correction_expr(
+        "g.eff_arrival_date",
+        "g.account_login",
+        "g.specialist_raw",
+        "CAST(NULL, 'Nullable(String)')",
     )
     return {
         "key3": "concat('visit_marcar_orphan|', toString(g.eff_arrival_date), '|', ifNull(g.domain, ''))",
