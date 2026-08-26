@@ -1330,6 +1330,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             SELECT
                 created_date,
                 arrival_date,
+                domain,
+                if(notEmpty(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))), cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))), toUInt64(0)) AS site_key,
                 toInt64OrNull(extract(ifNull(utm_content, ''), '^([0-9]{{5,}})/')) AS ad_group_id,
                 toInt64OrNull(extract(ifNull(utm_content, ''), '/([0-9]{{5,}})$')) AS banner_id,
                 status,
@@ -1346,6 +1348,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             SELECT
                 created_date,
                 arrival_date,
+                domain,
+                site_key,
                 ad_group_id,
                 banner_id,
                 salon,
@@ -1356,6 +1360,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
         (
             SELECT
                 created_date AS date,
+                domain,
+                site_key,
                 ad_group_id,
                 banner_id,
                 anyLast(salon) AS `салон`,
@@ -1368,12 +1374,14 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             FROM lead_metrics
             WHERE created_date IS NOT NULL
               {zayavka_where_sql}
-            GROUP BY date, ad_group_id, banner_id
+            GROUP BY date, domain, site_key, ad_group_id, banner_id
         ),
         visit_agg AS
         (
             SELECT
                 arrival_date AS date,
+                domain,
+                site_key,
                 ad_group_id,
                 banner_id,
                 anyLast(salon) AS `салон`,
@@ -1386,7 +1394,7 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             FROM lead_metrics
             WHERE arrival_date IS NOT NULL
               {visit_where_sql}
-            GROUP BY date, ad_group_id, banner_id
+            GROUP BY date, domain, site_key, ad_group_id, banner_id
         ),
         banner_dim AS
         (
@@ -1410,6 +1418,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
         (
             SELECT
                 a.account_id AS account_id,
+                anyLast(gs.domain) AS domain,
+                anyLast(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(gs.domain, ''))))) AS site_key,
                 anyLast(nullIf(trim(ifNull(gs.salon, '')), '')) AS `салон`,
                 anyLast(nullIf(trim(ifNull(gs.region, '')), '')) AS `регион`,
                 anyLast(nullIf(trim(ifNull(gs.site_type, '')), '')) AS `тип_сайта`,
@@ -1422,21 +1432,24 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
               AND ifNull(gs.domain, '') != ''
             GROUP BY a.account_id
         ),
-        salon_dim AS
+        site_dim AS
         (
             SELECT
-                lower(trim(ifNull(salon, ''))) AS salon_key,
+                cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))) AS site_key,
+                anyLast(nullIf(trim(ifNull(salon, '')), '')) AS `салон`,
                 anyLast(region) AS `регион`,
                 anyLast(site_type) AS `тип_сайта`,
                 anyLast(directologist) AS `специалист`
             FROM reference_data.gsheet_sites
-            WHERE ifNull(salon, '') != ''
+            WHERE ifNull(domain, '') != ''
               AND niche = 'Авто'
-            GROUP BY salon_key
+            GROUP BY site_key
         )
         SELECT
             assumeNotNull(toDateOrNull(s.date)) AS date,
             CAST(s.account_id, 'Nullable(Int64)') AS account_id,
+            CAST(sba.site_key, 'UInt64') AS site_key,
+            CAST(sba.domain, 'LowCardinality(Nullable(String))') AS domain,
             CAST(sba.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(s.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
             CAST(s.ad_plan_name, 'LowCardinality(Nullable(String))') AS ad_plan_name,
@@ -1470,7 +1483,9 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
         SELECT
             assumeNotNull(za.date) AS date,
             CAST(bd.account_id, 'Nullable(Int64)') AS account_id,
-            CAST(za.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
+            CAST(za.site_key, 'UInt64') AS site_key,
+            CAST(za.domain, 'LowCardinality(Nullable(String))') AS domain,
+            CAST(coalesce(nullIf(sd.`салон`, ''), za.`салон`), 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(bd.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
             CAST(bd.ad_plan_name, 'LowCardinality(Nullable(String))') AS ad_plan_name,
             CAST(ifNull(za.ad_group_id, bd.ad_group_id), 'Nullable(Int64)') AS ad_group_id,
@@ -1491,15 +1506,17 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(sd.`тип_сайта`, 'LowCardinality(Nullable(String))') AS `тип_сайта`,
             CAST(sd.`специалист`, 'LowCardinality(Nullable(String))') AS `специалист`
         FROM zayavka_agg za
-        LEFT JOIN banner_dim bd ON bd.banner_id = za.banner_id
-        LEFT JOIN salon_dim sd ON sd.salon_key = lower(trim(ifNull(za.`салон`, '')))
+        INNER JOIN banner_dim bd ON bd.banner_id = za.banner_id
+        LEFT JOIN site_dim sd ON sd.site_key = za.site_key
 
         UNION ALL
 
         SELECT
             assumeNotNull(va.date) AS date,
             CAST(bd.account_id, 'Nullable(Int64)') AS account_id,
-            CAST(va.`салон`, 'LowCardinality(Nullable(String))') AS `салон`,
+            CAST(va.site_key, 'UInt64') AS site_key,
+            CAST(va.domain, 'LowCardinality(Nullable(String))') AS domain,
+            CAST(coalesce(nullIf(sd.`салон`, ''), va.`салон`), 'LowCardinality(Nullable(String))') AS `салон`,
             CAST(bd.ad_plan_id, 'Nullable(Int64)') AS ad_plan_id,
             CAST(bd.ad_plan_name, 'LowCardinality(Nullable(String))') AS ad_plan_name,
             CAST(ifNull(va.ad_group_id, bd.ad_group_id), 'Nullable(Int64)') AS ad_group_id,
@@ -1520,8 +1537,8 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
             CAST(sd.`тип_сайта`, 'LowCardinality(Nullable(String))') AS `тип_сайта`,
             CAST(sd.`специалист`, 'LowCardinality(Nullable(String))') AS `специалист`
         FROM visit_agg va
-        LEFT JOIN banner_dim bd ON bd.banner_id = va.banner_id
-        LEFT JOIN salon_dim sd ON sd.salon_key = lower(trim(ifNull(va.`салон`, '')))
+        INNER JOIN banner_dim bd ON bd.banner_id = va.banner_id
+        LEFT JOIN site_dim sd ON sd.site_key = va.site_key
     """
 
 
@@ -1534,7 +1551,7 @@ def build_vk_ads_fact(client) -> int:
         CREATE TABLE {shadow}
         ENGINE = MergeTree
         PARTITION BY toYYYYMM(date)
-        ORDER BY (date, ifNull(account_id, 0), ifNull(ad_plan_id, 0), ifNull(ad_group_id, 0), ifNull(banner_id, 0), `атрибуция`)
+        ORDER BY (date, site_key, ifNull(account_id, 0), ifNull(ad_plan_id, 0), ifNull(ad_group_id, 0), ifNull(banner_id, 0), `атрибуция`)
         AS
         {_vk_ads_sql(metrics, "AND 0", "AND 0", "AND 0", "AND 0")}
         """,

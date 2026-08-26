@@ -1570,6 +1570,8 @@ def _vk_ads_pbi_sql() -> str:
         SELECT
             f.date AS date,
             f.account_id AS account_id,
+            {_pbi_int64_key("f.site_key")} AS site_key,
+            f.domain AS domain,
             f.`салон`,
             f.ad_plan_id AS ad_plan_id,
             p.ad_plan_name AS ad_plan_name,

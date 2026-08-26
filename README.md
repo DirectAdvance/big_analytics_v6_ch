@@ -207,6 +207,14 @@ step 145). Актуальные инварианты и открытые рас�
 (встроенная модель `v00` — редактирует агент `pbip_editor`).
 _Legacy Windows-путь `C:\Users\Mi\Desktop\креативы виктори\готовые таблицы\…` устарел — не использовать._
 
+### VK Ads domain grain
+
+`star_refactor.build_star.build_vk_ads_fact` собирает `fact_vk_ads` на доменном зерне:
+статистика и лиды несут `domain`/`site_key`, а заявки и визиты VK Ads попадают в факт
+только при совпадении с баннером из `banner_dim`. PBI-compat витрина экспортирует эти
+поля для связи `fact_vk_ads.site_key -> Dim_Site.site_key`; без пересборки BA6 pipeline
+Power BI продолжит показывать старое распределение VK Ads по доменам.
+
 Структура (POSIX-разделители на Mac):
 - `Большая аналитика_v00.Report/definition/pages/<id>/page.json` — страницы (filterConfig + visuals)
 - `Большая аналитика_v00.Report/definition/pages/<id>/visuals/<id>/visual.json` — визуалы (pivotTable, slicer, shape, actionButton)
