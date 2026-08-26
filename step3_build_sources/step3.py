@@ -597,6 +597,10 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     # и остаются исключены из ОБЕИХ метрик. На 2026-данных эффект 0 лидов (reason «был в ксо»
     # среди plex/«Продажа за наличные» не встречается, измерено) — правка корректности
     # правила на будущее, а не сдвиг текущих чисел.
+    #
+    # FUNNEL_SALE_IMPLIES_APPROVAL_2026-08-26: отчётная воронка обязана быть вложенной.
+    # Если строка уже является sale, то для отчёта она прошла ДО/Одобрено даже когда CRM
+    # не заполнила отдельный кредитный статус.
     cash_sale_credit = f"({cash_sale} AND {reason_lower} != 'был в ксо')"
     credit_side = _category_match_expr(
         ("credit", "approved", "sale"), status_expr, reason_expr, source_type_expr, salon_expr
@@ -615,8 +619,8 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
     toDecimal64(if({status} = 'Фильтр', 1, 0), 6) AS filtr,
     toDecimal64(if({status} = 'Недозвон', 1, 0), 6) AS nedozvon,
     toDecimal64(if({status} = 'Приедет', 1, 0), 6) AS priedet,
-    toInt64(if({credit_side} AND NOT {cash_sale_credit}, 1, 0)) AS dohod_do_kredita,
-    toInt64(if({approved_side} AND NOT {cash_sale}, 1, 0)) AS dobro
+    toInt64(if(({credit_side} AND NOT {cash_sale_credit}) OR {sale}, 1, 0)) AS dohod_do_kredita,
+    toInt64(if(({approved_side} AND NOT {cash_sale}) OR {sale}, 1, 0)) AS dobro
 """
 
 
