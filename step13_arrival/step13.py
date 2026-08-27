@@ -268,12 +268,26 @@ assumeNotNull(greatest(
 
 
 def _auto_domains_filter(domain_expr: str) -> str:
-    """Гейт `direction='Авто'` (v5 step13.py:390) — строгое равенство, NULL исключается."""
+    """Доменный гейт визитной оси.
+
+    `gsheet_sites` не покрывает все активные авто-домены: заявочная ось уже
+    подхватывает такие домены из факта, а старый step13 отбрасывал их до расчёта
+    визитов/продаж. Поэтому второй источник допуска — уже собранный BAF, без
+    Perform-доменов.
+    """
     return f"""
+(
 lower(trim(ifNull({domain_expr}, ''))) IN (
     SELECT lower(trim(ifNull(domain, '')))
     FROM reference_data.gsheet_sites
-    WHERE direction = 'Авто' AND ifNull(domain, '') != ''
+    WHERE (direction = 'Авто' OR niche = 'Авто') AND ifNull(domain, '') != ''
+)
+OR lower(trim(ifNull({domain_expr}, ''))) IN (
+    SELECT lower(trim(ifNull(domain, '')))
+    FROM ad_analytics.big_analytics_full
+    WHERE ifNull(domain, '') != ''
+      AND ifNull(`направление`, '') != 'Перформ'
+)
 )
 """
 

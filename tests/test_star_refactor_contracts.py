@@ -103,6 +103,7 @@ def test_pbi_full_exposes_tp_and_normalizes_claim_type():
     assert "dcs.`тип_заявки` IS NULL" in sql
     assert "dcs.`тип_заявки` IN ('Заявка', 'Из базы', 'Пиксель')" in sql
     assert "'Заявки'" in sql
+    assert "WHERE f.`атрибуция` = 'По дате заявки'" in sql
 
 
 def test_dim_build_can_target_one_dimension():
@@ -182,6 +183,11 @@ def test_pbi_site_and_service_dimensions_use_only_auto_gsheet_rows():
     assert "AND lower(ifNull(ulogin, '')) IN (SELECT account_login FROM auto_accounts)" in pbi_sql
     assert "AND lower(ifNull(login, '')) IN (SELECT account_login FROM auto_accounts)" in pbi_sql
     assert "WHERE ifNull(ds.domain, '') != ''" in arp_sql
+    assert "FROM raw_data.yandex_direct_report_rows r" in arp_sql
+    assert "FROM ad_analytics.fact_direct_feed_funnel" not in arp_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp8') = 0" in arp_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp9') = 0" in arp_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp10') = 0" in arp_sql
 
 
 def test_dim_crm_status_uses_ba5_empty_crm_label():
@@ -263,6 +269,13 @@ def test_direct_feed_fact_materializes_site_key():
     assert "AS site_key" in insert_sql
     assert "cityHash64(placement_feed_key) AS placement_feed_key_hash" in insert_sql
     assert "GROUP BY date, campaign_id, ad_group_id, placement_feed_key_hash, account_login, site_key" in insert_sql
+    assert "FROM raw_data.direct_feed_report_rows r" in insert_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp8') = 0" in insert_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp9') = 0" in insert_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp10') = 0" in insert_sql
+    assert "FROM raw_data.direct_cookie_feed_urls" in insert_sql
+    assert "ifNull(r.cost, toDecimal128(0, 9)) AS cost" in insert_sql
+    assert "r.total_cost" not in insert_sql
 
 
 def test_direct_feed_fact_view_restores_placement_key_from_dimension():
@@ -280,11 +293,35 @@ def test_direct_feed_builds_placement_dimension_before_compat_view():
     assert source.index("build_dim_placement_feed(client)") < source.index("replace_view(")
 
 
+def test_dim_placement_feed_prefers_direct_feed_report_source():
+    source = inspect.getsource(build_pbi_compat.build_dim_placement_feed)
+    feed_source = inspect.getsource(build_pbi_compat._build_dim_placement_feed_from_direct_feeds)
+    feed_filter = build_pbi_compat.direct_feed_non_posev_campaign_sql("r")
+
+    assert "direct_feed_report_rows" in source
+    assert "_build_dim_placement_feed_from_direct_feeds(client)" in source
+    assert "raw_data.direct_feed_report_rows r" in feed_source
+    assert "raw_data.direct_cookie_feed_urls" in feed_source
+    assert 'direct_feed_non_posev_campaign_sql("r")' in feed_source
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp8') = 0" in feed_filter
+
+
 def test_direct_feed_pbi_view_joins_dim_site_by_materialized_site_key():
     sql = build_pbi_compat._feed_funnel_pbi_sql()
 
     assert "LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key" in sql
     assert "_site_key_expr(\"f\")" not in sql
+
+
+def test_posevy_placement_links_pbi_keeps_only_telegram_and_max_links():
+    sql = build_pbi_compat._direct_autorules_posevy_placement_links_sql()
+
+    assert "positionCaseInsensitive(l.placement_link, 't.me/') > 0" in sql
+    assert "positionCaseInsensitive(l.placement_link, 'telegram.me/') > 0" in sql
+    assert "positionCaseInsensitive(l.placement_link, 'max.ru') > 0" in sql
+    assert "positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp8') > 0" in sql
+    assert "positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp9') > 0" in sql
+    assert "positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp10') > 0" in sql
 
 
 def test_direct_feed_star_import_keeps_only_keys_and_metrics():

@@ -94,6 +94,15 @@ def test_step13_adds_perform_posevy_visit_proxy() -> None:
     assert columns["priezd"] == "g.priezd"
 
 
+def test_step13_visit_axis_keeps_baf_auto_orphan_domains() -> None:
+    sql = step13._auto_domains_filter("l.domain")
+
+    assert "FROM reference_data.gsheet_sites" in sql
+    assert "niche = 'Авто'" in sql
+    assert "FROM ad_analytics.big_analytics_full" in sql
+    assert "ifNull(`направление`, '') != 'Перформ'" in sql
+
+
 def test_calls_rows_use_complex_direction() -> None:
     step13_leads_sql = step13._leads_branch_sql("2026-01-01")
     step6_calls_sql = step6._calls_select("2026-01-01", "2026-01-02", crop=False)

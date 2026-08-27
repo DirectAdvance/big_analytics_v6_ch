@@ -41,6 +41,15 @@ def _pbi_int64_key(expr: str) -> str:
     return f"reinterpretAsInt64({expr})"
 
 
+def direct_feed_non_posev_campaign_sql(alias: str = "r") -> str:
+    campaign_name = f"ifNull({alias}.campaign_name, '')"
+    return (
+        f"positionCaseInsensitive({campaign_name}, 'tp8') = 0 "
+        f"AND positionCaseInsensitive({campaign_name}, 'tp9') = 0 "
+        f"AND positionCaseInsensitive({campaign_name}, 'tp10') = 0"
+    )
+
+
 PBI_SOURCE_OBJECTS = [
     "Dim_Account",
     "Dim_AdGroup",
@@ -185,6 +194,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
         LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key
         LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key
         LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key
+        WHERE f.`атрибуция` = 'По дате заявки'
         {where_sql}
     """
 
@@ -335,6 +345,76 @@ def build_pixel_score(client) -> int:
 
 
 def build_dim_placement_feed(client) -> int:
+    if table_exists(client, "raw_data", "direct_feed_report_rows") and table_exists(
+        client, "raw_data", "direct_cookie_feed_urls"
+    ):
+        return _build_dim_placement_feed_from_direct_feeds(client)
+    return _build_dim_placement_feed_from_placements(client)
+
+
+def _build_dim_placement_feed_from_direct_feeds(client) -> int:
+    shadow = "ad_analytics.Dim_PlacementFeed_new"
+    client.command(f"DROP TABLE IF EXISTS {shadow} SYNC")
+    client.command(
+        f"""
+        CREATE TABLE {shadow}
+        ENGINE = MergeTree
+        ORDER BY placement_feed_key
+        AS
+        WITH
+            urls AS
+            (
+                SELECT
+                    lowerUTF8(trim(BOTH ' ' FROM client_login)) AS client_login_key,
+                    feed_id,
+                    argMax(feed_name, loaded_at) AS feed_name,
+                    argMax(feed_url, loaded_at) AS feed_url,
+                    argMax(feed_url_key, loaded_at) AS feed_url_key,
+                    argMax(feed_source, loaded_at) AS feed_source
+                FROM raw_data.direct_cookie_feed_urls
+                GROUP BY client_login_key, feed_id
+            )
+        SELECT
+            placement_feed_key,
+            argMax(placement, sort_weight) AS placement,
+            argMax(feed_name, sort_weight) AS feed_name,
+            argMax(feed_url, sort_weight) AS feed_url,
+            argMax(feed_key, sort_weight) AS feed_key,
+            argMax(feed_url_key, sort_weight) AS feed_url_key,
+            CAST(NULL, 'Nullable(String)') AS ad_network_type,
+            CAST(NULL, 'Nullable(String)') AS AdNetworkType
+        FROM
+        (
+            SELECT
+                ifNull(
+                    nullIf(lowerUTF8(trim(BOTH ' ' FROM ifNull(u.feed_url_key, ''))), ''),
+                    ifNull(
+                        nullIf(lowerUTF8(trim(BOTH ' ' FROM ifNull(r.feed_name, ''))), ''),
+                        concat('feed:', toString(r.feed_id))
+                    )
+                ) AS placement_feed_key,
+                ifNull(u.feed_url_key, r.feed_name) AS placement,
+                ifNull(u.feed_name, r.feed_name) AS feed_name,
+                u.feed_url AS feed_url,
+                ifNull(u.feed_url_key, r.feed_name) AS feed_key,
+                u.feed_url_key AS feed_url_key,
+                tuple(count(), max(r.date), lengthUTF8(ifNull(u.feed_url, ''))) AS sort_weight
+            FROM raw_data.direct_feed_report_rows r
+            LEFT JOIN urls u
+              ON u.client_login_key = lowerUTF8(trim(BOTH ' ' FROM r.client_login))
+             AND u.feed_id = r.feed_id
+            WHERE {direct_feed_non_posev_campaign_sql("r")}
+            GROUP BY placement_feed_key, placement, feed_name, feed_url, feed_key, feed_url_key
+        )
+        GROUP BY placement_feed_key
+        """,
+        settings=SAFE_QUERY_SETTINGS,
+    )
+    swap_shadow(client, "ad_analytics.Dim_PlacementFeed", shadow)
+    return count_rows(client, "ad_analytics.Dim_PlacementFeed")
+
+
+def _build_dim_placement_feed_from_placements(client) -> int:
     stage = "ad_analytics.Dim_PlacementFeed_stage_new"
     shadow = "ad_analytics.Dim_PlacementFeed_new"
     use_staging = table_exists(client, "ad_analytics", "direct_spend_staging")
@@ -854,7 +934,7 @@ def build_dim_criterion(client) -> int:
 
 # ARP_LIVE_2026-08-23. `analytics_report_placement` в Power BI читал замороженный снимок БА5
 # `raw_new_arp_fact` (2026-07-01..2026-08-13, сам не обновляется). Здесь он заменён живой вьюхой
-# над `fact_direct_feed_funnel` + воронка из `raw_leads` по механике БА5
+# над `raw_data.yandex_direct_report_rows` + воронка из `raw_leads` по механике БА5
 # (`work/big_analytics_v5/step_cron_night/report_placement/step2_build_analytics.py`):
 #   • площадка лида достаётся из `utm_source` (`s:<...>`), снимается префикс `www.`/`m.`,
 #     затем lower; `none` при непустой кампании → `yandex`;
@@ -967,8 +1047,8 @@ def _analytics_report_placement_pbi_sql() -> str:
             f.date AS date,
             f.domain AS `домен`,
             f.account_login AS `логин`,
-            pf.ad_network_type AS ad_network_type,
-            pf.placement AS placement,
+            f.ad_network_type AS ad_network_type,
+            f.placement AS placement,
             f.placement_feed_key AS placement_feed_key,
             f.placement_key_norm AS placement_key,
             toFloat64(f.cost) AS cost,
@@ -995,9 +1075,31 @@ def _analytics_report_placement_pbi_sql() -> str:
         FROM
         (
             SELECT *, {_ARP_DIRECT_PLACEMENT_KEY} AS placement_key_norm
-            FROM ad_analytics.fact_direct_feed_funnel
+            FROM
+            (
+                SELECT
+                    toDate(r.day) AS date,
+                    r.campaign_id AS campaign_id,
+                    ifNull(r.ad_group_id, 0) AS ad_group_id,
+                    lowerUTF8(trim(BOTH ' ' FROM ifNull(r.placement, ''))) AS placement_feed_key,
+                    trim(BOTH ' ' FROM ifNull(r.placement, '')) AS placement,
+                    anyLast(r.ad_network_type) AS ad_network_type,
+                    r.domain AS domain,
+                    r.client_login AS account_login,
+                    {_site_key_expr("r")} AS site_key,
+                    sum(ifNull(r.total_cost, toDecimal128(0, 9))) AS cost,
+                    sum(ifNull(r.clicks, 0)) AS clicks,
+                    sum(ifNull(r.impressions, 0)) AS impressions,
+                    sum(ifNull(r.all_forms, toDecimal128(0, 9))) AS all_forms,
+                    sum(ifNull(r.crm_order_created, toDecimal128(0, 9))) AS crm_order_created,
+                    sum(ifNull(r.crm_order_paid, toDecimal128(0, 9))) AS crm_order_paid
+                FROM raw_data.yandex_direct_report_rows r
+                WHERE toDate(r.day) >= toDate('{DATE_FROM}')
+                  AND r.campaign_id != 0
+                  AND {direct_feed_non_posev_campaign_sql("r")}
+                GROUP BY date, campaign_id, ad_group_id, placement_feed_key, placement, domain, account_login, site_key
+            )
         ) f
-        LEFT JOIN ad_analytics.Dim_PlacementFeed pf ON pf.placement_feed_key = f.placement_feed_key
         LEFT JOIN ad_analytics.Dim_Campaign dc ON dc.CampaignId = f.campaign_id
         LEFT JOIN ad_analytics.Dim_Site ds ON ds.site_key = f.site_key
         LEFT JOIN ({_arp_direct_leads_sql()}) l
@@ -1570,8 +1672,8 @@ def _vk_ads_pbi_sql() -> str:
         SELECT
             f.date AS date,
             f.account_id AS account_id,
-            {_pbi_int64_key("f.site_key")} AS site_key,
-            f.domain AS domain,
+            toInt64(0) AS site_key,
+            CAST(NULL, 'Nullable(String)') AS domain,
             f.`салон`,
             f.ad_plan_id AS ad_plan_id,
             p.ad_plan_name AS ad_plan_name,
@@ -1855,6 +1957,11 @@ def _direct_autorules_posevy_placement_links_sql() -> str:
             GROUP BY login_key
         ) AS g ON g.login_key = r.client_login
         WHERE coalesce(l.placement_link, '') != ''
+          AND (
+            positionCaseInsensitive(l.placement_link, 't.me/') > 0
+            OR positionCaseInsensitive(l.placement_link, 'telegram.me/') > 0
+            OR positionCaseInsensitive(l.placement_link, 'max.ru') > 0
+          )
           AND (
             positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp8') > 0
             OR positionCaseInsensitive(coalesce(r.campaign_name, ''), 'tp9') > 0

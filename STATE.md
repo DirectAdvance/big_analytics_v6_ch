@@ -1,5 +1,21 @@
 # big_analytics_v6_ch — статус
 
+2026-08-27 13:15 Екб: закрыт баг визитной атрибуции и развязаны фиды/РСЯ-площадки. Root cause
+по визитам: `step13_arrival._auto_domains_filter` пропускал только домены из `gsheet_sites`
+с `direction='Авто'`, а заявочная ось уже содержит авто-домены без строки в справочнике; из-за
+этого `По дате визита` терял 981 direct-продажу только на orphan-доменах. Теперь step13 также
+допускает домены из уже собранного `big_analytics_full`, кроме `направление='Перформ'`.
+Root cause падения финального gate после фидов: `bi_analytics_report_placement` продолжал читать
+`fact_direct_feed_funnel`, который переведён на реальные фиды; ARP снова читает РСЯ-площадки из
+`raw_data.yandex_direct_report_rows`, а фиды остаются в `fact_direct_feed_funnel`.
+Деплой на Victory: md5 Mac==Victory, remote `py_compile` OK, точечные pytest OK. Прогон
+`pipeline.py --from-step=3` пересобрал слои до verify, затем ожидаемо упал на ARP gate до hotfix;
+после hotfix `pipeline.py --only-step=146` = OK и `data_check/verify_big_analytics.py` = PASS.
+Live-check: `fact_big_analytics` 5,481,576 строк; продажи YTD `По дате визита` 4544.995563 >
+`По дате заявки` 4191; `big_analytics_full_arrival` 123,186 строк; фиды 1,226,350 строк,
+TP8/TP9/TP10 markers=0; `bi_analytics_report_placement` liveness 181,526/348,570 = 0.521.
+Power BI refresh НЕ запускался.
+
 2026-08-27 01:20 Екб: исправлен VK Ads cost-overlay в step10. До правки строки расхода VK Ads в
 `pbi_big_analytics_full` теряли `domain/салон/регион/специалист` и весь расход попадал в
 `без домена`, хотя `fact_vk_ads` уже был разложен по доменам. Теперь overlay берёт site dimensions
@@ -9,6 +25,40 @@
 Live ClickHouse после пересборки derived-слоя: `bi_pbi_big_analytics_full` для VK Ads имеет
 ненулевой расход в пустом домене = 0; `cost_overlay` = 2 420 строк / 21 523 099,18 ₽;
 `verify_big_analytics.py --full` = PASS. Power BI refresh НЕ запускался по команде Семёна.
+
+2026-08-25 18:05: подготовка ко второму прогону доведена до локального ready-state, сам pipeline
+НЕ запускался. Исправлен текущий PBI/star стоппер: `pbi_big_analytics_full` теперь берёт
+`специалист` из факта (`f.\`специалист\``), а не из бездатного `Dim_Site`; `bi_fact_region_spend_star`
+возвращён к контракту "ключи+метрики" без `domain/updated_at`. Тестовые контракты Power BI refresh
+обновлены под опубликованную модель: `yandex_direct_ads_texts` уже входит в selective refresh.
+Проверки: `python3 -m pytest tests/ -q` = 244 passed / 1 skipped; `py_compile` по изменённым
+runtime-файлам OK; `spend/dated_site_join.py` self-check OK. Live `verify_big_analytics.py`
+сейчас падает только на ожидаемом stale-снимке `full_last_day_incomplete=1`: `ad_analytics.raw_yandex`
+за 2026-08-24 содержит 2 060 878,89 ₽ / 32 932 строк / 71 логин, потому что первый прогон взял
+недолитое сырьё. Первичная `raw_data.yandex_direct_report_rows` уже долилась: 2026-08-24 =
+6 847 323,95 ₽ / 109 866 строк / 268 логинов, `updated_at` до 2026-08-25T12:23:27Z. Ожидание:
+второй полный прогон должен пересобрать `raw_yandex` из `raw_data`, поднять последний день до
+нормального уровня и снять `full_last_day_incomplete`; Кудерко остаётся warning по known issue #37,
+не FAIL. Не сделано: Victory deploy, второй pipeline, Power BI refresh после второго pipeline.
+
+2026-08-25: локально подготовлены фиксы перед деплоем/пересборкой, но деплой и pipeline НЕ
+запускались. КО/добро: в `step3_build_sources/step3.py` dead `lower()` на кириллице заменён на
+`lowerUTF8()` для reason/status matching, чтобы причины вроде `Был в КСО` матчились стабильно.
+Расходы директологов: spend-факты (`fact_region_spend`, `fact_criterion_spend`,
+`fact_adformat_spend`) теперь несут собственный `специалист`, рассчитанный через датированный
+`gsheet_sites` match `(login,date)` + общие account/date corrections; PBI-слой больше не должен
+тянуть директолога расходов из бездатного `Dim_Site`. SELECT-прогноз по
+`raw_data.yandex_direct_report_rows` после барьеров: Кудерко-логины уходят на Терехова
+10 227 077,58 ₽ и Тумашенко 3 045 793,77 ₽; Сергеев-логины — на Караваева 6 840 147,24 ₽,
+Зубакина 3 426 900,72 ₽, Гордееву 99 099,41 ₽; Питеркина — 0 ₽ после 2026-06-19;
+Чепелев-логины — на Караваева 2 000 011,37 ₽, Щербакову 320 209,38 ₽, Крючкову 238 376,19 ₽,
+Терехова 109 609,36 ₽, Тумашенко 106 740,20 ₽. Остаток на старых владельцах после барьера:
+Кудерко 507,89 ₽ за 2026-06-18 (`buauto54.ru`) и Чепелев 2 078,25 ₽ за 2026-07-17
+(`tenet-park-msk.ru`) — это текущий владелец в `gsheet_sites` на дату строки, не срабатывание
+старого правила после барьера. Проверки: `py_compile` по изменённым Python-файлам OK,
+точечный pytest по KO/lowerUTF8 и spend-specialist OK, `spend/dated_site_join.py` self-check OK,
+PBIP JSON 6293/6293 валидны. Не сделано: полный pipeline, Victory deploy, Power BI refresh;
+`full_last_day_incomplete` оставлен отдельно как недолив сырья.
 
 2026-08-24: BA6/PBIP audit по таблицам Power BI закрыт и проверен refresh. `refresh_powerbi.py` расширен с
 25 до 40 import-таблиц: теперь `_ALL_TABLES` совпадает со всеми импортными таблицами текущей
@@ -450,6 +500,37 @@ withheld по task-констрейнту — новую колонку никт
 вне скоупа задачи (явный список файлов), нужен отдельный проход, если Семён захочет видеть колонку
 в Power BI. Июньская цифра Кудерко 1 707,89 ₽ из `07575f1` не перепроверялась — её код
 (`corrections.py`/`step11`/`step13`/`step6`) в этом коммите не трогался.
+
+2026-08-25: локально подготовлен пакет PBI tech fixes, см.
+`PBI_TECH_FIX_PLAN_2026-08-25.md`. Важно: **второй pipeline не запускать**, пока Семён не
+опубликует Power BI Service с текущими PBIP-правками. Ручной прогон `3914534`
+(`run_id=54492f914f5c`) упал на step146 `build_pbi_compat`: `pbi_big_analytics_full` ссылался
+на `f.\`специалист\``, но `fact_big_analytics` хранит только `site_key`. Локально исправлено на
+`dsite.\`специалист\`` и проверено `EXPLAIN SYNTAX`. В этом же локальном пакете: relationship
+`fact_region_spend.distance_km_agreg -> Dim_Distance.distance_km_agreg`; fact-row поля для
+keyword/format/minus/corrections PBIP-страниц; русский `Dim_AdFormat`; VK Ads spend-строки
+получают `салон/регион/тип_сайта/специалист` через
+`reference_data.vk_ads_agency_clients.domain -> reference_data.gsheet_sites.domain` и fact
+возвращает `ad_plan_name/ad_group_name/banner_name`. Проверено без записи: `py_compile`, JSON parse
+обоих PBIP, `EXPLAIN SYNTAX` для изменённых SELECT. Не проверено: live rebuild после публикации BI.
+Дополнено по скрину с двумя пустыми строками в coder-группах: пустые `Dim_AdGroup.adgroup_code`,
+`марки авто`, `ag_part1..ag_part7`, `ag_part1_name` теперь нормализуются в `Не указано` в PBIP
+Power Query и `_dim_adgroup_pbi_sql()`. Рискованные страницы перечислены в
+`PBI_TECH_FIX_PLAN_2026-08-25.md`. Runtime `.py` доставлены на Victory без запуска pipeline:
+md5 Mac==Victory, local+remote `py_compile`, markers OK.
+
+2026-08-25 17:23 Екб: по ошибке Power BI Desktop “Запросы заблокированы” причина была не
+в сырье, а в отсутствующих `bi_*` views после падения старого step146. Локально в PBIP
+переведены пять проблемных queries на живые базовые объекты/compat-колонки:
+`direct_history`, `check_utm_fuck_direct`, `yandex_direct_korrektirovki`, `pixel_score`,
+`fact_region_spend`. Отдельно исправлен `_vk_ads_pbi_sql()` — имена плана/группы/баннера
+берутся из `Dim_Vk*`, поэтому view работает и до полного пересчета `fact_vk_ads`; для
+`bi_fact_region_spend_star` добавлены compatibility `domain`/`updated_at`.
+Запущен **только** `star_refactor/build_pbi_compat.py`, не полный pipeline: создано
+`bi_views_created=47`, heavy compat rows `49,679,623`. Проверено: все 41 ClickHouse-источник
+из TMDL проходят `DESCRIBE`, `missing=0`; проблемные колонки из скрина есть либо в базовом
+источнике, либо создаются Power Query; `py_compile build_pbi_compat.py` OK; PBIP JSON OK.
+Второй полный pipeline всё ещё не запускался.
 
 ## Открытые дефекты
 
