@@ -62,6 +62,16 @@ def test_arrival_calls_drop_stale_specialist_after_account_cutoff():
     assert "2026-04-10" in columns["специалист"]
 
 
+def test_arrival_branches_choose_domain_owner_by_event_date():
+    leads_sql = _leads_branch_sql("2026-01-01")
+    calls_sql = _calls_branch_sql("2026-01-01")
+
+    assert "gs_domain_date AS" in leads_sql
+    assert "gs.date_val = l.created_date" in leads_sql
+    assert "gs_domain_date AS" in calls_sql
+    assert "gs.date_val = c.created_date" in calls_sql
+
+
 def test_arrival_leads_keep_posev_channel_sources():
     sql = _leads_branch_sql("2026-01-01")
 

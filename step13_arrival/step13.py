@@ -246,6 +246,54 @@ ag_dict AS
 """
 
 
+def _gs_domain_date_cte(date_rows_sql: str) -> str:
+    """Choose the gsheet domain row valid on the event date."""
+    return f"""
+gs_domain_date AS
+(
+    SELECT *
+    FROM
+    (
+        SELECT
+            dates.domain_key,
+            dates.date_val,
+            gs.domain,
+            gs.status,
+            gs.directologist,
+            gs.site_type,
+            gs.template,
+            gs.salon,
+            gs.city,
+            gs.region,
+            gs.direction,
+            gs.direction_main,
+            gs.project_manager,
+            gs.client_id,
+            gs.sales_manager,
+            gs.login_key,
+            multiIf(
+                ifNull(gs.domain, '') = '', 99,
+                ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2,
+                (ifNull(trim(gs.launch_date), '') = '' OR dates.date_val >= toDate(parseDateTimeBestEffortOrNull(gs.launch_date)))
+                    AND (ifNull(trim(gs.block_date), '') = '' OR dates.date_val < toDate(parseDateTimeBestEffortOrNull(gs.block_date))),
+                1,
+                3
+            ) AS match_priority,
+            row_number() OVER (
+                PARTITION BY dates.domain_key, dates.date_val
+                ORDER BY
+                    match_priority ASC,
+                    ifNull(toDate(parseDateTimeBestEffortOrNull(gs.launch_date)), toDate('1900-01-01')) DESC,
+                    ifNull(gs.domain, '') ASC
+            ) AS rn
+        FROM ({date_rows_sql}) dates
+        LEFT JOIN reference_data.gsheet_sites gs
+          ON lower(trim(ifNull(gs.domain, ''))) = dates.domain_key
+    )
+    WHERE rn = 1
+)"""
+
+
 def _eff_arrival_expr(alias: str, marcar_alias: str = "ma") -> str:
     """Эффективная дата визита (порт v5 step13.py:444-448 + :521).
 
@@ -407,6 +455,7 @@ def _leads_branch_sql(date_from: str) -> str:
 WITH
 {_gs_account_cte()},
 {_leads_deduped_cte()},
+{_gs_domain_date_cte("SELECT DISTINCT lower(trim(ifNull(domain, ''))) AS domain_key, created_date AS date_val FROM leads_deduped WHERE created_date IS NOT NULL AND lower(trim(ifNull(domain, ''))) != ''")},
 {_marcar_arrivals_cte()},
 {_ad_dicts_cte()},
 lead_visits AS
@@ -484,7 +533,8 @@ lead_visits AS
        AND gs_ma.direction = 'Авто'
     LEFT JOIN camp_dict cd ON cd.cid = l.campaign_id
     LEFT JOIN ag_dict ad ON ad.agid = l.group_id
-    LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(l.domain, '')))
+    LEFT JOIN gs_domain_date gs
+        ON gs.domain_key = lower(trim(ifNull(l.domain, ''))) AND gs.date_val = l.created_date
     LEFT JOIN crm_by_domain crm
         ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(gs_ma.domain, ''), l.domain), '')))
     WHERE l.created_date IS NOT NULL
@@ -645,6 +695,7 @@ def _calls_branch_sql(date_from: str) -> str:
 WITH
 {_gs_account_cte()},
 {_marcar_arrivals_cte()},
+{_gs_domain_date_cte("SELECT DISTINCT lower(trim(ifNull(domain, ''))) AS domain_key, created_date AS date_val FROM ad_analytics.raw_calls WHERE created_date IS NOT NULL AND lower(trim(ifNull(domain, ''))) != ''")},
 posevy_calls_source_map AS
 (
     SELECT DISTINCT
@@ -709,7 +760,8 @@ call_visits AS
         ON c.source_type = 'marcar_crm_excel'
        AND gs_ma.domain_key = ma.sheet_domain
        AND gs_ma.direction = 'Авто'
-    LEFT JOIN gs_domain gs ON gs.domain_key = lower(trim(ifNull(c.domain, '')))
+    LEFT JOIN gs_domain_date gs
+        ON gs.domain_key = lower(trim(ifNull(c.domain, ''))) AND gs.date_val = c.created_date
     LEFT JOIN gs_account ga
         ON ga.login_key = lower(trim(ifNull(coalesce(nullIf(gs_ma.login_key, ''), gs.login_key), '')))
     LEFT JOIN crm_by_domain crm
@@ -845,6 +897,7 @@ marcar_sheet_ranked AS
     FROM marcar_sheet_rows
     GROUP BY lead_record_id
 ),
+{_gs_domain_date_cte("SELECT DISTINCT sheet_domain AS domain_key, arrival_date_raw AS date_val FROM marcar_sheet_rows WHERE sheet_domain != ''")},
 orphan_visits AS
 (
     SELECT
@@ -865,8 +918,9 @@ orphan_visits AS
         gs.sales_manager AS `менеджер`,
         ms.lead_status AS lead_status
     FROM marcar_sheet_ranked ms
-    INNER JOIN gs_domain gs
+    INNER JOIN gs_domain_date gs
         ON gs.domain_key = ms.sheet_domain
+       AND gs.date_val = ms.eff_arrival_date
        AND gs.direction = 'Авто'
     LEFT JOIN
     (
