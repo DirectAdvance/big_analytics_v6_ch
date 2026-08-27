@@ -49,7 +49,12 @@ dataset — `Большая аналитика_admin` с ClickHouse datasource `
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/cron_run.py
 
 # Только BA6 Power BI refresh (с отдельным уведомлением в Telegram).
+# По умолчанию refresh_powerbi считает fingerprints CH-источников и:
+# - не вызывает Power BI, если данные не изменились с последнего успешного refresh;
+# - отправляет selective refresh только по изменившимся таблицам;
+# - `--force` обходит fingerprints и грузит все таблицы.
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/refresh_powerbi.py
+~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/refresh_powerbi.py --force
 
 # То же, но с maintenance steps 2 и 7.
 ~/venv-v6/bin/python3 -u ~/big_analytics_v6_ch/pipeline.py --include-maintenance

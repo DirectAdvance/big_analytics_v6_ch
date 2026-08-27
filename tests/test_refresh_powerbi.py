@@ -49,6 +49,8 @@ def test_refresh_runs_selective_ba6_refresh_and_waits_for_completion(monkeypatch
 
     monkeypatch.setattr(refresh_powerbi, "load_powerbi", lambda: config)
     monkeypatch.setattr(refresh_powerbi, "_token", lambda _: "token")
+    monkeypatch.setattr(refresh_powerbi, "_plan_refresh_tables", lambda dataset_id: (refresh_powerbi._ALL_TABLES, []))
+    monkeypatch.setattr(refresh_powerbi, "_record_loaded_fingerprints", lambda *args: None)
     monkeypatch.setattr(refresh_powerbi.requests, "get", lambda *args, **kwargs: next(responses))
     monkeypatch.setattr(
         refresh_powerbi.requests,
@@ -82,6 +84,7 @@ def test_refresh_does_not_report_success_while_previous_refresh_runs(monkeypatch
         "workspace_id": "workspace", "dataset_id": "dataset",
     })
     monkeypatch.setattr(refresh_powerbi, "_token", lambda _: "token")
+    monkeypatch.setattr(refresh_powerbi, "_plan_refresh_tables", lambda dataset_id: (refresh_powerbi._ALL_TABLES, []))
     monkeypatch.setattr(refresh_powerbi.requests, "get", lambda *args, **kwargs: next(responses))
 
     with pytest.raises(refresh_powerbi.PowerBIRefreshError, match="ещё выполняется"):
@@ -105,6 +108,8 @@ def test_refresh_retries_transient_polling_timeout(monkeypatch):
 
     monkeypatch.setattr(refresh_powerbi, "load_powerbi", lambda: config)
     monkeypatch.setattr(refresh_powerbi, "_token", lambda _: "token")
+    monkeypatch.setattr(refresh_powerbi, "_plan_refresh_tables", lambda dataset_id: (refresh_powerbi._ALL_TABLES, []))
+    monkeypatch.setattr(refresh_powerbi, "_record_loaded_fingerprints", lambda *args: None)
     monkeypatch.setattr(refresh_powerbi.requests, "get", get)
     monkeypatch.setattr(
         refresh_powerbi.requests,
@@ -131,6 +136,7 @@ def test_refresh_logs_failed_request_details(monkeypatch, caplog):
         "workspace_id": "workspace", "dataset_id": "dataset",
     })
     monkeypatch.setattr(refresh_powerbi, "_token", lambda _: "token")
+    monkeypatch.setattr(refresh_powerbi, "_plan_refresh_tables", lambda dataset_id: (refresh_powerbi._ALL_TABLES, []))
     monkeypatch.setattr(refresh_powerbi.requests, "get", lambda *args, **kwargs: next(responses))
     monkeypatch.setattr(
         refresh_powerbi.requests,
@@ -144,6 +150,71 @@ def test_refresh_logs_failed_request_details(monkeypatch, caplog):
     assert "diagnostic detail" in caplog.text
 
 
+def test_refresh_skips_powerbi_post_when_fingerprints_are_unchanged(monkeypatch):
+    monkeypatch.setattr(refresh_powerbi, "load_powerbi", lambda: {
+        "workspace_id": "workspace", "dataset_id": "dataset",
+    })
+    monkeypatch.setattr(refresh_powerbi, "_plan_refresh_tables", lambda dataset_id: ([], []))
+    monkeypatch.setattr(refresh_powerbi, "_token", lambda _: pytest.fail("token should not be requested"))
+    monkeypatch.setattr(refresh_powerbi.requests, "post", lambda *args, **kwargs: pytest.fail("POST should not run"))
+
+    assert refresh_powerbi.refresh_powerbi() == -1
+
+
+def test_refresh_posts_only_changed_tables(monkeypatch):
+    config = {"workspace_id": "workspace", "dataset_id": "dataset"}
+    responses = iter([
+        Response({"value": [{"datasourceType": "Extension"}]}),
+        Response({"value": [{"status": "Completed"}]}),
+        Response({"status": "Completed"}),
+    ])
+    posts = []
+    changed = ["big_analytics_full", "Dim_Date"]
+    fingerprints = [refresh_powerbi.TableFingerprint("big_analytics_full", "bi_pbi_big_analytics_full", 10, "fp")]
+
+    monkeypatch.setattr(refresh_powerbi, "load_powerbi", lambda: config)
+    monkeypatch.setattr(refresh_powerbi, "_token", lambda _: "token")
+    monkeypatch.setattr(refresh_powerbi, "_plan_refresh_tables", lambda dataset_id: (changed, fingerprints))
+    monkeypatch.setattr(refresh_powerbi, "_record_loaded_fingerprints", lambda *args: None)
+    monkeypatch.setattr(refresh_powerbi.requests, "get", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(
+        refresh_powerbi.requests,
+        "post",
+        lambda *args, **kwargs: posts.append((args, kwargs))
+        or Response(status_code=202, headers={"Location": "https://status.test/1"}),
+    )
+
+    assert refresh_powerbi.refresh_powerbi() >= 0
+    assert posts[0][1]["json"]["objects"] == [{"table": "big_analytics_full"}, {"table": "Dim_Date"}]
+
+
+def test_force_refresh_posts_all_tables_and_records_baseline(monkeypatch):
+    config = {"workspace_id": "workspace", "dataset_id": "dataset"}
+    responses = iter([
+        Response({"value": [{"datasourceType": "Extension"}]}),
+        Response({"value": [{"status": "Completed"}]}),
+        Response({"status": "Completed"}),
+    ])
+    fingerprint = refresh_powerbi.TableFingerprint("Dim_Date", "bi_Dim_Date", 238, "fp")
+    recorded = []
+
+    monkeypatch.setattr(refresh_powerbi, "load_powerbi", lambda: config)
+    monkeypatch.setattr(refresh_powerbi, "_token", lambda _: "token")
+    monkeypatch.setattr(refresh_powerbi, "_plan_refresh_tables", lambda dataset_id: pytest.fail("planner should not run"))
+    monkeypatch.setattr(refresh_powerbi, "_current_fingerprints", lambda client: [fingerprint])
+    monkeypatch.setattr(refresh_powerbi, "get_client", lambda: object())
+    monkeypatch.setattr(refresh_powerbi, "_record_loaded_fingerprints", lambda *args: recorded.append(args))
+    monkeypatch.setattr(refresh_powerbi.requests, "get", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(
+        refresh_powerbi.requests,
+        "post",
+        lambda *args, **kwargs: Response(status_code=202, headers={"Location": "https://status.test/1"}),
+    )
+
+    assert refresh_powerbi.refresh_powerbi(force=True) >= 0
+    assert recorded[0][1] == [fingerprint]
+
+
 def test_cron_refreshes_powerbi_only_after_successful_pipeline(tmp_path, monkeypatch):
     calls = []
     # Крон Victory задаёт `BA6_POWERBI_REFRESH=1` в самой строке расписания; без него
@@ -153,7 +224,7 @@ def test_cron_refreshes_powerbi_only_after_successful_pipeline(tmp_path, monkeyp
     monkeypatch.setattr(cron_run, "rotate_logs", lambda: None)
     monkeypatch.setattr(cron_run, "run_pipeline", lambda _: calls.append("pipeline") or 0)
     monkeypatch.setattr(cron_run, "run_powerbi_refresh", lambda _: calls.append("powerbi") or 0)
-    monkeypatch.setattr(cron_run, "build_message", lambda *args: "ok")
+    monkeypatch.setattr(cron_run, "build_message", lambda *args, **kwargs: "ok")
     monkeypatch.setattr(cron_run, "send_html", lambda *args, **kwargs: True)
 
     assert cron_run.main() == 0
