@@ -440,8 +440,8 @@ ad_analytics_bi/
     │   │     • impressions, clicks, cost NUMERIC
     │   │     • "Все формы", "CRM: Заказ создан", "CRM: Заказ оплачен" NUMERIC
     │   │     • "CRM: Спам заказ", "CRM: Заказ отменен" NUMERIC
-    │   │     • domain, "логин", "директолог", "город", "регион", "салон" TEXT
-    │   │     • "шаблон", "тип_сайта", "статус", "направление" TEXT
+    │   │     • account_login, site_key, "специалист" TEXT
+    │   │     • domain/"город"/"регион"/"салон"/"шаблон"/"тип_сайта"/"статус"/"направление" — в bi_* view
     │   │     • project_manager, client_id, campaign_code, tp TEXT
     │   │     • cpc_cpa, site_quiz, adgroup_code, adgroup_brand TEXT
     │   │     • updated_at TIMESTAMPTZ
@@ -453,8 +453,8 @@ ad_analytics_bi/
     │   │     • distance_km INTEGER, distance_km_agreg INTEGER
     │   │     • impressions, clicks, cost NUMERIC
     │   │     • "Все формы", "CRM: Заказ создан/оплачен/спам/отменен" NUMERIC
-    │   │     • domain, "логин", "директолог", "город", "регион", "салон" TEXT
-    │   │     • "шаблон", "тип_сайта", "статус", "направление" TEXT
+    │   │     • account_login, site_key, "специалист" TEXT
+    │   │     • domain/"город"/"регион"/"салон"/"шаблон"/"тип_сайта"/"статус"/"направление" — в bi_* view
     │   │     • project_manager, client_id, campaign_code, tp, cpc_cpa, site_quiz TEXT
     │   │     • updated_at TIMESTAMPTZ
     │   │
@@ -474,8 +474,8 @@ ad_analytics_bi/
     │   │     • criterion_id BIGINT, criterion, criterion_raw, criterion_type TEXT
     │   │     • impressions, clicks, cost NUMERIC
     │   │     • "Все формы", "CRM: Заказ создан/оплачен/спам/отменен" NUMERIC
-    │   │     • domain, "логин", "директолог", "город", "регион", "салон" TEXT
-    │   │     • "шаблон", "тип_сайта", "статус", "направление" TEXT
+    │   │     • account_login, site_key, "специалист" TEXT
+    │   │     • domain/"город"/"регион"/"салон"/"шаблон"/"тип_сайта"/"статус"/"направление" — в bi_* view
     │   │     • project_manager, client_id, campaign_code, tp, cpc_cpa, site_quiz TEXT
     │   │     • updated_at TIMESTAMPTZ
     │   │

@@ -173,10 +173,11 @@ step 145). Актуальные инварианты и открытые рас�
 
 ## Отдельные витрины
 
-`direct_feed_funnel/` — ClickHouse-витрина площадок РСЯ/Direct placement с историческим
-именем feed funnel. Активный шаг: `direct_feed_funnel.build`, вызывается из корневого
-`pipeline.py` как step 144. Физический факт — `fact_direct_feed_funnel_light`; старое имя
-`fact_direct_feed_funnel` оставлено как compatibility view.
+`direct_feed_funnel/` — ClickHouse-витрина товарных фидов Директа. Активный шаг:
+`direct_feed_funnel.build`, вызывается из корневого `pipeline.py` как step 144. Физический факт —
+`fact_direct_feed_funnel_light` строится из `raw_data.direct_feed_report_rows` и
+`raw_data.direct_cookie_feed_urls`; старое имя `fact_direct_feed_funnel` оставлено как
+compatibility view.
 Старые v5 helper-скрипты перенесены в `archive/postgres_legacy_2026_07_31/`.
 Подробности: [`direct_feed_funnel/README.md`](direct_feed_funnel/README.md).
 
@@ -238,8 +239,9 @@ Power BI продолжит показывать старое распредел
 
 Все тяжёлые вычисления (агрегации, JOIN, оконные функции, форматирование дат, бизнес-логика) выполняются на стороне ClickHouse (в шагах пайплайна или в SQL-DDL источника).
 
-> ⚠️ **Паритет с v5.** BA6 PBIP уже читает ClickHouse, но финально заменить v5 «как есть»
-> ещё нельзя: часть таблиц держится на временных `raw_new_*`, а главная витрина стала звездой.
+> ⚠️ **Паритет с v5.** BA6 PBIP уже читает ClickHouse и feed-слой восстановлен, но это не плоская
+> копия v5: главная витрина работает через star-измерения, BI ограничен нишей `Авто`, а прямой
+> `raw_new_*` хвост остался только в `yandex_direct_accounts_human_cyborgs`.
 > Полный разбор — [`PBI_TABLES.md`](PBI_TABLES.md) §0.
 
 Power BI используется **только** для:

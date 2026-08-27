@@ -639,25 +639,25 @@ v5↔v6 data parity FAIL: расход +0.36%, обращения −1.98%, за
 `yandex_direct_type_placement_report_master` читают совместимые `bi_*` над
 `raw_data.direct_cookie_*`, а не `raw_new_*`.
 
-Остаются пробелы/временные источники: `analytics_report_placement` и
-`analytics_report_placement_links` читают `raw_new_arp_fact`,
-`yandex_direct_search_query_report_master` читает `raw_new_search_query_report_master_pbi`,
-`yandex_direct_accounts_human_cyborgs` читает `raw_new_human_cyborgs`.
+Остаётся один временный источник: `yandex_direct_accounts_human_cyborgs` читает
+`raw_new_human_cyborgs`. `analytics_report_placement` переведён на
+`bi_analytics_report_placement` поверх `raw_data.yandex_direct_report_rows`,
+`analytics_report_placement_links` собирается в PBIP из этой view и
+`bi_yandex_direct_tp_placement_links`, а `yandex_direct_search_query_report_master` читает
+`bi_yandex_direct_search_query_report_master`.
 Вычеркнуты из контракта решением: `analytics_report_criterion` (`arc_fact`),
 `analytics_report_feed` (`arf_fact`) — закреплено тестом `tests/test_pbi_contract_lists.py`.
 
-Отдельно: `fact_direct_feed_funnel` в v6 носит старое имя, но содержит агрегат по площадкам РСЯ
-(13.58 M строк, воронки нет) вместо воронки по фидам (92 016 строк, 36 колонок).
-Причина — `direct_feed_funnel/build.py`, маркер `FEED_FUNNEL_NOT_PORTED_2026-08-05`.
-20.08 ошибочные страницы «Фиды» скрыты в admin/user PBIP; `build_arf_fact`/`build_arc_fact`
-удалены, чтобы старые compatibility-view нельзя было пересоздать ручным вызовом. Простой join к
-`direct_cookie_feed_urls.campaign_ids` запрещён, потому что кампании могут иметь несколько фидов
-и расход будет размножен.
+27.08 `fact_direct_feed_funnel` переведён на настоящий feed source:
+`raw_data.direct_feed_report_rows` + `raw_data.direct_cookie_feed_urls`. РСЯ-площадки больше не
+подмешиваются в feed-таблицу, а посевные `tp8/tp9/tp10` отфильтрованы. Legacy
+`build_arf_fact`/`build_arc_fact` удалены, чтобы старые compatibility-view нельзя было пересоздать
+ручным вызовом.
 
 **Где.** Матрица со строками и колонками — `PBI_TABLES.md` §0. Запрос владельцу сырья —
 `RAW_DATA_REQUEST.md`.
-**Статус.** PARTIAL/accepted. Не блокирует принятое ядро BA6; блокирует только восстановление
-скрытых/unsupported страниц и замену оставшихся `raw_new_*`.
+**Статус.** PARTIAL/accepted. Не блокирует принятое ядро BA6; блокирует только замену последнего
+`raw_new_human_cyborgs` и финальную визуальную проверку после Power BI refresh.
 
 ---
 

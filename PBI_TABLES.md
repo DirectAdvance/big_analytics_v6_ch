@@ -4,7 +4,7 @@
 
 ---
 
-# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-20
+# §0. Паритет PBI v5 ↔ v6_ch — замер 2026-08-20, обновлено 2026-08-27
 
 Вопрос, на который отвечает раздел: **хватит ли данных v6, чтобы собрать те же отчёты Power BI,
 что живут на v5.** Метод: живая модель
@@ -15,26 +15,25 @@
 
 ## §0.1 Короткий ответ
 
-**Операционное ядро BA6 готово, но фидовая страница остаётся unsupported.** Ядро отчёта (главная
-витрина, звезда, spend-витрины по регионам/форматам/критериям, воронки, корректировки, 404,
-cookie-страницы, поисковые запросы) — есть и по числам сходится с v5 в пределах текущих принятых
-дельт.
-После перевязки PBIP на `*_star` и direct-cookie `bi_*` остаются такие пробелы:
+**Рабочее BI-ядро BA6 перенесено.** Главная витрина, star-измерения, spend-витрины по
+регионам/форматам/критериям, фиды, РСЯ-площадки, корректировки, 404, cookie-страницы и поисковые
+запросы есть в ClickHouse и по принятым гейтам сходятся с v5. Это не плоская копия v5: модель
+читает `bi_*`/`*_star`, BI ограничен нишей `Авто`, а Service покажет новые данные только после
+Power BI refresh.
+После перевязки PBIP на `*_star` и direct-cookie/feed `bi_*` остаются такие пробелы:
 
 | # | Таблица модели | Причина |
 |---|---|---|
-| 1 | `analytics_report_placement` | нет источника: `yandex_direct_report_placement` не переносился в `raw_data` |
-| 2 | `analytics_report_placement_links` | зависит от `arp_fact` (сам справочник `tp_placement_links` в v6 есть — 7 029 строк) |
-| 3 | `analytics_report_criterion` | `arc_fact` удалён из контракта v6 (`tests/test_pbi_contract_lists.py`) |
-| 4 | `analytics_report_feed` | `arf_fact` удалён из контракта v6 |
-| 5 | `yandex_direct_accounts_human_cyborgs` | справочника нет в `raw_data`; PBIP пока читает `raw_new_human_cyborgs` |
+| 1 | `analytics_report_criterion` | legacy `arc_fact` удалён из активного контракта v6 (`tests/test_pbi_contract_lists.py`) |
+| 2 | `analytics_report_feed` | legacy `arf_fact` удалён; активная фидовая страница читает `fact_direct_feed_funnel` |
+| 3 | `yandex_direct_accounts_human_cyborgs` | справочника нет в `raw_data`; PBIP пока читает `raw_new_human_cyborgs` |
 | — | `Dim_Distance` (DAX) | считается из `distance_km_agreg`; с 2026-08-24 колонка физическая в `fact_region_spend` (шаг 141, джойн к порту `ad_analytics.gsheet_yandex_direct_id_location` — `migrations/04_port_geo_location_dict_2026-08-24.py`), в `bi_*`-вьюхах это проекция поверх неё, а не единственный источник; в `fact_region_zayavki` колонки по-прежнему нет |
-| — | `fact_direct_feed_funnel` (по смыслу) | имя занято, но это **не** воронка по фидам — см. §0.3 |
 
-20.08 страницы «Я.Директ_фиды/Фиды» скрыты в admin/user PBIP, потому что
-`bi_Dim_PlacementFeed` содержит 35 441 площадку и 0 `feed_name/feed_url`. В админском PBIP также
-скрыты две страницы `Дубликат Я.Директ_тексты объявлений_тексты`; рабочая страница текстов
-объявлений остаётся отдельной.
+27.08 после появления `raw_data.direct_feed_report_rows` step144 строит реальные фиды:
+`fact_direct_feed_funnel_light` = 1 226 350 строк, `bi_Dim_PlacementFeed` = 51 строка. PBIP
+таблица `fact_direct_feed_funnel` читает `bi_fact_direct_feed_funnel_star`. РСЯ-площадки отделены:
+`bi_analytics_report_placement` снова строится из `raw_data.yandex_direct_report_rows`, поэтому
+фидовая таблица и отчёт площадок больше не подменяют друг друга.
 
 18.08 `yandex_direct_ads_texts` и `yandex_direct_type_placement_report_master` переведены в PBIP
 на `bi_yandex_direct_ads_texts` и `bi_yandex_direct_type_placement_report_master`. Обе view читают
@@ -43,8 +42,7 @@ cookie-страницы, поисковые запросы) — есть и по
 `raw_new_type_placement_types` больше не читаются активным PBIP. `goal_crm_order_paid` пока
 заполняется нулём: в новых cookie-таблицах есть только общий `goals`.
 
-Оставшиеся прямые `raw_new` в BA6 PBIP на 18.08: `raw_new_arp_fact`,
-`raw_new_search_query_report_master_pbi`, `raw_new_human_cyborgs`.
+Оставшийся прямой `raw_new` в BA6 PBIP на 27.08: `raw_new_human_cyborgs`.
 
 19.08 локальный код PBI hidden keys переведён: `bi_fact_criterion_spend_star`,
 `bi_Dim_Criterion` / `bi_dim_criterion`, `bi_Dim_Site`, `bi_fact_region_spend_star` и
@@ -71,16 +69,16 @@ Power BI.
 | `Dim_Location` | `public.Dim_Location` | 16 200 | `Dim_Location` | 16 317 | ✅ |
 | `Dim_Site` | `public.Dim_Site` | 5 023 | `Dim_Site` | 5 032 | ⚠️ |
 | `analytics_report_criterion` | `public.arc_fact` | 151 288 | — | — | ❌ |
-| `analytics_report_feed` | `public.arf_fact` | 91 898 | — | — | ❌ |
-| `analytics_report_placement` | `public.arp_fact` | 1 927 669 | — | — | ❌ |
-| `analytics_report_placement_links` | `arp_fact` + `yandex_direct_tp_placement_links` | 5 093 | `yandex_direct_tp_placement_links` | 7 029 | ❌ |
+| `analytics_report_feed` | `public.arf_fact` | 91 898 | — | — | ❌ legacy |
+| `analytics_report_placement` | `public.arp_fact` | 1 927 669 | `bi_analytics_report_placement` | 13 263 521 | ⚠️ |
+| `analytics_report_placement_links` | `arp_fact` + `yandex_direct_tp_placement_links` | 5 093 | PBIP: `bi_analytics_report_placement` + `bi_yandex_direct_tp_placement_links` | живой join | ⚠️ |
 | `check_utm_fuck_direct` | `public.check_utm_fuck_direct` | 1 828 | `check_utm_fuck_direct` | **3 981** | ✅ |
 | `dim_criterion` | `public.dim_criterion` | 86 076 | `dim_criterion` | 94 217 | ✅ |
 | `direct_history` | `yandex_direct_raw.yandex_direct_history` | 77 836 | `yandex_direct_history` | 35 823 | ⚠️ |
 | `fact_adformat_spend` | `public.fact_adformat_spend_light` | 3 018 471 | `fact_adformat_spend` | 3 104 439 | ⚠️ |
 | `fact_criterion_spend` | `public.fact_criterion_spend_light` | 4 837 544 | `fact_criterion_spend` | 4 977 987 | ⚠️ |
 | `fact_criterion_zayavki` | `public.fact_criterion_zayavki` | 137 602 | `fact_criterion_zayavki` | 137 890 | ✅ |
-| `fact_direct_feed_funnel` | `public.fact_direct_feed_funnel` | 92 016 | `fact_direct_feed_funnel` | 13 584 766 | ❌ смысл |
+| `fact_direct_feed_funnel` | `public.fact_direct_feed_funnel` | 92 016 | `bi_fact_direct_feed_funnel_star` | 1 226 350 | ⚠️ |
 | `fact_ml_korrektirovki` | `public.fact_ml_korrektirovki` | 11 674 | `fact_ml_korrektirovki` | 15 396 | ✅ |
 | `fact_region_spend` | `public.fact_region_spend_light` | 13 989 880 | `fact_region_spend` | 14 175 006 | ⚠️ |
 | `fact_region_zayavki` | `public.fact_region_zayavki` | 188 432 | `fact_region_zayavki` | 188 691 | ⚠️ |
@@ -104,6 +102,9 @@ Power BI.
 `неверный_кодер_new`, `week_start`, `День недели`, конкатенации «номер | название») переехали в
 `Dim_Campaign` / `Dim_AdGroup` / `Dim_Date` / `Dim_Source` / `Dim_Adjustment`. Все они проверены —
 существуют в v6. **Модель PBI нужно перевязать на звезду; на плоскую таблицу она больше не сядет.**
+С 2026-08-27 `pbi_big_analytics_full` намеренно отдаёт только ось
+`атрибуция = 'По дате заявки'`: если сложить её с `По дате визита`, продажи задваиваются в PBI и
+месячный CPL продажи искусственно падает.
 
 Ровно две колонки v5 отсутствуют в v6 где бы то ни было:
 `домен для зоны` и `id группы | логин | id кампании`.
@@ -112,23 +113,28 @@ Power BI.
 `manager_login`; последние два живут в `Dim_Salon` / `Dim_ManagerLogin`.
 **`Dim_City_Tier`** — live-измерение для PBI-среза `тир_месяца`: `city_tier_key`, `город`,
 `тир_месяца`, `тир_месяца_backfill`, `тир_текущий`. Строится из `ad_analytics.gsheet_city_tier`.
+**Правило по нишам для BA6 Power BI** — в BI рассматривается только `niche='Авто'`. Не-авто ниши
+(`Другое`, `Недвижимость`, `Медицина`, `Строительство` и т.д.) не добавляем в BI-измерения,
+страницы и срезы; расход/строки таких ниш не являются дефектом доменной модели BA6.
 **`Dim_Site`** — атрибуты переименованы с английского на русский (`city`→`город`, `salon`→`салон`,
 `directologist`→`специалист` и т.д.); реально нет только `client_id` и `niche`. Справочник
 `reference_data.gsheet_sites` используется для PBI только по `niche='Авто'`: остальные ниши не
 должны попадать в `Dim_Site`, `bi_Dim_Campaign` и `bi_analytics_report_placement`.
 **`Dim_AdGroup`** — нет `ag_part1_name` в физической таблице, есть в `bi_Dim_AdGroup`.
 
-**`fact_region_spend` / `fact_adformat_spend` / `fact_criterion_spend`** — в физических таблицах нет
-конверсионных колонок `Все формы`, `CRM: Заказ создан/оплачен/Спам/отменен`, а также `network_key`,
-`distance_km`, `distance_km_agreg`, `updated_at`. Все они восстанавливаются во вьюхах
-`bi_fact_*` / `pbi_import_region_spend` — **модель обязана читать `bi_*`, а не физические факты.**
+**`fact_region_spend` / `fact_adformat_spend` / `fact_criterion_spend`** — физические таблицы
+несут `account_login`, `site_key` и собственный датно-корректный `специалист`: он считается через
+`gsheet_sites` по `(login,date)` и затем через `specialist_correction_expr`. В физических таблицах
+нет `network_key`, `updated_at` и части текстовых дублей; PBI читает `bi_fact_*` / `*_star`, где
+`специалист` прокинут из факта, а не берётся из бездатного `Dim_Site`.
 `fact_region_zayavki` дополнительно потерял `location`, `Область`, `GeoRegionType` (ушли в `Dim_Location`).
 
-**`fact_direct_feed_funnel`** — имя сохранено, содержимое другое. В v5 это воронка по товарным
-фидам (92 016 строк, 36 колонок, полная воронка `kol_vo_zayavok…prodazhi`, `feed_id`/`feed_name`/`feed_url`).
-В v6 это агрегат по площадкам РСЯ (13 584 766 строк, только `cost/clicks/impressions/
-all_forms/crm_order_*`, **воронки нет вообще**). Причина и список недостающих источников —
-шапка `direct_feed_funnel/build.py` (`FEED_FUNNEL_NOT_PORTED_2026-08-05`). Страница «Фиды» в v6 не соберётся.
+**`fact_direct_feed_funnel`** — имя сохранено, но реализация v6 ClickHouse другая. Step144 читает
+`raw_data.direct_feed_report_rows`, обогащает `feed_name/feed_url/feed_url_key` из
+`raw_data.direct_cookie_feed_urls` и исключает посевные `tp8/tp9/tp10`. В физическом факте есть
+расход/клики/показы и CRM-цели (`all_forms`, `crm_order_created`, `crm_order_paid`); PBI-compat
+добавляет legacy-колонки воронки как прямые проекции этих целей, поэтому это рабочий feed-слой,
+но не полная копия старого BA5 алгоритма фидовой атрибуции.
 
 **`direct_history`** — 35 823 строки против 77 836 и 12 колонок против 19 (нет `ulogin`,
 `user_login`, `user_uid`, `category`, `ad_group_id`, `ad_group_name`, `raw_event`, `loaded_at`).
@@ -171,19 +177,18 @@ ClickHouse. `type_placement_ru` теперь маппится внутри view;
 
 ## §0.5 Что нужно сделать, чтобы отчёты собрались
 
-1. Довести оставшиеся источники: `yandex_direct_report_placement` / `arp_fact`, готовый агрегат
-   search-query для PBI, `accounts_human_cyborgs`. Передаточная спецификация —
-   [`../../docs/DIRECT_RAW_HANDOVER.md`](../../docs/DIRECT_RAW_HANDOVER.md).
-2. `direct_cookie_feed_urls` использовать как справочник фидов, но он не заменяет
-   `analytics_report_placement` сам по себе.
+1. Довести оставшийся источник `accounts_human_cyborgs`: сейчас PBIP ещё читает
+   `raw_new_human_cyborgs`.
+2. После публикации/refresh Power BI проверить, что опубликованный Service читает текущие
+   `bi_*`/`*_star`, а не старые снимки.
 3. Пустые `bi_*` больше не разрешены: `check_utm_fuck_direct` должен оставаться непустым, а
    `yandex_direct_return_commission_report` / `bi_yandex_direct_return_commission_report`
    выведены из контракта и удалены из live ClickHouse 2026-08-17.
 4. Проверить полный Power BI Desktop/Service refresh после перевязки на `*_star` и direct-cookie
    `bi_*`.
 5. Дать 30-дневной истории step14 наполниться ночным cron; до этого `minus_delta` короткая.
-6. Решить, что делать с `analytics_report_criterion/feed/placement` — восстанавливать или
-   объявить unsupported (сейчас они вычеркнуты из контракта тестом `tests/test_pbi_contract_lists.py`).
+6. Не возвращать legacy `arc_fact/arf_fact`: `analytics_report_criterion/feed` вычеркнуты из
+   активного контракта тестом `tests/test_pbi_contract_lists.py`.
 7. Держать `PBI_EMPTY_ALLOWED` пустым: любой активный пустой `bi_*` должен падать гейтом (#40).
 
 ---

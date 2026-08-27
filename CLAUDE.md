@@ -11,7 +11,7 @@
   `victory`; no separate `yandex` SSH host is used.
 - Victory stores only code, `~/venv-v6`, and rotated logs. Data, marts, raw layers, and heavy caches
   live in Yandex Cloud ClickHouse, not on Victory disk.
-- Daily run is scheduled on Victory: `0 2 * * *` UTC = 07:00 Yekaterinburg. It runs `cron_run.py`,
+- Daily run is scheduled on Victory: `0 4 * * *` UTC = 09:00 Yekaterinburg. It runs `cron_run.py`,
   not `pipeline.py` — the pipeline itself sends no Telegram at all, so the wrapper reports the
   outcome. Night pipeline is also scheduled: `10 18 * * *` UTC = 23:10 Yekaterinburg via
   `step_cron_night/pipeline_night.py` with `/tmp/ba6_night.lock`.
@@ -22,9 +22,9 @@
 - One live PostgreSQL dependency remains: step3 `_fetch_reviews_rows_from_postgres` reads
   `yandex_direct_raw.yandex_direct_reports_reviews` from Victory PG — reviews are absent from
   `raw_data`.
-- BA6 operational core is accepted after run `ed6bfc6f9c23` (2026-08-20). Power BI feed pages stay
-  unsupported/hidden: `fact_direct_feed_funnel` in v6 is placement spend, not BA5 feed funnel
-  (`PBI_TABLES.md` §0). Raw Direct data itself is richer than v5 (`RAW_DIFF_FINDINGS.md`).
+- BA6 operational core is accepted after run `ed6bfc6f9c23` (2026-08-20). As of 2026-08-27 the
+  feed funnel is rebuilt from `raw_data.direct_feed_report_rows`; `bi_analytics_report_placement`
+  is a separate RSYA placement view over `raw_data.yandex_direct_report_rows` (`PBI_TABLES.md` §0).
 - Freshness must be read from table dates, never from `raw_data.etl_runs` or
   `leads_all.updated_at` — both are stale by design (`KNOWN_ISSUES.md` #43).
 - Latest status, open v5↔v6 deltas, and run ids live in `STATE.md` and `KNOWN_ISSUES.md`.
@@ -64,6 +64,8 @@
 - Do not add a new golden/invariant block to `verify_big_analytics.py` without asking Semyon first.
 - Fractional pixel attribution must never be cast to `int` per row. Round only final sums.
 - `big_analytics_full.источник` must not be NULL; `"Date" >= '2026-01-01'`.
+- BA6 Power BI covers only niche `Авто`. Non-auto niches are not analyzed in BI and must not be
+  added to BI dimensions/pages to explain orphan domain spend.
 - Funnel nesting: `korr ≥ kval ≥ priezd ≥ prodazhi`, `credit ≥ approved`.
 - No double lead accounting: `direct ∩ crop_targeting = 0`.
 - The specialist column is `"специалист"`, not `директолог`.
