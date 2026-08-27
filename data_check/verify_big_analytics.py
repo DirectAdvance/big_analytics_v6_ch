@@ -15,6 +15,7 @@ from config.ch_db import get_client
 from config.ch_settings import GSHEET_SITES_EFFECTIVE
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, table_exists
 from corrections import _KUDERKO_DATE, _KUDERKO_LOGINS  # единственный источник — не дублировать
+from star_refactor.build_pbi_compat import BI_EXCLUDED_SPECIALISTS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("verify_big_analytics")
@@ -160,7 +161,8 @@ PBI_RESTORED_TEXT_COLUMNS = {
 DIRECT_SPEND_LOSS_TOLERANCE = Decimal("1.00")
 BI_CONTRACT_TOLERANCE = Decimal("1.00")
 CLOSED_MONTH_DRIFT_RATIO = Decimal("0.04")
-BAD_SPECIALISTS = ("", "Без специалиста", "Посевы", "Тоборев Владимир")
+BAD_SPECIALISTS = ("", "Без специалиста", "Звонки", "Посевы", "Тоборев Владимир")
+PBI_BAD_SPECIALIST_LABELS = tuple(value for value in BI_EXCLUDED_SPECIALISTS if value)
 
 
 def _golden_kuderko_sql(source_sql: str) -> str:
@@ -608,6 +610,31 @@ def _sales_without_real_specialist_rows(client) -> list[tuple]:
     ).result_rows
 
 
+def _pbi_bad_specialist_label_rows(client) -> list[tuple]:
+    return client.query(
+        """
+        SELECT
+            toStartOfMonth(Date) AS month,
+            ifNull(`специалист`, '') AS specialist,
+            ifNull(`домен`, '') AS domain,
+            ifNull(`аккаунт|сайт`, '') AS account_site,
+            round(sum(total_cost), 2) AS cost,
+            round(sum(`Обращения`), 4) AS obrashenia,
+            round(sum(prodazhi), 4) AS sales
+        FROM ad_analytics.pbi_big_analytics_full
+        WHERE ifNull(trim(`специалист`), '') IN {bad_labels:Array(String)}
+        GROUP BY month, specialist, domain, account_site
+        HAVING cost > {tolerance:Decimal(18, 2)}
+            OR obrashenia > 0.001
+            OR sales > 0.001
+        ORDER BY cost DESC, obrashenia DESC, sales DESC
+        LIMIT 20
+        """,
+        parameters={"bad_labels": list(PBI_BAD_SPECIALIST_LABELS), "tolerance": BI_CONTRACT_TOLERANCE},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+
+
 def _kuderko_raw_coverage(client) -> tuple[int, int, list[str]]:
     """Сколько логинов `corrections._KUDERKO_LOGINS` реально есть в сыром источнике.
 
@@ -792,6 +819,16 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
         )
     if no_spec_sales:
         failures.append(f"sales_without_real_specialist_slices={len(no_spec_sales)}")
+
+    pbi_bad_specialists = _pbi_bad_specialist_label_rows(client)
+    log.info("bi_contract_pbi_bad_specialist_label_slices=%d", len(pbi_bad_specialists))
+    for row in pbi_bad_specialists[:5]:
+        log.error(
+            "bi_contract_pbi_bad_specialist_label month=%s specialist=%s domain=%s account_site=%s cost=%s obr=%s sales=%s",
+            *row,
+        )
+    if pbi_bad_specialists:
+        failures.append(f"bi_contract_pbi_bad_specialist_label_slices={len(pbi_bad_specialists)}")
 
     if not no_star:
         for table in PBI_COMPAT_OBJECTS:

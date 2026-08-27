@@ -50,6 +50,38 @@ def direct_feed_non_posev_campaign_sql(alias: str = "r") -> str:
     )
 
 
+BI_EXCLUDED_SPECIALISTS = (
+    "",
+    "Без специалиста",
+    "Звонки",
+    "Посевы",
+    "Кудерко Семен",
+    "Питеркина Дарья",
+    "Тоборев Владимир",
+    "SEO",
+    "SEO Flow",
+    "Аксиома",
+    "Александра Данчинова",
+    "Банк",
+    "Ильин Данил",
+    "Коллектор",
+    "Контекст",
+    "Медиа-Актив",
+)
+
+
+def _sql_string_list(values: tuple[str, ...]) -> str:
+    return "(" + ", ".join("'" + value.replace("'", "''") + "'" for value in values) + ")"
+
+
+def _bi_specialist_expr(expr: str) -> str:
+    clean = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
+    return (
+        f"if({clean} IN {_sql_string_list(BI_EXCLUDED_SPECIALISTS)}, "
+        f"CAST(NULL, 'Nullable(String)'), CAST({clean}, 'Nullable(String)'))"
+    )
+
+
 PBI_SOURCE_OBJECTS = [
     "Dim_Account",
     "Dim_AdGroup",
@@ -172,7 +204,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 'Заявки',
                 dcs.`тип_заявки`
             ) AS `тип_заявки`,
-            f.`специалист` AS `специалист`,
+            {_bi_specialist_expr("f.`специалист`")} AS `специалист`,
             dsl.`салон` AS `салон`,
             dsl.`город` AS `город`,
             dsl.`регион` AS `регион`,
@@ -668,7 +700,7 @@ def _region_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(round(f.crm_order_paid)) AS `CRM: Заказ оплачен`,
             toInt64(round(f.crm_spam_order)) AS `CRM: Спам заказ`,
             toInt64(round(f.crm_order_canceled)) AS `CRM: Заказ отменен`,
-            f.`специалист` AS `специалист`,
+            {_bi_specialist_expr("f.`специалист`")} AS `специалист`,
             ds.domain AS domain,
             now() AS updated_at
         FROM ad_analytics.fact_region_spend f
@@ -701,7 +733,7 @@ def _region_spend_star_pbi_sql(where_sql: str = "") -> str:
             toFloat64(f.crm_order_paid) AS crm_order_paid,
             toFloat64(f.crm_spam_order) AS crm_spam_order,
             toFloat64(f.crm_order_canceled) AS crm_order_canceled,
-            f.`специалист` AS `специалист`
+            {_bi_specialist_expr("f.`специалист`")} AS `специалист`
         FROM ad_analytics.fact_region_spend f
         {where_sql}
     """
@@ -723,7 +755,7 @@ def _adformat_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(0) AS `CRM: Заказ оплачен`,
             toInt64(0) AS `CRM: Спам заказ`,
             toInt64(0) AS `CRM: Заказ отменен`,
-            f.`специалист` AS `специалист`,
+            {_bi_specialist_expr("f.`специалист`")} AS `специалист`,
             ds.domain AS domain,
             now() AS updated_at
         FROM ad_analytics.fact_adformat_spend f
@@ -755,7 +787,7 @@ def _criterion_spend_pbi_sql(where_sql: str = "") -> str:
             toInt64(0) AS kval,
             toInt64(0) AS priezd,
             toInt64(0) AS prodazhi,
-            f.`специалист` AS `специалист`,
+            {_bi_specialist_expr("f.`специалист`")} AS `специалист`,
             ds.domain AS domain,
             now() AS updated_at
         FROM ad_analytics.fact_criterion_spend f
@@ -789,7 +821,7 @@ def _criterion_spend_star_pbi_sql(where_sql: str = "") -> str:
             toFloat64(f.crm_order_paid) AS `CRM: Заказ оплачен`,
             toFloat64(f.crm_spam_order) AS `CRM: Спам заказ`,
             toFloat64(f.crm_order_canceled) AS `CRM: Заказ отменен`,
-            f.`специалист` AS `специалист`
+            {_bi_specialist_expr("f.`специалист`")} AS `специалист`
         FROM ad_analytics.fact_criterion_spend f
         {where_sql}
     """
@@ -1058,7 +1090,7 @@ def _analytics_report_placement_pbi_sql() -> str:
             toInt64(0) AS `CRM: Спам заказ`,
             toInt64(0) AS `CRM: Заказ отменен`,
             CAST(dc.tp, 'Nullable(String)') AS tp,
-            ds.`специалист` AS `Специалист`,
+            {_bi_specialist_expr("ds.`специалист`")} AS `Специалист`,
             ds.`салон` AS `салон`,
             ds.`тип_сайта` AS `тип_сайта`,
             now() AS updated_at,
@@ -1173,7 +1205,7 @@ def _search_query_report_master_pbi_sql() -> str:
 
 def create_light_aliases(client) -> dict[str, int]:
     statements = {
-        "yandex_direct_korrektirovki": """
+        "yandex_direct_korrektirovki": f"""
             WITH gs_login AS
             (
                 SELECT
@@ -1198,7 +1230,7 @@ def create_light_aliases(client) -> dict[str, int]:
                 bid_percent,
                 korrektirovki_bid,
                 audience_id,
-                gs.directologist AS `специалист`,
+                {_bi_specialist_expr("gs.directologist")} AS `специалист`,
                 k.campaign_status,
                 CAST(NULL, 'Nullable(String)') AS status,
                 parseDateTimeBestEffortOrNull(synced_at) AS loaded_at
@@ -1349,8 +1381,8 @@ def _campaign_status_ru_expr(expr: str) -> str:
         f"{upper} IN ('ACCEPTED', 'ACTIVE'), 'Активна', "
         f"{upper} = 'DRAFT', 'Черновик', "
         f"{upper} = 'MODERATION', 'На модерации', "
-        f"{upper} = 'REJECTED', 'Отклонена', "
-        f"{upper} IN ('SUSPENDED', 'STOPPED'), 'Остановлена', "
+        f"{upper} IN ('REJECTED', 'MODERATION_DENIED'), 'Отклонена', "
+        f"{upper} IN ('SUSPENDED', 'STOPPED', 'TEMPORARILY_PAUSED', 'NO_MONEY'), 'Остановлена', "
         f"{upper} = 'ARCHIVED', 'Архив', {expr})"
     )
 
@@ -1360,8 +1392,10 @@ def _payment_model_ru_expr(expr: str) -> str:
     upper = f"upperUTF8({clean})"
     return (
         f"multiIf({clean} = '', 'Не указана', "
-        f"{upper} = 'CPA', 'за конверсии', "
-        f"{upper} = 'CPC', 'за клики', {expr})"
+        f"{upper} = 'CPA' OR position({upper}, 'CONVERSION') > 0 "
+        f"OR position({upper}, 'CPA') > 0 OR position({upper}, 'MAXPROFIT') > 0, 'за конверсии', "
+        f"{upper} = 'CPC' OR position({upper}, 'CPC') > 0 OR position({upper}, 'CLICK') > 0 OR position({upper}, 'MANUAL') > 0 "
+        f"OR position({upper}, 'CPM') > 0 OR position({upper}, 'CPV') > 0, 'за клики', {expr})"
     )
 
 
@@ -1473,7 +1507,7 @@ def _dim_crm_status_pbi_sql() -> str:
 
 
 def _dim_salon_pbi_sql() -> str:
-    return """
+    return f"""
         SELECT
             salon_key,
             `салон`,
@@ -1481,7 +1515,7 @@ def _dim_salon_pbi_sql() -> str:
             `регион`,
             `тип_сайта`,
             `шаблон`,
-            `специалист`,
+            {_bi_specialist_expr("`специалист`")} AS `специалист`,
             `проджект`,
             `менеджер`,
             `id_салона`,
@@ -1564,7 +1598,7 @@ def _dim_campaign_pbi_sql() -> str:
             {cpc_cpa} AS cpc_cpa,
             dc.site_quiz,
             {campaign_status} AS `статус_кампании`,
-            ss.specialist AS `специалист`,
+            {_bi_specialist_expr("ss.specialist")} AS `специалист`,
             CAST(NULL, 'Nullable(String)') AS manager_login,
             {campaign_status} AS campaign_status,
             {payment_model} AS payment_model,
@@ -1582,7 +1616,7 @@ def _dim_campaign_pbi_sql() -> str:
             'Не указана' AS cpc_cpa,
             '' AS site_quiz,
             {service_campaign_status} AS `статус_кампании`,
-            ss.specialist AS `специалист`,
+            {_bi_specialist_expr("ss.specialist")} AS `специалист`,
             CAST(NULL, 'Nullable(String)') AS manager_login,
             {service_campaign_status} AS campaign_status,
             'Не указана' AS payment_model,
@@ -1661,7 +1695,7 @@ def _dim_site_pbi_sql() -> str:
         SELECT
             {_pbi_int64_key("site_key")} AS site_key,
             domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`,
-            `направление`, `статус`, status, `специалист`, `проджект`, project_manager,
+            `направление`, `статус`, status, {_bi_specialist_expr("`специалист`")} AS `специалист`, `проджект`, project_manager,
             `id_салона`, `менеджер`, `Название crm`
         FROM ad_analytics.Dim_Site
     """
@@ -1693,7 +1727,7 @@ def _vk_ads_pbi_sql() -> str:
             f.`продажи`,
             f.`регион`,
             f.`тип_сайта`,
-            f.`специалист`
+            {_bi_specialist_expr("f.`специалист`")} AS `специалист`
         FROM ad_analytics.fact_vk_ads f
         LEFT JOIN ad_analytics.Dim_VkAdPlan p ON f.ad_plan_id = p.ad_plan_id
         LEFT JOIN ad_analytics.Dim_VkAdGroup g ON f.ad_group_id = g.ad_group_id
