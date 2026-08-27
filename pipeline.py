@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import importlib
+import json
 import logging
 import os
 import sys
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -74,6 +76,40 @@ STEP14_START_AT = {13, 131, 141, 142, 143, 1431, 1432, 144, 145, 1451, 146, 14, 
 DIRECT_STAGING_CONSUMERS = {141, 142, 143, 144, 146}
 DIRECT_PLACEMENT_LINKS_STEP = 139
 DIRECT_STAGING_STEP = 140
+
+
+DASHBOARD_HEALTH_URL = os.environ.get(
+    "BA6_DASHBOARD_HEALTH_URL", "https://seoadvanced.ru/api/project-health"
+)
+
+
+def post_dashboard_health(run_id: str, failed_steps: list[str], elapsed: float) -> None:
+    """Статус прогона во вкладку «Здоровье проекта» рабочего дашборда.
+
+    Best-effort: недоступный дашборд не должен ронять пайплайн — только warning.
+    """
+    payload = json.dumps({
+        "status": "err" if failed_steps else "ok",
+        "pipeline_step": "big_analytics_v6_ch",
+        "msg": (
+            f"run_id={run_id} "
+            f"({'ошибка: ' + ', '.join(failed_steps) if failed_steps else 'успешно'}) "
+            f"за {elapsed:.0f}с"
+        ),
+        "duration_sec": round(elapsed, 1),
+        "errors": failed_steps,
+        "warnings": [],
+    }).encode()
+    request = urllib.request.Request(
+        DASHBOARD_HEALTH_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(request, timeout=5)
+    except Exception as exc:
+        logger.warning("dashboard health POST failed: %s", exc)
 
 
 def ensure_quality_log(client) -> None:
@@ -235,11 +271,13 @@ def main(argv: list[str] | None = None) -> int:
         return BUSY_EXIT_CODE
 
     run_id = uuid.uuid4().hex[:12]
+    started_at = time.perf_counter()
     client = get_client()
     ensure_quality_log(client)
     logger.info("big_analytics_v6_ch ClickHouse pipeline start run_id=%s", run_id)
 
     failed = False
+    failed_steps: list[str] = []
     if args.skip_heavy_pbi:
         logger.info("skip-heavy-pbi enabled: пропускаю шаги %s", sorted(HEAVY_PBI_STEPS))
     if not args.include_nightly and args.only_step is None:
@@ -286,20 +324,26 @@ def main(argv: list[str] | None = None) -> int:
         if parallel_safe and step_num in {8, 900} and step14_item is not None:
             if not wait_step14_background():
                 failed = True
+                failed_steps.append("step14")
                 break
         if parallel_safe and step_num in PARALLEL_BACKGROUND_STEPS:
             continue
         if step_num == 6 and not run_step10a_before_step6(client, run_id):
             failed = True
+            failed_steps.append("step10a")
             break
         verify_no_star = bool(args.skip_heavy_pbi and label == "verify")
         ok = run_step(client, run_id, step_num, module_path, label, verify_no_star=verify_no_star)
         if not ok:
             failed = True
+            failed_steps.append(label)
             break
     if not failed and step14_future is not None:
         failed = not wait_step14_background()
+        if failed:
+            failed_steps.append("step14")
     logger.info("big_analytics_v6_ch pipeline %s", "FAIL" if failed else "OK")
+    post_dashboard_health(run_id, failed_steps, time.perf_counter() - started_at)
     return 1 if failed else 0
 
 
