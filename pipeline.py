@@ -112,6 +112,22 @@ def post_dashboard_health(run_id: str, failed_steps: list[str], elapsed: float) 
         logger.warning("dashboard health POST failed: %s", exc)
 
 
+def write_run_snapshot(run_id: str) -> None:
+    """Снимок воронки прогона для вкладки «Дельта пайплайна» рабочего дашборда.
+
+    Пишется только после успешного прогона — дельта относительно оборванного прогона
+    сравнивала бы полуготовую звезду. Best-effort: снимок это диагностика, ронять из-за
+    него уже успешный пайплайн нельзя.
+    """
+    from step8_stats import pipeline_run_snapshot  # noqa: PLC0415
+
+    try:
+        result = pipeline_run_snapshot.run(run_id=run_id)
+        logger.info("pipeline_run_snapshot: %s", result["details"])
+    except Exception as exc:
+        logger.warning("pipeline_run_snapshot failed: %s", exc)
+
+
 def ensure_quality_log(client) -> None:
     client.command(
         """
@@ -343,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
         if failed:
             failed_steps.append("step14")
     logger.info("big_analytics_v6_ch pipeline %s", "FAIL" if failed else "OK")
+    if not failed:
+        write_run_snapshot(run_id)
     post_dashboard_health(run_id, failed_steps, time.perf_counter() - started_at)
     return 1 if failed else 0
 
