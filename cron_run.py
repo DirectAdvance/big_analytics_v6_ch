@@ -58,6 +58,22 @@ FINAL_CHECKS = (
     "full_funnel_priezd_lt_prodazhi",
     "full_funnel_dobro_gt_dohod_do_kredita",
     "full_funnel_dohod_do_kredita_gt_priezd",
+    "direct_spend_loss_slices",
+    "bi_contract_auto_spend_raw_to_pbi_slices",
+    "bi_contract_direct_feed_spend_slices",
+    "bi_contract_pbi_funnel_slices",
+    "bi_contract_closed_month_drift_slices",
+    "bi_contract_auto_empty_dims_slices",
+    "sales_without_real_specialist_slices",
+)
+BI_CONTRACTS = (
+    ("direct_spend_loss_slices", "расход Директа raw → рабочий слой"),
+    ("bi_contract_auto_spend_raw_to_pbi_slices", "расход Авто raw → BI"),
+    ("bi_contract_direct_feed_spend_slices", "расход фидов raw → BI"),
+    ("bi_contract_pbi_funnel_slices", "воронка заявки/визиты/продажи → BI"),
+    ("bi_contract_closed_month_drift_slices", "закрытые месяцы: продажи и CPL продажи ±4%"),
+    ("bi_contract_auto_empty_dims_slices", "Авто без специалиста/города/салона"),
+    ("sales_without_real_specialist_slices", "продажи без реального специалиста"),
 )
 
 RE_RUN_ID = re.compile(r"run_id=([0-9a-f]+)")
@@ -278,6 +294,20 @@ def build_final_section(counts: dict[str, int], verify_failures: list[str]) -> l
     return rows
 
 
+def build_bi_contracts_section(counts: dict[str, int]) -> list[str]:
+    rows = ["", "<b>BI golden</b>"]
+    for key, label in BI_CONTRACTS:
+        if key not in counts:
+            rows.append(f"{label}: <b>нет в логе</b>")
+            continue
+        value = counts[key]
+        if value:
+            rows.append(f"{label}: 🚫 <b>FAIL</b> ({fmt_int(value)} срезов)")
+        else:
+            rows.append(f"{label}: ✅ OK")
+    return rows
+
+
 def build_golden_section(text: str, golden: re.Match[str] | None) -> list[str]:
     rows = ["", "<b>golden</b>"]
     if golden:
@@ -367,6 +397,7 @@ def build_message(
     rows.extend(build_main_section(full_metrics))
     rows.extend(build_raw_section(counts, prev_counts))
     rows.extend(build_final_section(counts, verify_failures))
+    rows.extend(build_bi_contracts_section(counts))
     rows.extend(build_golden_section(text, golden))
     rows.extend(build_powerbi_section(rc, powerbi_rc, powerbi_enabled))
     rows.extend(build_steps_section(text))

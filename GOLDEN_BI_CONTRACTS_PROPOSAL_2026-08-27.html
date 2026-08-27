@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BA6 golden-проверки как в BA5</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --paper: #ffffff;
+      --ink: #182230;
+      --muted: #667085;
+      --line: #d7dce4;
+      --red: #b42318;
+      --red-bg: #fff1ee;
+      --amber: #b54708;
+      --amber-bg: #fff7e6;
+      --green: #067647;
+      --green-bg: #eaf7ef;
+      --blue-bg: #edf4ff;
+      --dark: #111827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+    main {
+      max-width: 1020px;
+      margin: 0 auto;
+      padding: 34px 22px 54px;
+    }
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    h1 { font-size: 34px; }
+    h2 {
+      margin-top: 32px;
+      margin-bottom: 12px;
+      font-size: 24px;
+    }
+    h3 { font-size: 18px; }
+    p { margin: 8px 0 0; }
+    code {
+      padding: 2px 5px;
+      border: 1px solid #d9e0ea;
+      border-radius: 5px;
+      background: #f8fafc;
+      font: 0.92em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .hero, .panel, .telegram, .rule {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+    }
+    .hero {
+      padding: 24px;
+      box-shadow: 0 12px 28px rgba(16, 24, 40, 0.08);
+    }
+    .lead {
+      max-width: 780px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #eef2f6;
+      color: #344054;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .badge.red { background: var(--red-bg); color: var(--red); }
+    .badge.amber { background: var(--amber-bg); color: var(--amber); }
+    .badge.green { background: var(--green-bg); color: var(--green); }
+    .telegram {
+      padding: 18px;
+      background: var(--dark);
+      color: #f9fafb;
+      overflow: auto;
+    }
+    .telegram pre {
+      margin: 0;
+      white-space: pre-wrap;
+      font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .panel {
+      padding: 16px;
+    }
+    .panel.red { border-color: #f0b8b2; background: var(--red-bg); }
+    .panel.amber { border-color: #f3c987; background: var(--amber-bg); }
+    .panel.green { border-color: #a9dfbf; background: var(--green-bg); }
+    .checks {
+      display: grid;
+      gap: 10px;
+    }
+    .check {
+      display: grid;
+      grid-template-columns: 38px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper);
+    }
+    .icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: #f2f4f7;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .check.red .icon { background: var(--red-bg); }
+    .check.amber .icon { background: var(--amber-bg); }
+    .check.green .icon { background: var(--green-bg); }
+    .check strong { display: block; }
+    .check p { color: #344054; }
+    .small {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .rule {
+      padding: 18px;
+      border-color: #b8cff7;
+      background: var(--blue-bg);
+    }
+    @media (max-width: 760px) {
+      main { padding: 20px 14px 42px; }
+      h1 { font-size: 28px; }
+      .hero { padding: 18px; }
+      .summary { grid-template-columns: 1fr; }
+      .check { grid-template-columns: 32px 1fr; }
+      .icon { width: 32px; height: 32px; font-size: 18px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1>BA6 golden-проверки перед refresh BI</h1>
+    <p class="lead">Предлагаю сделать ровно в духе BA5: после прогона приходит короткий Telegram-дайджест. Человек сразу видит: можно обновлять Power BI или нельзя.</p>
+    <div class="badges">
+      <span class="badge red">🔴 FAIL = refresh запрещён</span>
+      <span class="badge amber">🟡 WARN = показать, но не валить</span>
+      <span class="badge green">🟢 PASS = можно refresh</span>
+    </div>
+  </section>
+
+  <h2>Как будет выглядеть Telegram</h2>
+  <div class="telegram">
+<pre>🔴 BA6 golden: ЕСТЬ ПРОБЛЕМЫ — Power BI не обновляю
+27.08.2026 15:40 UTC+5 · pipeline · run_id=...
+
+🧪 GOLDEN-проверки:
+  ❌ 1. Расход Direct не потерян
+     → август / direct31 / novgorod-cars.ru: raw больше BI на 715 843 ₽
+  ✅ 2. Продажи не бывают без специалиста
+  ✅ 3. Посевы не складывают заявку + визит
+  ❌ 4. VK Ads расход всегда с доменом
+     → найден расход в ".без домена": 1 455 775 ₽
+  ✅ 5. Фиды совпадают с raw feed-report
+  ⚠️ 6. Обращения есть, но дальше воронка пустая
+     → 12 доменов: krasn-lada.ru, newcars-ekb.ru, topcarsmsk.ru
+
+📌 Действие:
+  refresh BI заблокирован. Сначала исправить красные строки.</pre>
+  </div>
+
+  <div class="summary">
+    <div class="panel red">
+      <h3>🔴 Красное</h3>
+      <p>Ошибка данных. Pipeline должен упасть, Telegram должен объяснить, где именно сломалось.</p>
+    </div>
+    <div class="panel amber">
+      <h3>🟡 Жёлтое</h3>
+      <p>Подозрительный бизнес-срез. В Telegram показываем, но refresh не блокируем без отдельного решения.</p>
+    </div>
+    <div class="panel green">
+      <h3>🟢 Зелёное</h3>
+      <p>Проверка прошла. В сообщении остаётся одна понятная строка, как в BA5.</p>
+    </div>
+  </div>
+
+  <h2>🔴 Что должно блокировать refresh</h2>
+  <div class="checks">
+    <div class="check red">
+      <div class="icon">💸</div>
+      <div>
+        <strong>Расход нельзя терять ни в одном срезе</strong>
+        <p>Сколько денег пришло в raw, столько должно дойти до таблиц BI. Проверяем месяц + логин + домен. Это главное правило.</p>
+        <div class="small"><code>raw_yandex</code> → <code>big_analytics_direct</code> → BI fact</div>
+      </div>
+    </div>
+
+    <div class="check red">
+      <div class="icon">🧾</div>
+      <div>
+        <strong>Фиды должны совпадать с raw feed-report</strong>
+        <p>Новая вкладка по фидам не должна терять расход, клики, показы, формы и CRM-метрики.</p>
+        <div class="small"><code>raw_data.direct_feed_report_rows</code> → таблица, которую читает BI</div>
+      </div>
+    </div>
+
+    <div class="check red">
+      <div class="icon">🚫</div>
+      <div>
+        <strong>Площадки посевов не должны попадать в Direct-фиды</strong>
+        <p>tp8/tp9/tp10 и посевные площадки не должны появляться в отчёте РСЯ/фидов.</p>
+      </div>
+    </div>
+
+    <div class="check red">
+      <div class="icon">👤</div>
+      <div>
+        <strong>Продаж “Без специалиста” быть не может</strong>
+        <p>Если у строки есть продажа, у неё должен быть реальный специалист. Иначе это ошибка связки справочника.</p>
+      </div>
+    </div>
+
+    <div class="check red">
+      <div class="icon">🌱</div>
+      <div>
+        <strong>Посевы не складывают две атрибуции в одно число</strong>
+        <p>Нельзя получить 47 как “24 по заявке + 23 по визиту”. В Telegram показываем обе оси отдельно.</p>
+        <div class="small">Контрольные имена: Вильцин Константин, Немытова Валерия.</div>
+      </div>
+    </div>
+
+    <div class="check red">
+      <div class="icon">📈</div>
+      <div>
+        <strong>Продаж по визитам не должно быть меньше, чем по заявкам</strong>
+        <p>Общий total по визитной атрибуции должен быть не ниже заявочной. Если меньше — где-то потерялась воронка.</p>
+      </div>
+    </div>
+
+    <div class="check red">
+      <div class="icon">📣</div>
+      <div>
+        <strong>VK Ads расход всегда должен иметь домен</strong>
+        <p>Расход VK не должен уходить в “.без домена”. Связка должна идти через <code>vk_client_id</code>, как в BA5.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>🟡 Что пока показываем как warning</h2>
+  <div class="checks">
+    <div class="check amber">
+      <div class="icon">📞</div>
+      <div>
+        <strong>Есть обращения, но дальше воронка пустая</strong>
+        <p>Например: есть обращения на домене, но нет квала, приезда и продаж. Это может быть проблема CRM, маппинга или качества трафика.</p>
+        <div class="small">Предложение: warning при расходе от 100 000 ₽ за месяц или 3+ обращениях.</div>
+      </div>
+    </div>
+
+    <div class="check amber">
+      <div class="icon">🕳️</div>
+      <div>
+        <strong>Большой расход без лидов</strong>
+        <p>Показываем top-домены, чтобы их можно было быстро открыть в BI и CRM.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>✅ Что уже зашито в текущих правках BA6</h2>
+  <div class="checks">
+    <div class="check green">
+      <div class="icon">✅</div>
+      <div>
+        <strong>Direct spend guard</strong>
+        <p>Добавлена проверка <code>direct_spend_loss_slices</code>: raw против BI-таблицы по месяцу, логину и домену.</p>
+      </div>
+    </div>
+
+    <div class="check green">
+      <div class="icon">✅</div>
+      <div>
+        <strong>Продажи без специалиста</strong>
+        <p>Добавлен hard guard <code>sales_without_real_specialist_slices</code>.</p>
+      </div>
+    </div>
+
+    <div class="check green">
+      <div class="icon">✅</div>
+      <div>
+        <strong>Справочник сайтов стал полнее</strong>
+        <p>Собран <code>gsheet_sites_effective</code>: ClickHouse-справочник + overlay из Postgres, чтобы не терять домены и специалистов.</p>
+      </div>
+    </div>
+
+    <div class="check green">
+      <div class="icon">✅</div>
+      <div>
+        <strong>VK Ads переведён на связку через vk_client_id</strong>
+        <p>Осталось добавить отдельный golden guard, который явно ловит пустой домен и потерю VK-расхода.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Что нужно согласовать</h2>
+  <div class="checks">
+    <div class="check">
+      <div class="icon">1</div>
+      <div>
+        <strong>Порог для warning “обращения есть, воронки нет”</strong>
+        <p>Моё предложение: от 100 000 ₽ расхода за месяц или 3+ обращения.</p>
+      </div>
+    </div>
+    <div class="check">
+      <div class="icon">2</div>
+      <div>
+        <strong>Атрибуция визита против заявки</strong>
+        <p>Моё предложение: общий total — hard fail, детализация по источникам — warning до отдельного разбора.</p>
+      </div>
+    </div>
+    <div class="check">
+      <div class="icon">3</div>
+      <div>
+        <strong>Фиды: весь период или свежие дни</strong>
+        <p>Моё предложение: общий total с 2026-01-01 и детальная проверка за последние 35 дней.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Итог</h2>
+  <div class="rule">
+    <h3>🛑 Нет зелёного PASS по красным проверкам — нет refresh Power BI.</h3>
+    <p>BA6 должен ловить эти ошибки до отчёта. Если расход, домен, специалист, посевы или фиды сломались, Telegram пишет понятное сообщение, а BI остаётся на старой версии.</p>
+  </div>
+</main>
+</body>
+</html>

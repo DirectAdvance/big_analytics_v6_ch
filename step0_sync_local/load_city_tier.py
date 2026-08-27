@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,6 +20,8 @@ DATA_RANGE = "Лист1!A1:B"
 DATABASE = "ad_analytics"
 TABLE = "gsheet_city_tier"
 SHEET_TZ = ZoneInfo("Europe/Moscow")
+READ_SHEET_ATTEMPTS = 4
+TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 _NOTE_RE = re.compile(r"^(?P<city>[^(]+?)\s*\((?P<note>.+)\)\s*$")
 _TIER_RE = re.compile(r"^(?:tier|тир)\s*(?P<n>[1-9]\d*)$", re.IGNORECASE)
@@ -45,19 +48,40 @@ def _find_service_account() -> str:
 def read_sheet() -> list[list[str]]:
     from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
 
     creds = Credentials.from_service_account_file(
         _find_service_account(),
         scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
     )
     service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    resp = (
-        service.spreadsheets()
-        .values()
-        .get(spreadsheetId=SPREADSHEET_ID, range=DATA_RANGE, valueRenderOption="FORMATTED_VALUE")
-        .execute()
-    )
-    return resp.get("values", [])
+    for attempt in range(1, READ_SHEET_ATTEMPTS + 1):
+        try:
+            resp = (
+                service.spreadsheets()
+                .values()
+                .get(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=DATA_RANGE,
+                    valueRenderOption="FORMATTED_VALUE",
+                )
+                .execute()
+            )
+            return resp.get("values", [])
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            if status not in TRANSIENT_HTTP_STATUSES or attempt == READ_SHEET_ATTEMPTS:
+                raise
+            delay = 5 * attempt
+            logger.warning(
+                "gsheet_city_tier: Google Sheets HTTP %s, retry %d/%d in %ds",
+                status,
+                attempt + 1,
+                READ_SHEET_ATTEMPTS,
+                delay,
+            )
+            time.sleep(delay)
+    raise RuntimeError("unreachable Google Sheets retry state")
 
 
 def month_start(now: datetime | None = None) -> date:

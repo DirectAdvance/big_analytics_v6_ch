@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import RAW_SOURCE_TABLES
 from config.ch_utils import SAFE_QUERY_SETTINGS, table_exists
-from step0_sync_local import load_city_tier
+from step0_sync_local import load_city_tier, load_gsheet_sites_overlay
 
 logger = logging.getLogger("pipeline.step0")
 
@@ -123,6 +123,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     logger.info("Шаг 0 v6_ch: ClickHouse-only preflight без PostgreSQL/v5 sync")
     client = get_client()
     city_tier = load_city_tier.sync_city_tier(client)
+    gsheet_sites = load_gsheet_sites_overlay.sync_gsheet_sites_effective(client)
 
     raw_objects = dict(RAW_SOURCE_TABLES)
     raw_objects.update(RAW_REQUIRED_EXTRA)
@@ -131,6 +132,7 @@ def run(conn=None, run_id: str | None = None) -> dict:  # noqa: ARG001
     reviews_stale_days, reviews_warning = _check_reviews_freshness(client)
     if table_exists(client, "ad_analytics", "gsheet_city_tier"):
         counts["gsheet_city_tier"] = _count_table(client, "ad_analytics.gsheet_city_tier")
+    counts.update(gsheet_sites)
 
     details = ", ".join(f"{name}={rows:,}" for name, rows in sorted(counts.items()))
     details = (

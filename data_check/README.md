@@ -21,6 +21,19 @@
 
 Проверяет ClickHouse-объекты `ad_analytics.*` и `bi_*`: наличие ключевых таблиц/вьюх, row-counts,
 инварианты воронки, golden Кудерко, совместимость `fact_big_analytics` и `big_analytics_unified`.
+BI golden-контракты блокируют шаг 900 и Power BI refresh, если:
+
+- расход Директа по авто в `raw_yandex` не дошёл до рабочего слоя или `pbi_big_analytics_full`
+  в срезе `месяц + login + domain` с допуском 1 ₽;
+- расход фидов из `raw_data.direct_feed_report_rows` не дошёл до `fact_direct_feed_funnel`
+  в срезе `месяц + login + domain` с допуском 1 ₽;
+- воронка `big_analytics_full` / `big_analytics_full_arrival` не равна `pbi_big_analytics_full`
+  по двум осям атрибуции;
+- закрытые месяцы изменили продажи или CPL продажи больше чем на 4% к прошлому успешному
+  снимку `pipeline_run_snapshot_v`;
+- авто-метрики в BI попали в пустой город/салон или к служебным специалистам
+  `Без специалиста`, `Посевы`, `Тоборев Владимир`.
+
 Инвариант воронки включает кредитные шаги: `korr >= kval >= priezd >= dohod_do_kredita >= dobro >= prodazhi`.
 Для PBI-источников отдельно проверяются `fact_region_zayavki`, `fact_criterion_zayavki`,
 `bi_fact_direct_feed_funnel` и `fact_ml_korrektirovki`. Лёгкая

@@ -62,6 +62,8 @@
 - Run `python3 data_check/verify_big_analytics.py` for the default fast gate. It returns
   `0=PASS`, `1=FAIL`, `2=crash`.
 - Do not add a new golden/invariant block to `verify_big_analytics.py` without asking Semyon first.
+  Approved exception: Direct spend must not decrease in any business slice; `verify_big_analytics.py`
+  blocks refresh on `month + login + domain` loss.
 - Fractional pixel attribution must never be cast to `int` per row. Round only final sums.
 - `big_analytics_full.источник` must not be NULL; `"Date" >= '2026-01-01'`.
 - BA6 Power BI covers only niche `Авто`. Non-auto niches are not analyzed in BI and must not be

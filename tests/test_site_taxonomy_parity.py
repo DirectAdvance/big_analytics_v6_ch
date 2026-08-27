@@ -11,6 +11,17 @@ def test_direct_rows_use_complex_direction() -> None:
     assert step3._direct_napravlenie_expr("yd.") == "'Комплекс'"
 
 
+def test_direct_rows_keep_raw_yandex_domain_before_gsheet_fallback() -> None:
+    direct_sql = step3._build_direct_sql("ad_analytics.big_analytics_direct")
+
+    assert "anyLast(domain) AS domain" in step3._yd_agg_cte()
+    assert "coalesce(nullIf(la.domain, ''), nullIf(yd.domain, '')," in direct_sql
+    assert (
+        "concat(ifNull(yd.account_login, ''), '|', ifNull(coalesce(nullIf(la.domain, ''), "
+        "nullIf(yd.domain, '')"
+    ) in direct_sql
+
+
 def test_direct_tp_rows_use_posevy_sources() -> None:
     assert "tp8" in step3._direct_source_expr("yd.")
     assert "'Посевы_Telegram'" in step3._direct_source_expr("yd.")

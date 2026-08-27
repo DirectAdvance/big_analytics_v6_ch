@@ -103,7 +103,8 @@ def test_pbi_full_exposes_tp_and_normalizes_claim_type():
     assert "dcs.`тип_заявки` IS NULL" in sql
     assert "dcs.`тип_заявки` IN ('Заявка', 'Из базы', 'Пиксель')" in sql
     assert "'Заявки'" in sql
-    assert "WHERE f.`атрибуция` = 'По дате заявки'" in sql
+    assert "WHERE 1 = 1" in sql
+    assert "WHERE f.`атрибуция` = 'По дате заявки'" not in sql
 
 
 def test_dim_build_can_target_one_dimension():
@@ -177,7 +178,7 @@ def test_pbi_site_and_service_dimensions_use_only_auto_gsheet_rows():
     pbi_sql = build_pbi_compat._dim_campaign_pbi_sql()
     arp_sql = build_pbi_compat._analytics_report_placement_pbi_sql()
 
-    assert "FROM reference_data.gsheet_sites\n                        WHERE ifNull(domain, '') != ''\n                          AND niche = 'Авто'" in dim_site_sql
+    assert "FROM ad_analytics.gsheet_sites_effective\n                        WHERE ifNull(domain, '') != ''\n                          AND niche = 'Авто'" in dim_site_sql
     assert "AND niche = 'Авто'" in build_star._vk_ads_sql("", "", "", "", "")
     assert "WITH auto_accounts AS" in pbi_sql
     assert "AND lower(ifNull(ulogin, '')) IN (SELECT account_login FROM auto_accounts)" in pbi_sql
@@ -593,6 +594,34 @@ def test_golden_kuderko_reads_specialist_from_dim_salon():
     assert "f.`специалист`" not in sql
 
 
+def test_verify_blocks_powerbi_when_direct_spend_lost_by_month_login_domain():
+    source = inspect.getsource(verify_big_analytics)
+
+    assert "direct_spend_loss_slices" in source
+    assert "FROM ad_analytics.raw_yandex" in source
+    assert "FROM ad_analytics.big_analytics_direct" in source
+    assert "GROUP BY month, account_login, domain" in source
+
+
+def test_verify_blocks_powerbi_when_sales_have_no_real_specialist():
+    source = inspect.getsource(verify_big_analytics)
+
+    assert "sales_without_real_specialist_slices" in source
+    assert "FROM ad_analytics.big_analytics_full" in source
+    assert "FROM ad_analytics.big_analytics_full_arrival" in source
+    assert "ifNull(trim(specialist), '') IN ('', 'Без специалиста')" in source
+
+
+def test_vk_ads_uses_vk_client_id_for_site_mapping():
+    sql = build_star._vk_ads_sql("*", "", "", "", "")
+    source = inspect.getsource(step10._insert_vk_ads_costs)
+
+    assert "toInt64OrNull(gs.vk_client_id)" in sql
+    assert "toInt64OrNull(gs.vk_client_id)" in source
+    assert "INNER JOIN reference_data.gsheet_sites AS gs" not in sql
+    assert "INNER JOIN reference_data.gsheet_sites AS gs" not in source
+
+
 def test_dim_location_joins_geo_dict_instead_of_hardcoded_nulls():
     """GEO_LOCATION_JOIN_2026-08-24: BA5 распояние-справочник восстановлен через
     ad_analytics.gsheet_yandex_direct_id_location (migrations/04_port_geo_location_dict_2026-08-24.py).
@@ -672,6 +701,7 @@ def test_claim_and_visit_fallbacks_do_not_restore_stale_directologist_after_cuto
     assert "s.`Date` >= toDate('2026-04-10')" in fallback_sql
     assert "CAST(NULL, 'Nullable(String)')" in fallback_sql
     assert "if((ifNull(s.campaign_code, '') = 'звонки'" not in fallback_sql
+    assert "'Звонки'" in spec_fallback._fallback_expr()
     assert "calls_specialist_correction_expr(\n        \"g.eff_arrival_date\"" in arrival_source
     assert "CAST(NULL, 'Nullable(String)')" in arrival_source
 

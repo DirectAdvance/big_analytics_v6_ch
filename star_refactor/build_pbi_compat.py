@@ -194,7 +194,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
         LEFT JOIN ad_analytics.Dim_CRMStatus dcs ON dcs.crm_status_key = f.crm_status_key
         LEFT JOIN ad_analytics.Dim_Salon dsl ON dsl.salon_key = f.salon_key
         LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key
-        WHERE f.`атрибуция` = 'По дате заявки'
+        WHERE 1 = 1
         {where_sql}
     """
 

@@ -1025,6 +1025,7 @@ yd AS
         anyLast(`AdGroupName`) AS `AdGroupName`,
         anyLast(`AdNetworkType`) AS `AdNetworkType`,
         anyLast(`Device`) AS `Device`,
+        anyLast(domain) AS domain,
         sum(`Impressions`) AS `Impressions`,
         sum(`Clicks`) AS `Clicks`,
         sum(total_cost) AS total_cost,
@@ -1123,7 +1124,7 @@ la AS
         anyLast(domain) AS domain,
         anyLast(fid) AS fid,
         anyLast(crm_name) AS crm_name,
-        zvonki_cdr,
+        max(zvonki_cdr) AS zvonki_cdr,
         sum(kol_vo_zayavok) AS kol_vo_zayavok,
         sum(korr) AS korr,
         sum(kval) AS kval,
@@ -1137,7 +1138,7 @@ la AS
         sum(dohod_do_kredita) AS dohod_do_kredita,
         sum(dobro) AS dobro
     FROM lead_scored
-    GROUP BY key3, zvonki_cdr
+    GROUP BY key3
 )
 SELECT
     yd.key3 AS key3,
@@ -1153,7 +1154,7 @@ SELECT
     toDecimal64(yd.`Impressions`, 6) AS `Impressions`,
     toDecimal64(yd.`Clicks`, 6) AS `Clicks`,
     toDecimal64(yd.total_cost, 6) AS total_cost,
-    coalesce(nullIf(la.domain, ''), {_gs_pick_expr("domain")}) AS domain,
+    coalesce(nullIf(yd.domain, ''), nullIf(la.domain, ''), {_gs_pick_expr("domain")}) AS domain,
     yd.`RlAdjustmentId` AS `RlAdjustmentId`,
     if(yd.`RlAdjustmentId` > 0, 'Есть корректировка', 'Нет корректировки') AS `RlAdjustmentId_total`,
     yd.campaign_code AS campaign_code,
@@ -1198,7 +1199,7 @@ SELECT
     concat(toString(yd.`AdGroupId`), '|', ifNull(yd.`AdGroupName`, '')) AS `номер группы | название группы`,
     CAST(NULL, 'Nullable(Int32)') AS `План заявки`,
     CAST(NULL, 'Nullable(Int32)') AS `План приезда`,
-    concat(ifNull(yd.account_login, ''), '|', ifNull(coalesce(nullIf(la.domain, ''), {_gs_pick_expr("domain")}), '')) AS `аккаунт|сайт`,
+    concat(ifNull(yd.account_login, ''), '|', ifNull(coalesce(nullIf(yd.domain, ''), nullIf(la.domain, ''), {_gs_pick_expr("domain")}), '')) AS `аккаунт|сайт`,
     CAST(NULL, 'Nullable(Int64)') AS priezd_arrival_date,
     CAST(NULL, 'Nullable(Int64)') AS prodazhi_arrival_date,
     'Яндекс' AS `поставщик`,
@@ -1210,7 +1211,7 @@ FROM yd
 LEFT JOIN la ON la.key3 = yd.key3
 LEFT JOIN gs_best gs ON gs.match_login_key = yd.account_login AND gs.match_date = yd.`Date`
 LEFT JOIN gs_domain gs_dir ON gs_dir.domain_key = la.domain_key
-LEFT JOIN crm_by_domain crm ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(la.domain, ''), {_gs_pick_expr("domain")}), '')))
+LEFT JOIN crm_by_domain crm ON crm.domain_key = lower(trim(ifNull(coalesce(nullIf(yd.domain, ''), nullIf(la.domain, ''), {_gs_pick_expr("domain")}), '')))
 LEFT JOIN ad_analytics.campaign_status_v cs ON cs.`CampaignId` = yd.`CampaignId`
 WHERE ifNull({_gs_pick_expr("direction")}, 'Авто') = 'Авто'
 """
@@ -1230,6 +1231,13 @@ def _lead_source_columns(
     все лид-ветки, а расхождения задаются через `overrides` в
     `_build_lead_source_sql`, а не копией SELECT'а.
     """
+    site = lambda field: f"coalesce(gs.{field}, gss.{field})"
+    specialist = (
+        "coalesce("
+        "if(gs.match_priority IN (1, 2), nullIf(trim(ifNull(gs.directologist, '')), ''), CAST(NULL, 'Nullable(String)')), "
+        "if(gss.match_priority IN (1, 2), nullIf(trim(ifNull(gss.directologist, '')), ''), CAST(NULL, 'Nullable(String)'))"
+        ")"
+    )
     return [
         ("key3", "l.key3"),
         ("Date", "l.created_date"),
@@ -1252,8 +1260,8 @@ def _lead_source_columns(
         ("cpc_cpa", "CAST(NULL, 'Nullable(String)')"),
         ("site_quiz", "CAST(NULL, 'Nullable(String)')"),
         ("adgroup_code", "CAST(NULL, 'Nullable(String)')"),
-        ("account_login", "gs.login_key"),
-        ("manager_login", "gs.directologist"),
+        ("account_login", site("login_key")),
+        ("manager_login", site("directologist")),
         ("ag_part1", "CAST(NULL, 'Nullable(String)')"),
         ("ag_part2", "CAST(NULL, 'Nullable(String)')"),
         ("ag_part3", "CAST(NULL, 'Nullable(String)')"),
@@ -1276,26 +1284,26 @@ def _lead_source_columns(
         ("priedet", "l.priedet"),
         ("dohod_do_kredita", "l.dohod_do_kredita"),
         ("dobro", "l.dobro"),
-        ("статус", "gs.status"),
-        ("специалист", _domain_specialist_expr("gs")),
-        ("тип_сайта", "gs.site_type"),
-        ("шаблон", "gs.template"),
-        ("салон", "coalesce(nullIf(l.salon, ''), gs.salon)"),
-        ("город", "gs.city"),
-        ("регион", "gs.region"),
-        ("direction", "gs.direction"),
+        ("статус", site("status")),
+        ("специалист", specialist),
+        ("тип_сайта", site("site_type")),
+        ("шаблон", site("template")),
+        ("салон", "coalesce(nullIf(l.salon, ''), gs.salon, gss.salon)"),
+        ("город", site("city")),
+        ("регион", site("region")),
+        ("direction", site("direction")),
         ("неверный_кодер_new", "CAST(NULL, 'Nullable(String)')"),
         ("fid", "l.fid"),
-        ("проджект", "gs.project_manager"),
-        ("id_салона", "gs.client_id"),
-        ("менеджер", "gs.sales_manager"),
+        ("проджект", site("project_manager")),
+        ("id_салона", site("client_id")),
+        ("менеджер", site("sales_manager")),
         ("источник", source_expr),
         ("направление", direction_expr),
         ("номер кампании | название кампании", "CAST(NULL, 'Nullable(String)')"),
         ("номер группы | название группы", "CAST(NULL, 'Nullable(String)')"),
         ("План заявки", "CAST(NULL, 'Nullable(Int32)')"),
         ("План приезда", "CAST(NULL, 'Nullable(Int32)')"),
-        ("аккаунт|сайт", "concat(ifNull(gs.login_key, ''), '|', ifNull(l.domain, ''))"),
+        ("аккаунт|сайт", f"concat(ifNull({site('login_key')}, ''), '|', ifNull(l.domain, ''))"),
         ("priezd_arrival_date", "CAST(NULL, 'Nullable(Int64)')"),
         ("prodazhi_arrival_date", "CAST(NULL, 'Nullable(Int64)')"),
         ("поставщик", f"'{provider}'"),
@@ -1398,11 +1406,62 @@ gs_domain_best AS
           ON lower(trim(ifNull(gs.domain, ''))) = ld.domain_key
     )
     WHERE rn = 1
+),
+gs_salon_best AS
+(
+    SELECT *
+    FROM
+    (
+        SELECT
+            ls.salon_key AS salon_key,
+            ls.date_val AS match_date,
+            gs.domain,
+            gs.status,
+            gs.directologist,
+            gs.site_type,
+            gs.template,
+            gs.salon,
+            gs.city,
+            gs.region,
+            gs.direction,
+            gs.direction_main,
+            gs.project_manager,
+            gs.client_id,
+            gs.sales_manager,
+            gs.login_key,
+            multiIf(
+                ifNull(gs.salon, '') = '', 99,
+                ifNull(trim(gs.launch_date), '') = '' AND ifNull(trim(gs.block_date), '') = '', 2,
+                (ifNull(trim(gs.launch_date), '') = '' OR ls.date_val >= toDate(parseDateTimeBestEffortOrNull(gs.launch_date)))
+                    AND (ifNull(trim(gs.block_date), '') = '' OR ls.date_val < toDate(parseDateTimeBestEffortOrNull(gs.block_date))),
+                1,
+                3
+            ) AS match_priority,
+            row_number() OVER (
+                PARTITION BY ls.salon_key, ls.date_val
+                ORDER BY
+                    match_priority ASC,
+                    if(trim(ifNull(gs.directologist, '')) != '' AND trim(ifNull(gs.direction_main, '')) = 'Посевы', 1, 0) DESC,
+                    if(trim(ifNull(gs.directologist, '')) != '', 1, 0) DESC,
+                    ifNull(toDate(parseDateTimeBestEffortOrNull(gs.launch_date)), toDate('1900-01-01')) DESC,
+                    ifNull(gs.domain, '') ASC
+            ) AS rn
+        FROM
+        (
+            SELECT DISTINCT lowerUTF8(trim(ifNull(salon, ''))) AS salon_key, created_date AS date_val
+            FROM lead_scored
+            WHERE lowerUTF8(trim(ifNull(salon, ''))) != ''
+        ) ls
+        LEFT JOIN reference_data.gsheet_sites gs
+          ON lowerUTF8(trim(ifNull(gs.salon, ''))) = ls.salon_key
+    )
+    WHERE rn = 1
 )
 SELECT
     {select_list}
 FROM lead_scored l
 LEFT JOIN gs_domain_best gs ON gs.domain_key = l.domain_key AND gs.match_date = l.created_date
+LEFT JOIN gs_salon_best gss ON gss.salon_key = lowerUTF8(trim(ifNull(l.salon, ''))) AND gss.match_date = l.created_date
 LEFT JOIN crm_by_domain crm ON crm.domain_key = l.domain_key
 {extra_joins}
 WHERE ifNull(l.created_date, toDate('1970-01-01')) >= toDate('2026-01-01')

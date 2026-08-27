@@ -87,6 +87,13 @@ def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_
             "10:01:06 INFO pbi_import_big_analytics_full=12",
             "10:01:06 INFO unified_count_mismatch=0",
             "10:01:06 INFO fact_unified_count_mismatch=0",
+            "10:01:06 INFO direct_spend_loss_slices=0",
+            "10:01:06 INFO bi_contract_auto_spend_raw_to_pbi_slices=0",
+            "10:01:06 INFO bi_contract_direct_feed_spend_slices=0",
+            "10:01:06 INFO bi_contract_pbi_funnel_slices=0",
+            "10:01:06 INFO bi_contract_closed_month_drift_slices=0",
+            "10:01:06 INFO bi_contract_auto_empty_dims_slices=0",
+            "10:01:06 INFO sales_without_real_specialist_slices=0",
             "10:01:06 INFO full_before_2026=0",
             "10:01:06 INFO full_null_source=0",
             "10:01:06 INFO full_funnel_korr_lt_kval=0",
@@ -107,6 +114,8 @@ def test_build_message_reports_raw_delta_final_checks_golden_and_step_times(tmp_
     assert "CPL: заявка 100 ₽, квал 200 ₽, приезд 400 ₽, продажа 600 ₽" in message
     assert "full+arrival=12, unified=12, fact=12 OK" in message
     assert "инварианты: OK" in message
+    assert "расход Авто raw → BI: ✅ OK" in message
+    assert "воронка заявки/визиты/продажи → BI: ✅ OK" in message
     assert "raw Кудерко: 67/67, до cutoff 67/67" in message
     assert "<b>Power BI</b>\nпропущен (BA6_POWERBI_REFRESH не включён)" in message
     assert "1 step1_load_raw.step1" in message
@@ -168,6 +177,7 @@ def test_build_message_surfaces_verify_fail_details(tmp_path):
             "10:00:02 INFO big_analytics_unified=12",
             "10:00:02 INFO fact_big_analytics=12",
             "10:00:03 INFO full_last_day_incomplete=1",
+            "10:00:03 INFO bi_contract_pbi_funnel_slices=2",
             "10:00:04 [ERROR] verify_big_analytics: FAIL: full_last_day_incomplete=1",
             "10:00:05 [ERROR] pipeline: Шаг 900 FAIL за 60.5 сек",
         ]),
@@ -177,7 +187,8 @@ def test_build_message_surfaces_verify_fail_details(tmp_path):
     message = cron_run.build_message(1, log, 41, powerbi_enabled=True)
 
     assert "verify: <b>FAIL</b> <code>full_last_day_incomplete=1</code>" in message
-    assert "инварианты: <b>FAIL</b> <code>full_last_day_incomplete</code>" in message
+    assert "инварианты: <b>FAIL</b> <code>full_last_day_incomplete, bi_contract_pbi_funnel_slices</code>" in message
+    assert "воронка заявки/визиты/продажи → BI: 🚫 <b>FAIL</b> (2 срезов)" in message
     assert "<b>Power BI</b>\nне запускался: pipeline FAIL" in message
 
 

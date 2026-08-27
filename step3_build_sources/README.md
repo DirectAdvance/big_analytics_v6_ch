@@ -25,6 +25,10 @@ Step3 собирает ClickHouse-таблицу `ad_analytics.big_analytics_sou
 Мелкие `Посевы_<domain>` источники не должны появляться. Посевные звонки должны оставаться
 канонически `Посевы_Звонки` и доезжают до full через step6 calls-ветку.
 
+Для Direct-расхода домен выбирается так: `raw_leads.domain`, затем `raw_yandex.domain`, затем
+fallback из `gsheet_sites` по логину и дате. Это сохраняет расход в срезе сайта; `gsheet_sites`
+нужен только когда raw-строка не несёт домен.
+
 ## CRM И Воронка
 
 - source type маппится в ключ CRM через `CRM_BY_SOURCE_TYPE`;

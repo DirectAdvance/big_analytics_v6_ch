@@ -19,4 +19,4 @@ def test_vk_ads_pbi_view_exports_site_key_and_domain():
 
     assert "{" not in sql
     assert 'AS site_key' in sql
-    assert 'f.domain AS domain' in sql
+    assert "CAST(NULL, 'Nullable(String)') AS domain" in sql

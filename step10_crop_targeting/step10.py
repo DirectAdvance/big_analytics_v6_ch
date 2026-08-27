@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
+from config.ch_settings import DATE_FROM, GSHEET_SITES_EFFECTIVE, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow, table_exists
 from step3_build_sources.step3 import CROP_SOURCE_TYPES, CRM_NAME_BY_SOURCE_TYPE, SOURCE_STORE
 
@@ -479,7 +479,7 @@ def _rebuild_telega_lead_fact(client) -> int:
                 anyLast(template) AS template,
                 anyLast(region) AS region,
                 anyLast(direction) AS direction
-            FROM reference_data.gsheet_sites
+            FROM {GSHEET_SITES_EFFECTIVE}
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
         )
@@ -566,7 +566,7 @@ def _rebuild_telega_errors(client) -> int:
                 anyLast(salon) AS salon,
                 anyLast(city) AS city,
                 anyLast(region) AS region
-            FROM reference_data.gsheet_sites
+            FROM {GSHEET_SITES_EFFECTIVE}
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
         ),
@@ -679,7 +679,7 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
                 anyLast(site_type) AS site_type,
                 anyLast(city) AS city,
                 anyLast(region) AS region
-            FROM reference_data.gsheet_sites
+            FROM {GSHEET_SITES_EFFECTIVE}
             WHERE ifNull(salon, '') != ''
             GROUP BY salon_key
         ),
@@ -691,7 +691,7 @@ def _insert_crop_gsheet_costs(client, target: str) -> None:
                 anyLast(city) AS city,
                 anyLast(region) AS region,
                 anyLast(login_key) AS login_key
-            FROM reference_data.gsheet_sites
+            FROM {GSHEET_SITES_EFFECTIVE}
             WHERE ifNull(domain, '') != ''
             GROUP BY domain_key
         ),
@@ -789,7 +789,7 @@ def _insert_crop_api_costs(client, target: str) -> None:
                 anyLast(project_manager) AS project_manager,
                 anyLast(sales_manager) AS sales_manager,
                 anyLast(client_id) AS client_id
-            FROM reference_data.gsheet_sites
+            FROM {GSHEET_SITES_EFFECTIVE}
             WHERE ifNull(salon, '') != ''
             GROUP BY salon_key
         ),
@@ -915,7 +915,7 @@ def _insert_vk_ads_costs(client, target: str) -> None:
         salon_by_acc AS
         (
             SELECT
-                a.account_id AS account_id,
+                toInt64OrNull(gs.vk_client_id) AS account_id,
                 anyLast(gs.domain) AS domain,
                 anyLast(nullIf(trim(ifNull(gs.status, '')), '')) AS gs_status,
                 anyLast(nullIf(trim(ifNull(gs.directologist, '')), '')) AS directologist,
@@ -928,13 +928,11 @@ def _insert_vk_ads_costs(client, target: str) -> None:
                 anyLast(nullIf(trim(ifNull(gs.project_manager, '')), '')) AS project_manager,
                 anyLast(nullIf(trim(ifNull(gs.sales_manager, '')), '')) AS sales_manager,
                 anyLast(nullIf(trim(ifNull(gs.login_key, '')), '')) AS login_key
-            FROM reference_data.vk_ads_agency_clients AS a
-            INNER JOIN reference_data.gsheet_sites AS gs
-                ON lowerUTF8(trim(ifNull(a.domain, ''))) = lowerUTF8(trim(ifNull(gs.domain, '')))
+            FROM {GSHEET_SITES_EFFECTIVE} AS gs
             WHERE gs.niche = 'Авто'
-              AND ifNull(a.domain, '') != ''
               AND ifNull(gs.domain, '') != ''
-            GROUP BY a.account_id
+              AND toInt64OrNull(gs.vk_client_id) IN ({VK_AUTO_ACCOUNTS_SQL})
+            GROUP BY toInt64OrNull(gs.vk_client_id)
         )
         SELECT
             concat('vk_ads_cost|', toString(vk.event_date), '|', toString(ifNull(vk.account_id, 0)), '|', toString(ifNull(vk.ad_plan_id, 0))) AS key3,

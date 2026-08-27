@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
-from config.ch_settings import DATE_FROM, VK_AUTO_ACCOUNTS_SQL
+from config.ch_settings import DATE_FROM, GSHEET_SITES_EFFECTIVE, VK_AUTO_ACCOUNTS_SQL
 from config.ch_utils import (
     SAFE_QUERY_SETTINGS as BASE_SAFE_QUERY_SETTINGS,
     apply_storage_codecs,
@@ -515,7 +515,7 @@ DIM_DDL = {
                             client_id AS salon_id,
                             sales_manager AS manager,
                             ifNull(crm, '') AS crm_name
-                        FROM reference_data.gsheet_sites
+                        FROM {GSHEET_SITES_EFFECTIVE}
                         WHERE ifNull(domain, '') != ''
                           AND niche = 'Авто'
                     )
@@ -572,7 +572,7 @@ DIM_DDL = {
                     WHERE ifNull(domain, '') != ''
                       AND lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, ''))) NOT IN (
                           SELECT DISTINCT lowerUTF8(trim(BOTH ' ' FROM ifNull(domain, '')))
-                          FROM reference_data.gsheet_sites
+                          FROM {GSHEET_SITES_EFFECTIVE}
                           WHERE ifNull(domain, '') != ''
                       )
                     GROUP BY site_key, domain, salon, city, region, site_type, template,
@@ -1417,20 +1417,18 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
         salon_by_acc AS
         (
             SELECT
-                a.account_id AS account_id,
+                toInt64OrNull(gs.vk_client_id) AS account_id,
                 anyLast(gs.domain) AS domain,
                 anyLast(cityHash64(lowerUTF8(trim(BOTH ' ' FROM ifNull(gs.domain, ''))))) AS site_key,
                 anyLast(nullIf(trim(ifNull(gs.salon, '')), '')) AS `салон`,
                 anyLast(nullIf(trim(ifNull(gs.region, '')), '')) AS `регион`,
                 anyLast(nullIf(trim(ifNull(gs.site_type, '')), '')) AS `тип_сайта`,
                 anyLast(nullIf(trim(ifNull(gs.directologist, '')), '')) AS `специалист`
-            FROM reference_data.vk_ads_agency_clients AS a
-            INNER JOIN reference_data.gsheet_sites AS gs
-                ON lowerUTF8(trim(ifNull(a.domain, ''))) = lowerUTF8(trim(ifNull(gs.domain, '')))
+            FROM {GSHEET_SITES_EFFECTIVE} AS gs
             WHERE gs.niche = 'Авто'
-              AND ifNull(a.domain, '') != ''
               AND ifNull(gs.domain, '') != ''
-            GROUP BY a.account_id
+              AND toInt64OrNull(gs.vk_client_id) IN ({VK_AUTO_ACCOUNTS_SQL})
+            GROUP BY toInt64OrNull(gs.vk_client_id)
         ),
         site_dim AS
         (
@@ -1440,7 +1438,7 @@ def _vk_ads_sql(metrics: str, stats_where_sql: str, lead_source_where_sql: str, 
                 anyLast(region) AS `регион`,
                 anyLast(site_type) AS `тип_сайта`,
                 anyLast(directologist) AS `специалист`
-            FROM reference_data.gsheet_sites
+            FROM {GSHEET_SITES_EFFECTIVE}
             WHERE ifNull(domain, '') != ''
               AND niche = 'Авто'
             GROUP BY site_key

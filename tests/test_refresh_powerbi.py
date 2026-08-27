@@ -68,9 +68,9 @@ def test_refresh_runs_selective_ba6_refresh_and_waits_for_completion(monkeypatch
     }
 
 
-def test_refresh_contract_includes_city_tier_and_excludes_heavy_ads_texts():
+def test_refresh_contract_includes_city_tier_and_direct_ads_texts():
     assert "Dim_City_Tier" in refresh_powerbi._ALL_TABLES
-    assert "yandex_direct_ads_texts" not in refresh_powerbi._ALL_TABLES
+    assert "yandex_direct_ads_texts" in refresh_powerbi._ALL_TABLES
 
 
 def test_refresh_does_not_report_success_while_previous_refresh_runs(monkeypatch):

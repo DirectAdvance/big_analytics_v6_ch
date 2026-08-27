@@ -34,7 +34,8 @@
 **Шаг 1 — RAW в ClickHouse** (`step1_load_raw`)
 Пересоздаёт `ad_analytics.raw_yandex`, `raw_leads`, `raw_calls`, `raw_domains`,
 `raw_perform_leads` из `raw_data.*` через ClickHouse `MergeTree`/`VIEW`-слой.
-Это не PostgreSQL `UNLOGGED`.
+`raw_yandex` сохраняет `domain` из `raw_data.yandex_direct_report_rows`; это обязательная ось
+для сверки расхода по сайтам. Это не PostgreSQL `UNLOGGED`.
 
 ---
 
@@ -54,6 +55,10 @@
   и `yandex_direct_account_reviews` прямо с Victory PG, потому что их нет в `raw_data`.
 - `big_analytics_crop_targeting` — посевы (в v6 сюда же схлопнуты `telegram` / `social_посевы`
   / `vk_zero`, которые в v5 были отдельными `_source_table`)
+
+Для строк расхода Директа домен берётся в порядке: домен лида → `raw_yandex.domain` →
+fallback из `reference_data.gsheet_sites`. Fallback не должен перетирать raw-домен, иначе расход
+переезжает между сайтами одного логина.
 
 > ⚠️ Вьюха `ad_analytics.big_analytics_reviews` сейчас отдаёт **0 строк**: она пересоздаётся
 > шагом 148 с фильтром `_source_table IN ('reviews')`, а step3 пишет тег
@@ -140,6 +145,10 @@ UNION ALL всех источников → `big_analytics_full`.
 > (`watch_pipeline.py`, `funnel_drift_snapshot.py`, `yandex_direct_checking_report`).
 > Дневной cron шлёт lifecycle-уведомления из `cron_run.py`: старт/финиш pipeline и
 > старт/финиш Power BI refresh, если включён `BA6_POWERBI_REFRESH=1`.
+> Refresh запускается только после PASS шага 900. BI golden блокирует pipeline и refresh при
+> потере авто-расхода raw→BI, потере расхода фидов raw→BI, расхождении воронки
+> request/arrival с `pbi_big_analytics_full`, скачке закрытых месяцев больше 4% по продажам/CPL
+> продажи или появлении авто-метрик без специалиста/города/салона.
 > Сам канал живой: тестовая отправка 2026-08-16 доставлена и с Мака, и с Victory.
 
 ---

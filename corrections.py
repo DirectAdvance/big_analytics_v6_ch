@@ -49,6 +49,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config.ch_db import get_client
+from config.ch_settings import GSHEET_SITES_EFFECTIVE
 from config.ch_utils import count_rows, swap_shadow, table_exists
 
 logger = logging.getLogger("corrections")
@@ -705,7 +706,7 @@ salon_canon AS
     FROM
     (
         SELECT DISTINCT trim(salon) AS salon, {_word_sort_key('salon')} AS wkey
-        FROM reference_data.gsheet_sites
+        FROM {GSHEET_SITES_EFFECTIVE}
         WHERE ifNull(salon, '') != '' AND trim(salon) != ''
     )
     GROUP BY wkey
@@ -742,14 +743,14 @@ def _stage5_domain_salon() -> str:
 
 
 def _region_cte() -> str:
-    return """
+    return f"""
 salon_city_region AS
 (
     SELECT
         lowerUTF8(trim(ifNull(salon, ''))) AS salon_key,
         lowerUTF8(trim(ifNull(city, ''))) AS city_key,
         min(region) AS region_value
-    FROM reference_data.gsheet_sites
+    FROM {GSHEET_SITES_EFFECTIVE}
     WHERE ifNull(region, '') != '' AND ifNull(salon, '') != ''
     GROUP BY salon_key, city_key
 )"""
@@ -759,7 +760,7 @@ def _specialist_cte() -> str:
     """directologist/direction_main по домену — приоритет строке с непустым directologist."""
     # argMax по КОРТЕЖУ: v5 `DISTINCT ON (domain) ORDER BY directologist NULLS LAST`
     # берёт ОБА поля из ОДНОЙ строки. Два независимых argMax смешали бы строки.
-    return """
+    return f"""
 gs_specialist AS
 (
     SELECT domain_key, best.1 AS directologist, best.2 AS direction_main
@@ -775,7 +776,7 @@ gs_specialist AS
                 ifNull(directologist, '') AS directologist,
                 ifNull(direction_main, '') AS direction_main,
                 if(trim(ifNull(directologist, '')) != '', 1, 0) AS has_dir
-            FROM reference_data.gsheet_sites
+            FROM {GSHEET_SITES_EFFECTIVE}
             WHERE ifNull(domain, '') != ''
         )
         GROUP BY domain_key

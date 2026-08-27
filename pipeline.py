@@ -49,6 +49,7 @@ STEPS = [
     (115, "spec_fallback", "spec_fallback"),
     (12, "step12_proverka_big_analytics.step12", "step12"),
     (13, "step13_arrival.step13", "step13"),
+    (130, "spec_fallback_arrival", "spec_fallback_arrival"),
     (131, "step13_arrival.build_unified", "build_unified"),
     (139, "direct_placement_links.build", "direct_placement_links"),
     (140, "spend.build_direct_spend_staging", "direct_spend_staging"),

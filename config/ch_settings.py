@@ -7,6 +7,7 @@ DATE_FROM = "2026-01-01"
 CH_RAW_DB = "raw_data"
 CH_REF_DB = "reference_data"
 CH_WORK_DB = "ad_analytics"
+GSHEET_SITES_EFFECTIVE = f"{CH_WORK_DB}.gsheet_sites_effective"
 
 RAW_SOURCE_TABLES = {
     "yandex": f"{CH_RAW_DB}.yandex_direct_report_rows",
@@ -56,19 +57,15 @@ MINUS_SNAPSHOT_BLOCKS = ["tp2", "tp4"]
 # В v5 скоуп задавался на шаге 0: `local_vk_ads_stats_day` наполнялся с фильтром
 # `account_id IN (SELECT vk_client_id FROM local_gsheet_sites WHERE niche='Авто')`
 # (`work/big_analytics_v5/step0_sync_local/step0.py:699-720`), и все потребители читали уже
-# суженную таблицу. В v6_ch шага 0-синка нет, а в `reference_data.gsheet_sites` колонки `vk_client_id`
-# ПРОСТО НЕТ — поэтому связка «VK-аккаунт → домен» берётся из реестра агентских клиентов
-# `reference_data.vk_ads_agency_clients` (account_id → domain), а ниша — из `reference_data.gsheet_sites`.
+# суженную таблицу. В v6_ch step0 собирает `ad_analytics.gsheet_sites_effective`
+# из CH-справочника + PG overlay для доменов, которых нет/которые без directologist.
 #
 # Замер 2026-08-05: скоуп даёт 4 аккаунта с расходом (1090518071 autostock.ru,
 # 1090694251 autodrive-102.site, 1090694302 autopro-116.site, 1090694347 autocenter-152.site)
 # и 98 уникальных banner_id — ровно как в v5 (`public.fact_vk_ads`: 4 / 98).
 VK_AUTO_ACCOUNTS_SQL = f"""
-    SELECT DISTINCT a.account_id
-    FROM {CH_REF_DB}.vk_ads_agency_clients AS a
-    WHERE lowerUTF8(trim(ifNull(a.domain, ''))) IN (
-        SELECT lowerUTF8(trim(ifNull(domain, '')))
-        FROM {CH_REF_DB}.gsheet_sites
-        WHERE niche = 'Авто' AND ifNull(domain, '') != ''
-    )
+    SELECT DISTINCT toInt64OrNull(vk_client_id) AS account_id
+    FROM {GSHEET_SITES_EFFECTIVE}
+    WHERE niche = 'Авто'
+      AND toInt64OrNull(vk_client_id) IS NOT NULL
 """

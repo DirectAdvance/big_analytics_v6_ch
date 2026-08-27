@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.ch_db import get_client
+from config.ch_settings import GSHEET_SITES_EFFECTIVE
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, table_exists
 from corrections import _KUDERKO_DATE, _KUDERKO_LOGINS  # единственный источник — не дублировать
 
@@ -156,6 +157,10 @@ PBI_RESTORED_TEXT_COLUMNS = {
     "город",
     "регион",
 }
+DIRECT_SPEND_LOSS_TOLERANCE = Decimal("1.00")
+BI_CONTRACT_TOLERANCE = Decimal("1.00")
+CLOSED_MONTH_DRIFT_RATIO = Decimal("0.04")
+BAD_SPECIALISTS = ("", "Без специалиста", "Посевы", "Тоборев Владимир")
 
 
 def _golden_kuderko_sql(source_sql: str) -> str:
@@ -216,6 +221,391 @@ def _has_columns(client, table: str, columns: set[str]) -> bool:
     ).result_rows
     existing = {row[0] for row in rows}
     return columns.issubset(existing)
+
+
+def _direct_spend_loss_rows(client) -> list[tuple]:
+    return client.query(
+        f"""
+        WITH auto_domains AS
+        (
+            SELECT DISTINCT lowerUTF8(trim(ifNull(domain, ''))) AS domain
+            FROM {GSHEET_SITES_EFFECTIVE}
+            WHERE niche = 'Авто'
+              AND ifNull(domain, '') != ''
+        ),
+        raw AS
+        (
+            SELECT
+                toStartOfMonth(`Date`) AS month,
+                lowerUTF8(trim(account_login)) AS account_login,
+                lowerUTF8(trim(ifNull(domain, ''))) AS domain,
+                round(sum(total_cost), 2) AS raw_cost
+            FROM ad_analytics.raw_yandex
+            WHERE lowerUTF8(trim(ifNull(domain, ''))) IN (SELECT domain FROM auto_domains)
+            GROUP BY month, account_login, domain
+        ),
+        direct AS
+        (
+            SELECT
+                toStartOfMonth(`Date`) AS month,
+                lowerUTF8(trim(account_login)) AS account_login,
+                lowerUTF8(trim(ifNull(domain, ''))) AS domain,
+                round(sum(total_cost), 2) AS direct_cost
+            FROM ad_analytics.big_analytics_direct
+            WHERE ifNull(domain, '') != ''
+            GROUP BY month, account_login, domain
+        )
+        SELECT
+            raw.month,
+            raw.account_login,
+            raw.domain,
+            raw.raw_cost,
+            ifNull(direct.direct_cost, toDecimal64(0, 2)) AS direct_cost,
+            raw.raw_cost - ifNull(direct.direct_cost, toDecimal64(0, 2)) AS missing_cost
+        FROM raw
+        LEFT JOIN direct USING (month, account_login, domain)
+        WHERE raw.raw_cost > ifNull(direct.direct_cost, toDecimal64(0, 2)) + {{tolerance:Decimal(18, 2)}}
+        ORDER BY missing_cost DESC
+        LIMIT 20
+        """,
+        parameters={"tolerance": DIRECT_SPEND_LOSS_TOLERANCE},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+
+
+def _auto_spend_pbi_loss_rows(client) -> list[tuple]:
+    return client.query(
+        f"""
+        WITH auto_domains AS
+        (
+            SELECT DISTINCT lowerUTF8(trim(ifNull(domain, ''))) AS domain
+            FROM {GSHEET_SITES_EFFECTIVE}
+            WHERE niche = 'Авто'
+              AND ifNull(domain, '') != ''
+        ),
+        raw AS
+        (
+            SELECT
+                toStartOfMonth(`Date`) AS month,
+                lowerUTF8(trim(account_login)) AS account_login,
+                lowerUTF8(trim(ifNull(domain, ''))) AS domain,
+                round(sum(total_cost), 2) AS raw_cost
+            FROM ad_analytics.raw_yandex
+            WHERE lowerUTF8(trim(ifNull(domain, ''))) IN (SELECT domain FROM auto_domains)
+            GROUP BY month, account_login, domain
+        ),
+        pbi AS
+        (
+            SELECT
+                toStartOfMonth(`Date`) AS month,
+                lowerUTF8(trim(splitByChar('|', `аккаунт|сайт`)[1])) AS account_login,
+                lowerUTF8(trim(ifNull(`домен`, ''))) AS domain,
+                round(sum(total_cost), 2) AS pbi_cost
+            FROM ad_analytics.pbi_big_analytics_full
+            WHERE lowerUTF8(trim(ifNull(`домен`, ''))) IN (SELECT domain FROM auto_domains)
+            GROUP BY month, account_login, domain
+        )
+        SELECT
+            raw.month,
+            raw.account_login,
+            raw.domain,
+            raw.raw_cost,
+            ifNull(pbi.pbi_cost, toDecimal64(0, 2)) AS pbi_cost,
+            raw.raw_cost - ifNull(pbi.pbi_cost, toDecimal64(0, 2)) AS missing_cost
+        FROM raw
+        LEFT JOIN pbi USING (month, account_login, domain)
+        WHERE raw.raw_cost > ifNull(pbi.pbi_cost, toDecimal64(0, 2)) + {{tolerance:Decimal(18, 2)}}
+        ORDER BY missing_cost DESC
+        LIMIT 20
+        """,
+        parameters={"tolerance": BI_CONTRACT_TOLERANCE},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+
+
+def _direct_feed_spend_loss_rows(client) -> list[tuple]:
+    if not (
+        table_exists(client, "raw_data", "direct_feed_report_rows")
+        and table_exists(client, "raw_data", "direct_cookie_feed_urls")
+    ):
+        return []
+    return client.query(
+        """
+        WITH urls AS
+        (
+            SELECT
+                lowerUTF8(trim(BOTH ' ' FROM client_login)) AS client_login_key,
+                feed_id,
+                argMax(feed_url, loaded_at) AS feed_url
+            FROM raw_data.direct_cookie_feed_urls
+            GROUP BY client_login_key, feed_id
+        ),
+        raw AS
+        (
+            SELECT
+                toStartOfMonth(r.date) AS month,
+                lowerUTF8(trim(r.client_login)) AS account_login,
+                lowerUTF8(trim(domain(ifNull(u.feed_url, '')))) AS domain,
+                round(sum(ifNull(r.cost, toDecimal128(0, 9))), 2) AS raw_cost
+            FROM raw_data.direct_feed_report_rows r
+            LEFT JOIN urls u
+              ON u.client_login_key = lowerUTF8(trim(BOTH ' ' FROM r.client_login))
+             AND u.feed_id = r.feed_id
+            WHERE positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp8') = 0
+              AND positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp9') = 0
+              AND positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp10') = 0
+            GROUP BY month, account_login, domain
+        ),
+        final AS
+        (
+            SELECT
+                toStartOfMonth(date) AS month,
+                lowerUTF8(trim(ifNull(account_login, ''))) AS account_login,
+                lowerUTF8(trim(ifNull(domain, ''))) AS domain,
+                round(sum(cost), 2) AS final_cost
+            FROM ad_analytics.fact_direct_feed_funnel
+            GROUP BY month, account_login, domain
+        )
+        SELECT
+            raw.month,
+            raw.account_login,
+            raw.domain,
+            raw.raw_cost,
+            ifNull(final.final_cost, toDecimal64(0, 2)) AS final_cost,
+            raw.raw_cost - ifNull(final.final_cost, toDecimal64(0, 2)) AS missing_cost
+        FROM raw
+        LEFT JOIN final USING (month, account_login, domain)
+        WHERE raw.raw_cost > ifNull(final.final_cost, toDecimal64(0, 2)) + {tolerance:Decimal(18, 2)}
+        ORDER BY missing_cost DESC
+        LIMIT 20
+        """,
+        parameters={"tolerance": BI_CONTRACT_TOLERANCE},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+
+
+def _pbi_funnel_loss_rows(client) -> list[tuple]:
+    return client.query(
+        """
+        WITH source AS
+        (
+            SELECT
+                toStartOfMonth(Date) AS month,
+                'По дате заявки' AS attribution,
+                round(sum(total_cost), 2) AS cost,
+                round(sum(kol_vo_zayavok), 4) AS obrashenia,
+                round(sum(korr), 4) AS zayavki,
+                round(sum(kval), 4) AS kval,
+                round(sum(priezd), 4) AS priezd,
+                round(sum(prodazhi), 4) AS prodazhi
+            FROM ad_analytics.big_analytics_full
+            GROUP BY month
+
+            UNION ALL
+
+            SELECT
+                toStartOfMonth(Date) AS month,
+                'По дате визита' AS attribution,
+                round(sum(total_cost), 2) AS cost,
+                round(sum(kol_vo_zayavok), 4) AS obrashenia,
+                round(sum(korr), 4) AS zayavki,
+                round(sum(kval), 4) AS kval,
+                round(sum(priezd), 4) AS priezd,
+                round(sum(prodazhi), 4) AS prodazhi
+            FROM ad_analytics.big_analytics_full_arrival
+            GROUP BY month
+        ),
+        pbi AS
+        (
+            SELECT
+                toStartOfMonth(Date) AS month,
+                `атрибуция` AS attribution,
+                round(sum(total_cost), 2) AS cost,
+                round(sum(`Обращения`), 4) AS obrashenia,
+                round(sum(korr), 4) AS zayavki,
+                round(sum(kval), 4) AS kval,
+                round(sum(priezd), 4) AS priezd,
+                round(sum(prodazhi), 4) AS prodazhi
+            FROM ad_analytics.pbi_big_analytics_full
+            GROUP BY month, attribution
+        )
+        SELECT
+            source.month,
+            source.attribution,
+            source.cost,
+            ifNull(pbi.cost, 0) AS pbi_cost,
+            source.obrashenia,
+            ifNull(pbi.obrashenia, 0) AS pbi_obrashenia,
+            source.zayavki,
+            ifNull(pbi.zayavki, 0) AS pbi_zayavki,
+            source.kval,
+            ifNull(pbi.kval, 0) AS pbi_kval,
+            source.priezd,
+            ifNull(pbi.priezd, 0) AS pbi_priezd,
+            source.prodazhi,
+            ifNull(pbi.prodazhi, 0) AS pbi_prodazhi
+        FROM source
+        LEFT JOIN pbi USING (month, attribution)
+        WHERE abs(source.cost - ifNull(pbi.cost, 0)) > {tolerance:Decimal(18, 2)}
+           OR abs(source.obrashenia - ifNull(pbi.obrashenia, 0)) > 0.001
+           OR abs(source.zayavki - ifNull(pbi.zayavki, 0)) > 0.001
+           OR abs(source.kval - ifNull(pbi.kval, 0)) > 0.001
+           OR abs(source.priezd - ifNull(pbi.priezd, 0)) > 0.001
+           OR abs(source.prodazhi - ifNull(pbi.prodazhi, 0)) > 0.001
+        ORDER BY month DESC, attribution
+        LIMIT 20
+        """,
+        parameters={"tolerance": BI_CONTRACT_TOLERANCE},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+
+
+def _closed_month_drift_rows(client) -> list[tuple]:
+    if not table_exists(client, "ad_analytics", "pipeline_run_snapshot_v"):
+        return []
+    return client.query(
+        """
+        WITH previous_run AS
+        (
+            SELECT run_id
+            FROM ad_analytics.pipeline_run_snapshot_v
+            ORDER BY recorded_at DESC
+            LIMIT 1
+        ),
+        prev AS
+        (
+            SELECT
+                month,
+                round(sum(cost), 2) AS cost,
+                round(sum(prodazhi), 4) AS sales,
+                if(sum(prodazhi) = 0, toFloat64(0), toFloat64(sum(cost) / sum(prodazhi))) AS cps
+            FROM ad_analytics.pipeline_run_snapshot_v
+            WHERE run_id IN (SELECT run_id FROM previous_run)
+              AND month < toStartOfMonth(today())
+            GROUP BY month
+        ),
+        cur AS
+        (
+            SELECT
+                toStartOfMonth(Date) AS month,
+                round(sum(total_cost), 2) AS cost,
+                round(sum(prodazhi), 4) AS sales,
+                if(sum(prodazhi) = 0, toFloat64(0), toFloat64(sum(total_cost) / sum(prodazhi))) AS cps
+            FROM ad_analytics.fact_big_analytics
+            WHERE `атрибуция` = 'По дате заявки'
+              AND toStartOfMonth(Date) < toStartOfMonth(today())
+            GROUP BY month
+        ),
+        metrics AS
+        (
+            SELECT month, 'sales' AS metric, toFloat64(prev.sales) AS prev_value, toFloat64(cur.sales) AS cur_value
+            FROM prev INNER JOIN cur USING (month)
+            UNION ALL
+            SELECT month, 'cpl_sale' AS metric, prev.cps AS prev_value, cur.cps AS cur_value
+            FROM prev INNER JOIN cur USING (month)
+            WHERE prev.cps > 0 AND cur.cps > 0
+        )
+        SELECT
+            month,
+            metric,
+            round(prev_value, 4) AS prev_value,
+            round(cur_value, 4) AS cur_value,
+            round((cur_value - prev_value) / prev_value, 6) AS drift_ratio
+        FROM metrics
+        WHERE prev_value > 0
+          AND abs((cur_value - prev_value) / prev_value) > {ratio:Float64}
+        ORDER BY abs(drift_ratio) DESC
+        LIMIT 20
+        """,
+        parameters={"ratio": float(CLOSED_MONTH_DRIFT_RATIO)},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+
+
+def _auto_empty_dims_rows(client) -> list[tuple]:
+    return client.query(
+        f"""
+        WITH auto_domains AS
+        (
+            SELECT DISTINCT lowerUTF8(trim(ifNull(domain, ''))) AS domain
+            FROM {GSHEET_SITES_EFFECTIVE}
+            WHERE niche = 'Авто'
+              AND ifNull(domain, '') != ''
+        )
+        SELECT
+            toStartOfMonth(Date) AS month,
+            ifNull(`домен`, '') AS domain,
+            ifNull(`специалист`, '') AS specialist,
+            ifNull(`город`, '') AS city,
+            ifNull(`салон`, '') AS salon,
+            round(sum(total_cost), 2) AS cost,
+            round(sum(`Обращения`), 4) AS obrashenia,
+            round(sum(prodazhi), 4) AS sales
+        FROM ad_analytics.pbi_big_analytics_full
+        WHERE lowerUTF8(trim(ifNull(`домен`, ''))) IN (SELECT domain FROM auto_domains)
+          AND (
+              ifNull(trim(`специалист`), '') IN {{bad_specialists:Array(String)}}
+              OR ifNull(trim(`город`), '') = ''
+              OR ifNull(trim(`салон`), '') = ''
+          )
+        GROUP BY month, domain, specialist, city, salon
+        HAVING cost > {{tolerance:Decimal(18, 2)}}
+            OR obrashenia > 0.001
+            OR sales > 0.001
+        ORDER BY cost DESC, obrashenia DESC, sales DESC
+        LIMIT 20
+        """,
+        parameters={"tolerance": BI_CONTRACT_TOLERANCE, "bad_specialists": list(BAD_SPECIALISTS)},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
+
+
+def _sales_without_real_specialist_rows(client) -> list[tuple]:
+    return client.query(
+        """
+        WITH rows AS
+        (
+            SELECT
+                'request' AS axis,
+                `источник` AS source,
+                `специалист` AS specialist,
+                domain,
+                account_login,
+                total_cost,
+                prodazhi
+            FROM ad_analytics.big_analytics_full
+            WHERE ifNull(prodazhi, 0) > 0
+
+            UNION ALL
+
+            SELECT
+                'arrival' AS axis,
+                `источник` AS source,
+                `специалист` AS specialist,
+                domain,
+                account_login,
+                total_cost,
+                prodazhi
+            FROM ad_analytics.big_analytics_full_arrival
+            WHERE ifNull(prodazhi, 0) > 0
+        )
+        SELECT
+            axis,
+            source,
+            ifNull(specialist, '') AS specialist,
+            ifNull(domain, '') AS domain,
+            ifNull(account_login, '') AS account_login,
+            round(sum(total_cost), 2) AS cost,
+            round(sum(prodazhi), 4) AS sales
+        FROM rows
+        WHERE ifNull(trim(specialist), '') IN {bad_specialists:Array(String)}
+        GROUP BY axis, source, specialist, domain, account_login
+        ORDER BY sales DESC, cost DESC
+        LIMIT 20
+        """,
+        parameters={"bad_specialists": list(BAD_SPECIALISTS)},
+        settings=SAFE_QUERY_SETTINGS,
+    ).result_rows
 
 
 def _kuderko_raw_coverage(client) -> tuple[int, int, list[str]]:
@@ -329,6 +719,79 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
         failures.append(f"empty_pbi_funnel:{ARP_FUNNEL_VIEW}")
     elif ratio < ARP_FUNNEL_RATIO_FLOOR:
         failures.append(f"pbi_funnel_ratio:{ARP_FUNNEL_VIEW}:{ratio:.3f}<{ARP_FUNNEL_RATIO_FLOOR}")
+
+    if not _has_columns(client, "raw_yandex", {"domain"}):
+        failures.append("direct_spend_guard_missing_raw_yandex_domain")
+    else:
+        spend_loss = _direct_spend_loss_rows(client)
+        log.info("direct_spend_loss_slices=%d", len(spend_loss))
+        for row in spend_loss[:5]:
+            log.error(
+                "direct_spend_loss month=%s login=%s domain=%s raw=%s direct=%s missing=%s",
+                *row,
+            )
+        if spend_loss:
+            failures.append(f"direct_spend_loss_slices={len(spend_loss)}")
+
+        auto_pbi_loss = _auto_spend_pbi_loss_rows(client)
+        log.info("bi_contract_auto_spend_raw_to_pbi_slices=%d", len(auto_pbi_loss))
+        for row in auto_pbi_loss[:5]:
+            log.error(
+                "bi_contract_auto_spend_raw_to_pbi month=%s login=%s domain=%s raw=%s pbi=%s missing=%s",
+                *row,
+            )
+        if auto_pbi_loss:
+            failures.append(f"bi_contract_auto_spend_raw_to_pbi_slices={len(auto_pbi_loss)}")
+
+    feed_spend_loss = _direct_feed_spend_loss_rows(client)
+    log.info("bi_contract_direct_feed_spend_slices=%d", len(feed_spend_loss))
+    for row in feed_spend_loss[:5]:
+        log.error(
+            "bi_contract_direct_feed_spend month=%s login=%s domain=%s raw=%s final=%s missing=%s",
+            *row,
+        )
+    if feed_spend_loss:
+        failures.append(f"bi_contract_direct_feed_spend_slices={len(feed_spend_loss)}")
+
+    pbi_funnel_loss = _pbi_funnel_loss_rows(client)
+    log.info("bi_contract_pbi_funnel_slices=%d", len(pbi_funnel_loss))
+    for row in pbi_funnel_loss[:5]:
+        log.error(
+            "bi_contract_pbi_funnel month=%s attribution=%s cost=%s/%s obr=%s/%s z=%s/%s kval=%s/%s priezd=%s/%s sales=%s/%s",
+            *row,
+        )
+    if pbi_funnel_loss:
+        failures.append(f"bi_contract_pbi_funnel_slices={len(pbi_funnel_loss)}")
+
+    closed_month_drift = _closed_month_drift_rows(client)
+    log.info("bi_contract_closed_month_drift_slices=%d", len(closed_month_drift))
+    for row in closed_month_drift[:5]:
+        log.error(
+            "bi_contract_closed_month_drift month=%s metric=%s previous=%s current=%s drift=%s",
+            *row,
+        )
+    if closed_month_drift:
+        failures.append(f"bi_contract_closed_month_drift_slices={len(closed_month_drift)}")
+
+    auto_empty_dims = _auto_empty_dims_rows(client)
+    log.info("bi_contract_auto_empty_dims_slices=%d", len(auto_empty_dims))
+    for row in auto_empty_dims[:5]:
+        log.error(
+            "bi_contract_auto_empty_dims month=%s domain=%s specialist=%s city=%s salon=%s cost=%s obr=%s sales=%s",
+            *row,
+        )
+    if auto_empty_dims:
+        failures.append(f"bi_contract_auto_empty_dims_slices={len(auto_empty_dims)}")
+
+    no_spec_sales = _sales_without_real_specialist_rows(client)
+    log.info("sales_without_real_specialist_slices=%d", len(no_spec_sales))
+    for row in no_spec_sales[:5]:
+        log.error(
+            "sales_without_real_specialist axis=%s source=%s specialist=%s domain=%s login=%s cost=%s sales=%s",
+            *row,
+        )
+    if no_spec_sales:
+        failures.append(f"sales_without_real_specialist_slices={len(no_spec_sales)}")
 
     if not no_star:
         for table in PBI_COMPAT_OBJECTS:

@@ -28,12 +28,15 @@ reference_data.domains ───────────────────
 
 ```
 raw_data.yandex_direct_report_rows ─────► raw_yandex
-                              ├── id, Date, CampaignId, CampaignName, AdGroupId, ...
+                              ├── Date, CampaignId, CampaignName, AdGroupId, domain, ...
                               ├── campaign_code = regex(CampaignName)
                               ├── tp / cpc_cpa / site_quiz = SPLIT_PART(campaign_code)
                               ├── adgroup_code = regex(AdGroupName)
                               ├── week_start = DATE_TRUNC('week', Date)
                               └── key3 = Date|CampaignId|AdGroupId|Device|RlAdjustmentId
+
+`domain` в `raw_yandex` — обязательная ось расхода. Step3 использует её до fallback из
+`reference_data.gsheet_sites`, чтобы не переносить расход между сайтами одного Direct-логина.
 
 raw_data.leads_all + reference_data.domains ─► raw_leads (deal_type != 'Звонок', is_copy_for_removal=0)
                               ├── id, created_date, arrival_date, domain_id, domain

@@ -13,6 +13,12 @@ def test_step1_excludes_copy_leads_from_raw_outputs() -> None:
     assert perform_sql.count("AND ifNull(l.is_copy_for_removal, 0) = 0") >= 3
 
 
+def test_step1_raw_yandex_keeps_domain_for_spend_slices() -> None:
+    assert "`domain` LowCardinality(Nullable(String))" in step1._raw_yandex_ddl()
+    assert "domain AS domain" in step1._raw_yandex_select()
+    assert "\n    domain,\n    \"RlAdjustmentId\"" in step1._raw_yandex_select()
+
+
 def test_step1_resolves_leads_all_salon_code_to_name() -> None:
     leads_sql = step1._raw_leads_select_sql()
     perform_sql = step1._raw_perform_leads_sql()

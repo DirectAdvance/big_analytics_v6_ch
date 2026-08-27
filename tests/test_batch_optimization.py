@@ -44,8 +44,8 @@ def test_vk_ads_cost_overlay_keeps_site_dimensions():
     source = inspect.getsource(step10._insert_vk_ads_costs)
 
     assert "salon_by_acc AS" in source
-    assert "reference_data.vk_ads_agency_clients" in source
-    assert "reference_data.gsheet_sites" in source
+    assert "toInt64OrNull(gs.vk_client_id)" in source
+    assert "{GSHEET_SITES_EFFECTIVE}" in source
     assert "CAST(sba.domain, 'Nullable(String)') AS domain" in source
     assert "CAST(sba.directologist, 'Nullable(String)') AS `специалист`" in source
     assert "concat(ifNull(sba.login_key, ''), '|', ifNull(sba.domain, '')) AS `аккаунт|сайт`" in source
