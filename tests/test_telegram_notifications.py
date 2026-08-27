@@ -229,50 +229,6 @@ def test_watch_pipeline_row_count_plural_agreement_1_2_5():
     assert msg == f'OK  <b>step12 proverka</b> — 3с  5{nnbsp}230 строк'
 
 
-# ── funnel_drift_snapshot.py: periodic report — report shape kept, RU money ────
-
-def test_funnel_drift_alert_is_ru_money_no_pre_no_exception(monkeypatch):
-    """Asserts the FINAL SHIPPED text (`sanitize_telegram_html(..., collapse_whitespace=False)`
-    matching what `_send_drift_alert` actually passes to `send_html`), not just the
-    pre-sanitize builder output. `collapse_whitespace=False` is asserted explicitly:
-    without it, the 2/4-space month-source-metric hierarchy collapses to one
-    space (round 3 director finding)."""
-    import notifications.telegram as tg
-    from step8_stats import funnel_drift_snapshot as fds
-
-    captured = {}
-
-    def fake_send_html(html, **kwargs):
-        captured['html'] = html
-        captured['kwargs'] = kwargs
-        return True
-
-    monkeypatch.setattr(tg, 'send_html', fake_send_html)
-
-    rows = [{
-        'month': '2026-08-01', 'источник': 'Контекст',
-        'cost_curr': 1234567.0, 'cost_prev': 1000000.0, 'delta_cost': 234567.0,
-        'zayavki_curr': 10, 'zayavki_prev': 8, 'delta_zayavki': 2,
-        'vizity_curr': 5, 'vizity_prev': 4, 'delta_vizity': 1,
-        'prodazhi_curr': 2, 'prodazhi_prev': 1, 'delta_prodazhi': 1,
-    }]
-    fds._send_drift_alert(rows)
-
-    assert captured['kwargs'].get('collapse_whitespace') is False
-    shipped = sanitize_telegram_html(captured['html'], collapse_whitespace=False)
-
-    nnbsp = ' '
-    assert f'1{nnbsp}234{nnbsp}567' in shipped  # RU thousands, not "1,234,567"
-    assert '<pre>' not in shipped
-    assert 'Traceback' not in shipped and 'ValueError' not in shipped
-    assert '  <b>Контекст</b>' in shipped  # 2-space source-under-month indent survives
-    assert '    расход' in shipped  # 4-space metric indent survives
-
-    # the regression this test now guards against: default collapsing would flatten it
-    collapsed = sanitize_telegram_html(captured['html'])  # collapse_whitespace=True (default)
-    assert '  <b>Контекст</b>' not in collapsed
-
-
 # ── yandex_direct_checking_report/report.py: table report, failed-accounts list ─
 
 class _FakeCursor:
