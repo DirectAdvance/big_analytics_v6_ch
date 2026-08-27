@@ -50,36 +50,9 @@ def direct_feed_non_posev_campaign_sql(alias: str = "r") -> str:
     )
 
 
-BI_EXCLUDED_SPECIALISTS = (
-    "",
-    "Без специалиста",
-    "Звонки",
-    "Посевы",
-    "Кудерко Семен",
-    "Питеркина Дарья",
-    "Тоборев Владимир",
-    "SEO",
-    "SEO Flow",
-    "Аксиома",
-    "Александра Данчинова",
-    "Банк",
-    "Ильин Данил",
-    "Коллектор",
-    "Контекст",
-    "Медиа-Актив",
-)
-
-
-def _sql_string_list(values: tuple[str, ...]) -> str:
-    return "(" + ", ".join("'" + value.replace("'", "''") + "'" for value in values) + ")"
-
-
 def _bi_specialist_expr(expr: str) -> str:
     clean = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
-    return (
-        f"if({clean} IN {_sql_string_list(BI_EXCLUDED_SPECIALISTS)}, "
-        f"CAST(NULL, 'Nullable(String)'), CAST({clean}, 'Nullable(String)'))"
-    )
+    return f"CAST(nullIf({clean}, ''), 'Nullable(String)')"
 
 
 PBI_SOURCE_OBJECTS = [
@@ -205,11 +178,11 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 dcs.`тип_заявки`
             ) AS `тип_заявки`,
             {_bi_specialist_expr("f.`специалист`")} AS `специалист`,
-            dsl.`салон` AS `салон`,
-            dsl.`город` AS `город`,
-            dsl.`регион` AS `регион`,
-            dsl.`тип_сайта` AS `тип_сайта`,
-            dsl.`шаблон` AS `шаблон`,
+            coalesce(nullIf(dsl.`салон`, ''), dsite.`салон`) AS `салон`,
+            coalesce(nullIf(dsl.`город`, ''), dsite.`город`) AS `город`,
+            coalesce(nullIf(dsl.`регион`, ''), dsite.`регион`) AS `регион`,
+            coalesce(nullIf(dsl.`тип_сайта`, ''), dsite.`тип_сайта`) AS `тип_сайта`,
+            coalesce(nullIf(dsl.`шаблон`, ''), dsite.`шаблон`) AS `шаблон`,
             dcs.`статус` AS `статус`,
             dsl.`проджект` AS `проджект`,
             dsl.`менеджер` AS `менеджер`,
@@ -219,7 +192,7 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`),
                 dcs.`Название crm`
             ) AS `Название crm`,
-            {_city_tier_key_expr("dsl.`город`", "f.`Date`")} AS city_tier_key,
+            {_city_tier_key_expr("coalesce(nullIf(dsl.`город`, ''), dsite.`город`)", "f.`Date`")} AS city_tier_key,
             toInt64(f.manager_login_key % 9223372036854775807) AS manager_login_key
         FROM ad_analytics.fact_big_analytics f
         LEFT JOIN ad_analytics.Dim_Account da ON da.account_key = f.account_key

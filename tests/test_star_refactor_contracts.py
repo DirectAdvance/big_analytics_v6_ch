@@ -107,9 +107,7 @@ def test_pbi_full_exposes_tp_and_normalizes_claim_type():
     assert "WHERE f.`атрибуция` = 'По дате заявки'" not in sql
 
 
-def test_pbi_views_hide_service_labels_from_specialist_axis():
-    service_labels = ["Без специалиста", "Звонки", "Посевы", "Кудерко Семен", "Питеркина Дарья", "SEO"]
-
+def test_pbi_views_keep_ba5_specialist_fallback_labels():
     for sql in [
         build_pbi_compat._pbi_full_sql(),
         build_pbi_compat._dim_salon_pbi_sql(),
@@ -119,9 +117,9 @@ def test_pbi_views_hide_service_labels_from_specialist_axis():
         build_pbi_compat._criterion_spend_pbi_sql(),
         build_pbi_compat._vk_ads_pbi_sql(),
     ]:
-        assert "CAST(NULL, 'Nullable(String)')" in sql
-        for label in service_labels:
-            assert label in sql
+        assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(" in sql
+        assert "Без специалиста" not in sql
+        assert "Кудерко Семен" not in sql
 
 
 def test_dim_build_can_target_one_dimension():
@@ -374,8 +372,7 @@ def test_region_and_criterion_star_views_keep_only_keys_and_metrics():
         assert "domain" not in sql
         assert "updated_at" not in sql
         assert "toInt64(0)" not in sql
-        assert "CAST(NULL, 'Nullable(String)')" in sql
-        assert "Кудерко Семен" in sql
+        assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)')" in sql
     assert "Dim_Criterion" not in criterion_sql
     assert " AS criterion," not in criterion_sql
     assert "ifNull(dcr.criterion" not in criterion_sql
@@ -477,8 +474,9 @@ def test_pbi_full_restores_duplicate_text_attrs_from_new_dimensions():
     assert "LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key" in sql
     assert "concat(ifNull(da.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`" in sql
     assert "if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`)" in sql
-    assert "CAST(NULL, 'Nullable(String)')" in sql
-    assert "Кудерко Семен" in sql
+    assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)') AS `специалист`" in sql
+    assert "coalesce(nullIf(dsl.`салон`, ''), dsite.`салон`) AS `салон`" in sql
+    assert "coalesce(nullIf(dsl.`город`, ''), dsite.`город`) AS `город`" in sql
     assert "dcs.`статус` AS `статус`" in sql
     assert "dsl.`салон`" in sql
     assert "f.`салон`" not in sql
@@ -666,8 +664,7 @@ def test_region_spend_star_view_carries_distance_columns_without_join():
 
     assert "f.distance_km" in sql
     assert "f.distance_km_agreg" in sql
-    assert "CAST(NULL, 'Nullable(String)')" in sql
-    assert "Кудерко Семен" in sql
+    assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)')" in sql
     assert "JOIN" not in sql
 
 
@@ -677,8 +674,7 @@ def test_region_spend_flat_view_no_longer_hardcodes_distance_km_null():
     assert "CAST(NULL, 'Nullable(Int64)') AS distance_km" not in sql
     assert "f.distance_km," in sql
     assert "f.distance_km_agreg" in sql
-    assert "CAST(NULL, 'Nullable(String)')" in sql
-    assert "Кудерко Семен" in sql
+    assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)')" in sql
 
 
 def test_region_spend_fact_build_joins_geo_dict_with_dedup_guard():
@@ -777,8 +773,7 @@ def test_criterion_spend_star_view_carries_crm_sums_not_zero_literals():
     assert "toFloat64(f.crm_order_paid) AS `CRM: Заказ оплачен`" in sql
     assert "toFloat64(f.crm_spam_order) AS `CRM: Спам заказ`" in sql
     assert "toFloat64(f.crm_order_canceled) AS `CRM: Заказ отменен`" in sql
-    assert "CAST(NULL, 'Nullable(String)')" in sql
-    assert "Кудерко Семен" in sql
+    assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)')" in sql
 
 
 def test_criterion_spend_flat_view_crm_columns_no_longer_zero_literals():
@@ -788,8 +783,7 @@ def test_criterion_spend_flat_view_crm_columns_no_longer_zero_literals():
     assert "toInt64(0) AS `CRM: Заказ создан`" not in sql
     assert "toInt64(round(f.all_forms)) AS `Все формы`" in sql
     assert "toInt64(round(f.crm_order_created)) AS `CRM: Заказ создан`" in sql
-    assert "CAST(NULL, 'Nullable(String)')" in sql
-    assert "Кудерко Семен" in sql
+    assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)')" in sql
     # kol_vo_zayavok/korr/kval/priezd/prodazhi — другая таксономия (fact_criterion_zayavki),
     # их не трогаем.
     assert "toInt64(0) AS kol_vo_zayavok" in sql

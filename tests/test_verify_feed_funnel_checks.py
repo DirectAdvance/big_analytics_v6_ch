@@ -19,7 +19,7 @@ def test_verify_has_bi_golden_contracts():
     assert "bi_contract_direct_feed_spend_slices" in source
     assert "bi_contract_pbi_funnel_slices" in source
     assert "bi_contract_closed_month_drift_slices" in source
-    assert "bi_contract_pbi_bad_specialist_label_slices" in source
+    assert "bi_contract_pbi_blank_specialist_slices" in source
     assert "sales_without_real_specialist_slices" in source
     assert "FROM ad_analytics.big_analytics_full" in source
     assert "FROM ad_analytics.big_analytics_full_arrival" in source

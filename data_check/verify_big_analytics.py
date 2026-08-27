@@ -15,8 +15,6 @@ from config.ch_db import get_client
 from config.ch_settings import GSHEET_SITES_EFFECTIVE
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, table_exists
 from corrections import _KUDERKO_DATE, _KUDERKO_LOGINS  # единственный источник — не дублировать
-from star_refactor.build_pbi_compat import BI_EXCLUDED_SPECIALISTS
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("verify_big_analytics")
 
@@ -162,7 +160,6 @@ DIRECT_SPEND_LOSS_TOLERANCE = Decimal("1.00")
 BI_CONTRACT_TOLERANCE = Decimal("1.00")
 CLOSED_MONTH_DRIFT_RATIO = Decimal("0.04")
 BAD_SPECIALISTS = ("", "Без специалиста", "Звонки", "Посевы", "Тоборев Владимир")
-PBI_BAD_SPECIALIST_LABELS = tuple(value for value in BI_EXCLUDED_SPECIALISTS if value)
 
 
 def _golden_kuderko_sql(source_sql: str) -> str:
@@ -474,29 +471,45 @@ def _closed_month_drift_rows(client) -> list[tuple]:
             ORDER BY recorded_at DESC
             LIMIT 1
         ),
-        prev AS
+        prev_base AS
         (
             SELECT
                 month,
                 round(sum(cost), 2) AS cost,
-                round(sum(prodazhi), 4) AS sales,
-                if(sum(prodazhi) = 0, toFloat64(0), toFloat64(sum(cost) / sum(prodazhi))) AS cps
+                round(sum(prodazhi), 4) AS sales
             FROM ad_analytics.pipeline_run_snapshot_v
             WHERE run_id IN (SELECT run_id FROM previous_run)
               AND month < toStartOfMonth(today())
             GROUP BY month
         ),
-        cur AS
+        cur_base AS
         (
             SELECT
                 toStartOfMonth(Date) AS month,
                 round(sum(total_cost), 2) AS cost,
-                round(sum(prodazhi), 4) AS sales,
-                if(sum(prodazhi) = 0, toFloat64(0), toFloat64(sum(total_cost) / sum(prodazhi))) AS cps
+                round(sum(prodazhi), 4) AS sales
             FROM ad_analytics.fact_big_analytics
             WHERE `атрибуция` = 'По дате заявки'
               AND toStartOfMonth(Date) < toStartOfMonth(today())
             GROUP BY month
+        ),
+        prev AS
+        (
+            SELECT
+                month,
+                cost,
+                sales,
+                if(sales = 0, toFloat64(0), toFloat64(cost / sales)) AS cps
+            FROM prev_base
+        ),
+        cur AS
+        (
+            SELECT
+                month,
+                cost,
+                sales,
+                if(sales = 0, toFloat64(0), toFloat64(cost / sales)) AS cps
+            FROM cur_base
         ),
         metrics AS
         (
@@ -546,8 +559,7 @@ def _auto_empty_dims_rows(client) -> list[tuple]:
         FROM ad_analytics.pbi_big_analytics_full
         WHERE lowerUTF8(trim(ifNull(`домен`, ''))) IN (SELECT domain FROM auto_domains)
           AND (
-              ifNull(trim(`специалист`), '') IN {{bad_specialists:Array(String)}}
-              OR ifNull(trim(`город`), '') = ''
+              ifNull(trim(`город`), '') = ''
               OR ifNull(trim(`салон`), '') = ''
           )
         GROUP BY month, domain, specialist, city, salon
@@ -557,7 +569,7 @@ def _auto_empty_dims_rows(client) -> list[tuple]:
         ORDER BY cost DESC, obrashenia DESC, sales DESC
         LIMIT 20
         """,
-        parameters={"tolerance": BI_CONTRACT_TOLERANCE, "bad_specialists": list(BAD_SPECIALISTS)},
+        parameters={"tolerance": BI_CONTRACT_TOLERANCE},
         settings=SAFE_QUERY_SETTINGS,
     ).result_rows
 
@@ -610,7 +622,7 @@ def _sales_without_real_specialist_rows(client) -> list[tuple]:
     ).result_rows
 
 
-def _pbi_bad_specialist_label_rows(client) -> list[tuple]:
+def _pbi_blank_specialist_rows(client) -> list[tuple]:
     return client.query(
         """
         SELECT
@@ -622,7 +634,7 @@ def _pbi_bad_specialist_label_rows(client) -> list[tuple]:
             round(sum(`Обращения`), 4) AS obrashenia,
             round(sum(prodazhi), 4) AS sales
         FROM ad_analytics.pbi_big_analytics_full
-        WHERE ifNull(trim(`специалист`), '') IN {bad_labels:Array(String)}
+        WHERE ifNull(trim(`специалист`), '') = ''
         GROUP BY month, specialist, domain, account_site
         HAVING cost > {tolerance:Decimal(18, 2)}
             OR obrashenia > 0.001
@@ -630,7 +642,7 @@ def _pbi_bad_specialist_label_rows(client) -> list[tuple]:
         ORDER BY cost DESC, obrashenia DESC, sales DESC
         LIMIT 20
         """,
-        parameters={"bad_labels": list(PBI_BAD_SPECIALIST_LABELS), "tolerance": BI_CONTRACT_TOLERANCE},
+        parameters={"tolerance": BI_CONTRACT_TOLERANCE},
         settings=SAFE_QUERY_SETTINGS,
     ).result_rows
 
@@ -820,15 +832,15 @@ def run(full: bool = False, no_star: bool = False, tg: bool = False) -> int:  # 
     if no_spec_sales:
         failures.append(f"sales_without_real_specialist_slices={len(no_spec_sales)}")
 
-    pbi_bad_specialists = _pbi_bad_specialist_label_rows(client)
-    log.info("bi_contract_pbi_bad_specialist_label_slices=%d", len(pbi_bad_specialists))
-    for row in pbi_bad_specialists[:5]:
+    pbi_blank_specialists = _pbi_blank_specialist_rows(client)
+    log.info("bi_contract_pbi_blank_specialist_slices=%d", len(pbi_blank_specialists))
+    for row in pbi_blank_specialists[:5]:
         log.error(
-            "bi_contract_pbi_bad_specialist_label month=%s specialist=%s domain=%s account_site=%s cost=%s obr=%s sales=%s",
+            "bi_contract_pbi_blank_specialist month=%s specialist=%s domain=%s account_site=%s cost=%s obr=%s sales=%s",
             *row,
         )
-    if pbi_bad_specialists:
-        failures.append(f"bi_contract_pbi_bad_specialist_label_slices={len(pbi_bad_specialists)}")
+    if pbi_blank_specialists:
+        failures.append(f"bi_contract_pbi_blank_specialist_slices={len(pbi_blank_specialists)}")
 
     if not no_star:
         for table in PBI_COMPAT_OBJECTS:
