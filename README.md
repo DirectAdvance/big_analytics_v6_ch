@@ -65,7 +65,8 @@
 **Шаг 4 — Статусы кампаний** (`step4_campaign_status`)
 В v6 это чистая ClickHouse VIEW, без кук и без Grid API: `prefetch_statuses()` — no-op для
 совместимости (сигнатура унаследована от v5-оркестраторов), `run()` строит
-`ad_analytics.campaign_status` / `campaign_status_v` напрямую из `reference_data.direct_campaigns`.
+`ad_analytics.campaign_status` / `campaign_status_v` из `reference_data.direct_campaigns` с
+проверкой активного авто-аккаунта в `reference_data.gsheet_sites`.
 
 ---
 
@@ -203,8 +204,8 @@ step 145). Актуальные инварианты и открытые рас�
 
 ## Power BI
 
-**Файл (Mac, актуальный):** `/Users/semen/Documents/креативы виктори/Большая аналитика_admin/Большая аналитика_v00.pbip`
-(встроенная модель `v00` — редактирует агент `pbip_editor`).
+**Файл (Mac, актуальный):** `/Users/semen/Documents/Отчеты_victory_Powerbi/Большая аналитика_admin_ch/Большая аналитика_admin.pbip`
+(встроенная модель admin; user-отчёт лежит рядом в `Большая аналитика_user_ch`).
 _Legacy Windows-путь `C:\Users\Mi\Desktop\креативы виктори\готовые таблицы\…` устарел — не использовать._
 
 BA6 Power BI работает только по нише `Авто`. Не-авто ниши не добавляются в BI-измерения,

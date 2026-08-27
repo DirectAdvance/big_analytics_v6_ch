@@ -31,27 +31,39 @@ def run(conn=None, run_id: str | None = None, prefetch_thread=None) -> dict:  # 
     client.command(
         """
         CREATE VIEW ad_analytics.campaign_status AS
+        WITH active_auto_accounts AS
+        (
+            SELECT DISTINCT lowerUTF8(trim(BOTH ' ' FROM ifNull(login_key, ''))) AS account_login
+            FROM reference_data.gsheet_sites
+            WHERE ifNull(niche, '') = 'Авто'
+              AND ifNull(status, '') = 'Контекст активно'
+              AND lowerUTF8(trim(BOTH ' ' FROM ifNull(login_key, ''))) NOT IN ('', 'нет', '----')
+        )
         SELECT
-            campaign_id AS `CampaignId`,
-            account_login,
+            dc.campaign_id AS `CampaignId`,
+            dc.account_login,
             multiIf(
-                upper(ifNull(status, '')) = 'ARCHIVED' OR upper(ifNull(state, '')) = 'ARCHIVED', 'Архив',
-                upper(ifNull(status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(state, '')) IN ('OFF', 'SUSPENDED'), 'Остановлена',
-                upper(ifNull(status, '')) IN ('ACCEPTED', 'ACTIVE') OR upper(ifNull(state, '')) = 'ON', 'Активна',
-                ifNull(status, '')
+                upper(ifNull(dc.status, '')) = 'ARCHIVED' OR upper(ifNull(dc.state, '')) = 'ARCHIVED', 'Архив',
+                upper(ifNull(dc.status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(dc.state, '')) IN ('OFF', 'SUSPENDED'), 'Остановлена',
+                aa.account_login IS NULL AND (upper(ifNull(dc.status, '')) IN ('ACCEPTED', 'ACTIVE') OR upper(ifNull(dc.state, '')) = 'ON'), 'Остановлена',
+                upper(ifNull(dc.status, '')) IN ('ACCEPTED', 'ACTIVE') AND upper(ifNull(dc.state, '')) = 'ON', 'Активна',
+                ifNull(dc.status, '')
             ) AS `статус`,
             CAST(NULL, 'Nullable(String)') AS `специалист`,
-            campaign_name AS `CampaignName`,
+            dc.campaign_name AS `CampaignName`,
             CAST(NULL, 'Nullable(String)') AS manager_login,
             multiIf(
-                upper(ifNull(status, '')) = 'ARCHIVED' OR upper(ifNull(state, '')) = 'ARCHIVED', 'Архив',
-                upper(ifNull(status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(state, '')) IN ('OFF', 'SUSPENDED'), 'Остановлена',
-                upper(ifNull(status, '')) IN ('ACCEPTED', 'ACTIVE') OR upper(ifNull(state, '')) = 'ON', 'Активна',
-                ifNull(status, '')
+                upper(ifNull(dc.status, '')) = 'ARCHIVED' OR upper(ifNull(dc.state, '')) = 'ARCHIVED', 'Архив',
+                upper(ifNull(dc.status, '')) IN ('SUSPENDED', 'STOPPED') OR upper(ifNull(dc.state, '')) IN ('OFF', 'SUSPENDED'), 'Остановлена',
+                aa.account_login IS NULL AND (upper(ifNull(dc.status, '')) IN ('ACCEPTED', 'ACTIVE') OR upper(ifNull(dc.state, '')) = 'ON'), 'Остановлена',
+                upper(ifNull(dc.status, '')) IN ('ACCEPTED', 'ACTIVE') AND upper(ifNull(dc.state, '')) = 'ON', 'Активна',
+                ifNull(dc.status, '')
             ) AS campaign_status,
-            payment_model,
+            dc.payment_model,
             now() AS _version
-        FROM reference_data.direct_campaigns
+        FROM reference_data.direct_campaigns dc
+        LEFT JOIN active_auto_accounts aa
+            ON aa.account_login = lowerUTF8(trim(BOTH ' ' FROM ifNull(dc.account_login, '')))
         """,
         settings=SAFE_QUERY_SETTINGS,
     )

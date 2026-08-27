@@ -49,6 +49,7 @@ def run(conn=None, run_id=None, prefetch_thread=None) -> dict:
 
 ```
 reference_data.direct_campaigns (наполняется вне этого пайплайна)
+reference_data.gsheet_sites (активные авто-аккаунты: status='Контекст активно', niche='Авто')
         │
         ▼  step4.py: DROP + CREATE VIEW
 ad_analytics.campaign_status  (multiIf по status/state → 'Активна'/'Остановлена'/'Архив')
@@ -69,12 +70,14 @@ step3 → ... → Dim_Campaign (campaign_status, payment_model из ad_analytics
 |---|---|
 | `status='ARCHIVED'` или `state='ARCHIVED'` | `Архив` |
 | `status IN ('SUSPENDED','STOPPED')` или `state IN ('OFF','SUSPENDED')` | `Остановлена` |
-| `status IN ('ACCEPTED','ACTIVE')` или `state='ON'` | `Активна` |
+| аккаунта нет среди активных авто-аккаунтов `gsheet_sites.status='Контекст активно'` + `niche='Авто'`, но campaign status/state выглядит живым | `Остановлена` |
+| `status IN ('ACCEPTED','ACTIVE')` и `state='ON'` на активном авто-аккаунте | `Активна` |
 | иначе | исходное значение `status` как есть |
 
 Регистр не важен (`upper(...)`). `state` важнее общего `status`: `status=ACCEPTED` +
 `state=SUSPENDED/OFF` считается остановленной кампанией, иначе фильтр `Активна` в Power BI
-покажет логины без реально активных кампаний. Это не тот набор ключей, что использовался в v5.
+покажет логины без реально активных кампаний. Статус аккаунта тоже участвует: `state=ON` у
+кампании не считается активом, если логин уже не `Контекст активно` в `gsheet_sites`.
 
 ## Куки
 
