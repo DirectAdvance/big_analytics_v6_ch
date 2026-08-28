@@ -204,6 +204,8 @@ def test_pbi_site_and_service_dimensions_use_only_auto_gsheet_rows():
     assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp8') = 0" in arp_sql
     assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp9') = 0" in arp_sql
     assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp10') = 0" in arp_sql
+    assert "feed_url_key" in arp_sql
+    assert "r.placement" in arp_sql
 
 
 def test_dim_crm_status_uses_ba5_empty_crm_label():
@@ -286,9 +288,9 @@ def test_direct_feed_fact_materializes_site_key():
     assert "cityHash64(placement_feed_key) AS placement_feed_key_hash" in insert_sql
     assert "GROUP BY date, campaign_id, ad_group_id, placement_feed_key_hash, account_login, site_key" in insert_sql
     assert "FROM raw_data.direct_feed_report_rows r" in insert_sql
-    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp8') = 0" in insert_sql
-    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp9') = 0" in insert_sql
-    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp10') = 0" in insert_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp8') = 0" not in insert_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp9') = 0" not in insert_sql
+    assert "positionCaseInsensitive(ifNull(r.campaign_name, ''), 'tp10') = 0" not in insert_sql
     assert "FROM raw_data.direct_cookie_feed_urls" in insert_sql
     assert "ifNull(r.cost, toDecimal128(0, 9)) AS cost" in insert_sql
     assert "r.total_cost" not in insert_sql
@@ -474,10 +476,10 @@ def test_pbi_full_restores_duplicate_text_attrs_from_new_dimensions():
     assert "LEFT JOIN ad_analytics.Dim_Site dsite ON dsite.site_key = f.site_key" in sql
     assert "concat(ifNull(da.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`" in sql
     assert "if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`)" in sql
-    assert "CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)') AS `специалист`" in sql
-    assert "coalesce(nullIf(dsl.`салон`, ''), dsite.`салон`) AS `салон`" in sql
-    assert "coalesce(nullIf(dsl.`город`, ''), dsite.`город`) AS `город`" in sql
-    assert "dcs.`статус` AS `статус`" in sql
+    assert "coalesce(CAST(nullIf(trim(BOTH ' ' FROM ifNull(f.`специалист`, '')), ''), 'Nullable(String)'), 'Не указан') AS `специалист`" in sql
+    assert "if(trim(BOTH ' ' FROM ifNull(coalesce(nullIf(dsl.`салон`, ''), dsite.`салон`), '')) = '', 'Не указано'" in sql
+    assert "if(trim(BOTH ' ' FROM ifNull(coalesce(nullIf(dsl.`город`, ''), dsite.`город`), '')) = '', 'Не указано'" in sql
+    assert "if(trim(BOTH ' ' FROM ifNull(dcs.`статус`, '')) = '', 'Не указано'" in sql
     assert "dsl.`салон`" in sql
     assert "f.`салон`" not in sql
 

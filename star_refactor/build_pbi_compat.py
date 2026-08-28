@@ -50,9 +50,19 @@ def direct_feed_non_posev_campaign_sql(alias: str = "r") -> str:
     )
 
 
+def direct_feed_placement_exclusion_sql(alias: str = "r") -> str:
+    placement = f"lowerUTF8(trim(BOTH ' ' FROM ifNull({alias}.placement, '')))"
+    return f"{placement} NOT IN (SELECT lowerUTF8(trim(BOTH ' ' FROM ifNull(feed_url_key, ''))) FROM raw_data.direct_cookie_feed_urls WHERE ifNull(feed_url_key, '') != '')"
+
+
 def _bi_specialist_expr(expr: str) -> str:
     clean = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
     return f"CAST(nullIf({clean}, ''), 'Nullable(String)')"
+
+
+def _bi_label_expr(expr: str, fallback: str = "'Не указано'") -> str:
+    clean = f"trim(BOTH ' ' FROM ifNull({expr}, ''))"
+    return f"if({clean} = '', {fallback}, {clean})"
 
 
 PBI_SOURCE_OBJECTS = [
@@ -160,13 +170,20 @@ def _pbi_full_sql(where_sql: str = "") -> str:
             f.`План заявки`,
             f.`План приезда`,
             concat(ifNull(da.account_login, ''), '|', ifNull(f.domain, '')) AS `аккаунт|сайт`,
-            f.domain AS `домен`,
+            {_bi_label_expr('f.domain')} AS `домен`,
             toInt64(round(f.priedet)) AS priedet,
             f.dohod_do_kredita,
             f.dobro,
             f.`атрибуция`,
             f.`AdGroupId` AS `AdGroupId`,
-            f.tp,
+            multiIf(
+                f.tp != '', f.tp,
+                startsWith(f.source_key, 'посевы'), 'Посевы',
+                f.source_key IN ('пиксель', 'pixel'), 'Пиксель',
+                f.source_key = 'seo', 'SEO',
+                f.source_key = 'vk ads', 'VK Ads',
+                'Не указан'
+            ) AS tp,
             multiIf(
                 f.source_key = 'пиксель', 'Пиксель',
                 f.source_key = 'pixel', 'Пиксель',
@@ -177,16 +194,16 @@ def _pbi_full_sql(where_sql: str = "") -> str:
                 'Заявки',
                 dcs.`тип_заявки`
             ) AS `тип_заявки`,
-            {_bi_specialist_expr("f.`специалист`")} AS `специалист`,
-            coalesce(nullIf(dsl.`салон`, ''), dsite.`салон`) AS `салон`,
-            coalesce(nullIf(dsl.`город`, ''), dsite.`город`) AS `город`,
-            coalesce(nullIf(dsl.`регион`, ''), dsite.`регион`) AS `регион`,
-            coalesce(nullIf(dsl.`тип_сайта`, ''), dsite.`тип_сайта`) AS `тип_сайта`,
-            coalesce(nullIf(dsl.`шаблон`, ''), dsite.`шаблон`) AS `шаблон`,
-            dcs.`статус` AS `статус`,
-            dsl.`проджект` AS `проджект`,
-            dsl.`менеджер` AS `менеджер`,
-            dsl.`id_салона` AS `id_салона`,
+            coalesce({_bi_specialist_expr("f.`специалист`")}, 'Не указан') AS `специалист`,
+            {_bi_label_expr("coalesce(nullIf(dsl.`салон`, ''), dsite.`салон`)")} AS `салон`,
+            {_bi_label_expr("coalesce(nullIf(dsl.`город`, ''), dsite.`город`)")} AS `город`,
+            {_bi_label_expr("coalesce(nullIf(dsl.`регион`, ''), dsite.`регион`)")} AS `регион`,
+            {_bi_label_expr("coalesce(nullIf(dsl.`тип_сайта`, ''), dsite.`тип_сайта`)")} AS `тип_сайта`,
+            {_bi_label_expr("coalesce(nullIf(dsl.`шаблон`, ''), dsite.`шаблон`)")} AS `шаблон`,
+            {_bi_label_expr('dcs.`статус`')} AS `статус`,
+            {_bi_label_expr('dsl.`проджект`')} AS `проджект`,
+            {_bi_label_expr('dsl.`менеджер`')} AS `менеджер`,
+            {_bi_label_expr('toString(dsl.`id_салона`)')} AS `id_салона`,
             if(
                 ifNull(dcs.`Название crm`, '') IN ('', 'Не указана'),
                 if(ifNull(dsite.`Название crm`, '') = '', 'Не указана', dsite.`Название crm`),
@@ -1102,6 +1119,7 @@ def _analytics_report_placement_pbi_sql() -> str:
                 WHERE toDate(r.day) >= toDate('{DATE_FROM}')
                   AND r.campaign_id != 0
                   AND {direct_feed_non_posev_campaign_sql("r")}
+                  AND {direct_feed_placement_exclusion_sql("r")}
                 GROUP BY date, campaign_id, ad_group_id, placement_feed_key, placement, domain, account_login, site_key
             )
         ) f
@@ -1564,7 +1582,7 @@ def _dim_campaign_pbi_sql() -> str:
         )
         SELECT
             dc.CampaignId,
-            dc.CampaignName,
+            if(dc.CampaignId = 0, 'Не рекламная кампания', dc.CampaignName) AS CampaignName,
             dc.account_login,
             dc.campaign_code,
             dc.tp,
@@ -1668,8 +1686,21 @@ def _dim_site_pbi_sql() -> str:
         SELECT
             {_pbi_int64_key("site_key")} AS site_key,
             domain, `салон`, `город`, `регион`, `тип_сайта`, `шаблон`,
-            `направление`, `статус`, status, {_bi_specialist_expr("`специалист`")} AS `специалист`, `проджект`, project_manager,
-            `id_салона`, `менеджер`, `Название crm`
+            {_bi_label_expr('domain')} AS domain,
+            {_bi_label_expr('`салон`')} AS `салон`,
+            {_bi_label_expr('`город`')} AS `город`,
+            {_bi_label_expr('`регион`')} AS `регион`,
+            {_bi_label_expr('`тип_сайта`')} AS `тип_сайта`,
+            {_bi_label_expr('`шаблон`')} AS `шаблон`,
+            {_bi_label_expr('`направление`')} AS `направление`,
+            {_bi_label_expr('`статус`')} AS `статус`,
+            {_bi_label_expr('status')} AS status,
+            coalesce({_bi_specialist_expr("`специалист`")}, 'Не указан') AS `специалист`,
+            {_bi_label_expr('`проджект`')} AS `проджект`,
+            {_bi_label_expr('project_manager')} AS project_manager,
+            {_bi_label_expr('toString(`id_салона`)')} AS `id_салона`,
+            {_bi_label_expr('`менеджер`')} AS `менеджер`,
+            {_bi_label_expr('`Название crm`')} AS `Название crm`
         FROM ad_analytics.Dim_Site
     """
 

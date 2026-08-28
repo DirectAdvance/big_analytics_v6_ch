@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, count_rows, day_ranges, replace_view, swap_shadow
-from star_refactor.build_pbi_compat import build_dim_placement_feed, direct_feed_non_posev_campaign_sql
+from star_refactor.build_pbi_compat import build_dim_placement_feed
 
 logger = logging.getLogger("pipeline.direct_feed_funnel")
 LIGHT_TABLE = "ad_analytics.fact_direct_feed_funnel_light"
@@ -114,7 +114,6 @@ def fact_direct_feed_funnel_insert_sql(target: str, lo: str, hi: str) -> str:
               ON u.client_login_key = lowerUTF8(trim(BOTH ' ' FROM r.client_login))
              AND u.feed_id = r.feed_id
             WHERE r.date >= toDate('{lo}') AND r.date < toDate('{hi}')
-              AND {direct_feed_non_posev_campaign_sql("r")}
         )
         WHERE date >= toDate('{lo}') AND date < toDate('{hi}')
         GROUP BY date, campaign_id, ad_group_id, placement_feed_key_hash, account_login, site_key

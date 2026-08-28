@@ -18,7 +18,13 @@ from config.ch_db import get_client
 from config.ch_settings import DATE_FROM
 from config.ch_utils import SAFE_QUERY_SETTINGS, column_names, count_rows, day_ranges, q, swap_shadow
 from corrections import calls_specialist_correction_expr
-from step3_build_sources.step3 import SOURCE_STORE, _domain_specialist_expr, _gs_account_cte, _metric_expr, _weekday_expr
+from step3_build_sources.step3 import (
+    SOURCE_STORE,
+    _domain_specialist_expr,
+    _gs_account_cte,
+    _metric_expr,
+    _weekday_expr,
+)
 
 logger = logging.getLogger("pipeline.step6")
 
@@ -125,7 +131,7 @@ def _calls_select(lo: str, hi: str, *, crop: bool = False) -> str:
         napravlenie_sql = "'Комплекс'"
     return f"""
 WITH
-{_gs_account_cte()},
+{_gs_account_cte("ad_analytics.gsheet_sites_effective")},
 gs_domain_best AS
 (
     SELECT *
@@ -172,7 +178,7 @@ gs_domain_best AS
               AND created_date < toDate('{hi}')
               AND lower(trim(ifNull(domain, ''))) != ''
         ) cd
-        LEFT JOIN reference_data.gsheet_sites gs
+        LEFT JOIN ad_analytics.gsheet_sites_effective gs
           ON lower(trim(ifNull(gs.domain, ''))) = cd.domain_key
     )
     WHERE rn = 1

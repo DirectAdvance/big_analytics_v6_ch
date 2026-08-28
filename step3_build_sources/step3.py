@@ -624,7 +624,9 @@ def _metric_expr(status_expr: str, reason_expr: str, source_type_expr: str, salo
 """
 
 
-def _gs_account_cte() -> str:
+def _gs_account_cte(sites_table: str = "reference_data.gsheet_sites") -> str:
+    if sites_table not in {"reference_data.gsheet_sites", "ad_analytics.gsheet_sites_effective"}:
+        raise ValueError(f"unsupported sites table: {sites_table}")
     return """
 gs_account AS
 (
@@ -700,7 +702,7 @@ crm_by_domain AS
     WHERE domain_key_norm != ''
     GROUP BY domain_key_norm
 )
-"""
+""".replace("reference_data.gsheet_sites", sites_table)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
